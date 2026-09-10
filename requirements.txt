@@ -1,0 +1,8 @@
+# Runtime dependencies
+requests>=2.31,<3
+SQLAlchemy>=2.0,<3
+pyodbc>=5.1,<6
+python-dotenv>=1.0,<2
+
+# Test dependencies
+pytest>=8.0,<9
