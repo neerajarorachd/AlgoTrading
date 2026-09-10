@@ -39,6 +39,23 @@ def make_response(status_code=200, json_body=None, text=""):
     return resp
 
 
+class FakeClock:
+    """A controllable monotonic clock: sleep() advances it, matching real time.sleep's
+    effect on time.monotonic() — needed so DhanBroker's request-pacing throttle sees a
+    consistent, test-controlled notion of elapsed time instead of racing the real clock."""
+
+    def __init__(self, start: float = 100.0):
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 class TestDhanBrokerInterfaceCompliance(unittest.TestCase):
     def test_implements_all_abstract_methods(self):
         """DhanBroker must implement every abstract method on BaseBroker — instantiation
@@ -79,6 +96,118 @@ class TestDhanBrokerConnection(unittest.TestCase):
 
         with self.assertRaises(BrokerConnectionError):
             broker.connect()
+
+
+class TestDhanBrokerRateLimit(unittest.TestCase):
+    """Dhan's standard 429 backoff: retry after 1s, then 2s, then give up."""
+
+    def test_retries_once_after_1s_then_succeeds(self):
+        session = MagicMock()
+        session.request.side_effect = [
+            make_response(429, {"data": {"805": "Too many requests"}}),
+            make_response(200, {"availabelBalance": 50000}),
+        ]
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        broker.connect()
+
+        self.assertTrue(broker._connected)
+        self.assertEqual(session.request.call_count, 2)
+        self.assertEqual(clock.sleeps, [1.0])
+
+    def test_retries_1s_then_2s_then_succeeds(self):
+        session = MagicMock()
+        session.request.side_effect = [
+            make_response(429, {}),
+            make_response(429, {}),
+            make_response(200, {"availabelBalance": 50000}),
+        ]
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        broker.connect()
+
+        self.assertEqual(session.request.call_count, 3)
+        self.assertEqual(clock.sleeps, [1.0, 2.0])
+
+    def test_gives_up_after_1s_and_2s_retries_and_raises(self):
+        session = MagicMock()
+        session.request.side_effect = [
+            make_response(429, {}),
+            make_response(429, {}),
+            make_response(429, {"data": {"805": "Too many requests"}}),
+        ]
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        with self.assertRaises(BrokerAPIError) as ctx:
+            broker.connect()
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(session.request.call_count, 3)
+        self.assertEqual(clock.sleeps, [1.0, 2.0])  # exactly Dhan's standard two-step backoff, no more
+
+    def test_non_429_error_is_not_retried(self):
+        session = MagicMock()
+        session.request.return_value = make_response(401, {"errorMessage": "Invalid token"})
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="bad-token", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        with self.assertRaises(BrokerAPIError):
+            broker.connect()
+
+        self.assertEqual(session.request.call_count, 1)
+        self.assertEqual(clock.sleeps, [])
+
+
+class TestDhanBrokerRequestThrottle(unittest.TestCase):
+    """Proactive pacing between REST calls — the queue-like behavior that keeps
+    a burst of calls (e.g. hydrating several registered symbols) from tripping
+    Dhan's rate limit in the first place, rather than only reacting after a 429."""
+
+    def test_back_to_back_calls_are_spaced_by_min_interval(self):
+        session = MagicMock()
+        session.request.return_value = make_response(200, {"availabelBalance": 50000})
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        broker.connect()  # first call: no prior request, nothing to wait for
+        broker.connect()  # second call, immediately after: must wait out the gap
+
+        self.assertEqual(clock.sleeps, [1.0])
+
+    def test_no_wait_once_enough_time_has_already_passed(self):
+        session = MagicMock()
+        session.request.return_value = make_response(200, {"availabelBalance": 50000})
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        broker.connect()
+        clock.now += 1.5  # simulate other work happening between calls
+        broker.connect()
+
+        self.assertEqual(clock.sleeps, [])
+
+    def test_three_back_to_back_calls_each_wait_the_remaining_gap(self):
+        session = MagicMock()
+        session.request.return_value = make_response(200, {"availabelBalance": 50000})
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        broker.connect()
+        broker.connect()
+        broker.connect()
+
+        self.assertEqual(clock.sleeps, [1.0, 1.0])
+        self.assertEqual(session.request.call_count, 3)
 
 
 class TestDhanBrokerHistoricalData(unittest.TestCase):

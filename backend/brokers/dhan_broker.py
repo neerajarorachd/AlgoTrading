@@ -19,6 +19,8 @@ have a networked environment — the surrounding BaseBroker interface doesn't
 change either way.
 """
 import json
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
@@ -46,6 +48,15 @@ from .models import (
 DHAN_BASE_URL = "https://api.dhan.co/v2"
 DHAN_FEED_WS_URL = "wss://api-feed.dhan.co"
 
+# Dhan's standard rate-limit backoff: on a 429, wait 1s and retry once; if it's
+# still rate-limited, wait 2s and retry once more before giving up.
+RATE_LIMIT_RETRY_DELAYS_SEC = (1.0, 2.0)
+
+# Proactive pacing between REST calls, so bursts (e.g. hydrating several
+# registered symbols at startup) don't trigger 429s in the first place — the
+# backoff above is then just a safety net, not the primary defense.
+MIN_REQUEST_INTERVAL_SEC = 1.0
+
 _ORDER_STATUS_MAP = {
     "PENDING": OrderStatus.PENDING,
     "TRANSIT": OrderStatus.TRANSIT,
@@ -60,20 +71,29 @@ _ORDER_STATUS_MAP = {
 class DhanBroker(BaseBroker):
 
     def __init__(self, client_id: str, access_token: str, ws_client_factory: Optional[Callable] = None,
-                 session: Optional[requests.Session] = None):
+                 session: Optional[requests.Session] = None, sleep: Optional[Callable[[float], None]] = None,
+                 clock: Optional[Callable[[], float]] = None):
         """
         ws_client_factory: injectable factory that returns a websocket client object with
             .connect(url, on_message, on_error, on_close), .send(message), .close()
             (defaults lazily to `websocket-client`'s WebSocketApp at connect time;
              kept injectable so tests don't need that package installed).
         session: injectable requests.Session, so tests can mock HTTP calls without touching the real network.
+        sleep: injectable delay function (defaults to time.sleep), so tests exercising the
+            rate-limit backoff/throttle below don't actually block for real seconds.
+        clock: injectable monotonic time source (defaults to time.monotonic), so throttle
+            tests can control elapsed time deterministically instead of racing the wall clock.
         """
         self.client_id = client_id
         self.access_token = access_token
         self._session = session or requests.Session()
         self._ws_client_factory = ws_client_factory
+        self._sleep = sleep or time.sleep
+        self._clock = clock or time.monotonic
         self._ws = None
         self._connected = False
+        self._request_lock = threading.Lock()
+        self._last_request_at = 0.0
 
     # ---------------------------------------------------------------- headers/helpers
 
@@ -84,22 +104,44 @@ class DhanBroker(BaseBroker):
             "Content-Type": "application/json",
         }
 
+    def _throttle(self) -> None:
+        """Serializes REST calls with a minimum gap between them.
+
+        Holding the lock across the wait (not just the timestamp update) is
+        what makes this an actual queue rather than a best-effort check —
+        concurrent callers (e.g. hydrating several symbols) block here one at
+        a time, each waiting out whatever gap is left when its turn comes.
+        """
+        with self._request_lock:
+            wait = MIN_REQUEST_INTERVAL_SEC - (self._clock() - self._last_request_at)
+            if wait > 0:
+                self._sleep(wait)
+            self._last_request_at = self._clock()
+
     def _request(self, method: str, path: str, payload: Optional[dict] = None, params: Optional[dict] = None) -> dict:
         url = f"{DHAN_BASE_URL}{path}"
-        try:
-            resp = self._session.request(method, url, headers=self._headers(),
-                                          data=json.dumps(payload) if payload is not None else None,
-                                          params=params, timeout=10)
-        except requests.RequestException as e:
-            raise BrokerConnectionError(f"Dhan API request failed: {e}") from e
+        remaining_retry_delays = list(RATE_LIMIT_RETRY_DELAYS_SEC)
 
-        if resp.status_code >= 400:
-            raise BrokerAPIError(
-                f"Dhan API error {resp.status_code}: {resp.text}",
-                status_code=resp.status_code,
-                raw=self._safe_json(resp),
-            )
-        return self._safe_json(resp)
+        while True:
+            self._throttle()
+            try:
+                resp = self._session.request(method, url, headers=self._headers(),
+                                              data=json.dumps(payload) if payload is not None else None,
+                                              params=params, timeout=10)
+            except requests.RequestException as e:
+                raise BrokerConnectionError(f"Dhan API request failed: {e}") from e
+
+            if resp.status_code == 429 and remaining_retry_delays:
+                self._sleep(remaining_retry_delays.pop(0))
+                continue
+
+            if resp.status_code >= 400:
+                raise BrokerAPIError(
+                    f"Dhan API error {resp.status_code}: {resp.text}",
+                    status_code=resp.status_code,
+                    raw=self._safe_json(resp),
+                )
+            return self._safe_json(resp)
 
     @staticmethod
     def _safe_json(resp) -> dict:
