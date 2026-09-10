@@ -47,16 +47,23 @@ def _wait_for_socket_ready(broker, timeout: float) -> None:
 
     self._ws is assigned before the blocking handshake inside run_forever()
     actually completes, so subscribing too early can race the real connection.
-    This pokes at private attributes — acknowledged wart; a proper fix is adding
-    a real on_open callback + threading.Event to DhanBroker itself, later.
+    Verified against the live Dhan feed (2026-09-10): checking only
+    `app.sock is not None` is NOT sufficient — the sock object exists before
+    the handshake finishes, and sending on it that early raises
+    WebSocketConnectionClosedException. `sock.connected` is the reliable
+    signal (confirmed against the real WS: a subscribe sent right after this
+    check passes succeeds, and a real tick round-trips correctly end to end).
+    This still pokes at private attributes — acknowledged wart; a proper fix
+    is adding a real on_open callback + threading.Event to DhanBroker itself.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         ws = getattr(broker, "_ws", None)
         app = getattr(ws, "app", None) if ws is not None else None
-        if app is not None and getattr(app, "sock", None) is not None:
+        sock = getattr(app, "sock", None) if app is not None else None
+        if sock is not None and getattr(sock, "connected", False):
             return
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 
 def _hydrate(broker, market_feed, session_factory) -> None:
