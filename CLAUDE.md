@@ -153,15 +153,23 @@ Current conventions in use:
 
 ## Open Items
 
-- No SQL Server schema/models yet — next concrete step is the SQLAlchemy
-  session/engine + Phase 1 tables (`subscribed_symbols`, `candles_today`,
-  `candles_historical`, `last_fetch_status`, `candle_gap_queue`), per
-  `backend/Phase1_LLD.md`.
-- No candle aggregator, gap scanner/worker, condition builder, walkthrough
-  engine, activity detectors, event/notification pipeline, or Flask app yet.
-- Local git repo has no commits yet — nothing has been pushed to
-  `origin` (`https://github.com/neerajarorachd/AlgoTrading.git`).
+- `subscribed_symbols`/`candles_today` tables exist (SQLAlchemy models in
+  `backend/db/models.py`, engine/session in `backend/db/session.py`) and are
+  live on `trading_db`. Deliberately deferred: `candles_historical`,
+  `last_fetch_status`, `candle_gap_queue`, EOD archiver, gap scanner, Alembic.
+- `backend/feed/candle_aggregator.py` (tick -> 1/3/5-min candles, boundary-
+  driven rollup, UTC timestamps) and `candle_persistence.py` are built and
+  tested. `backend/market_feed.py` now also wires depth (-> `on_depth`,
+  joined via `depth_metrics.calculate_depth_metrics`) and per-tick volume
+  delta (-> `on_candle_tick`) — both additive, existing tests untouched.
+- No Flask app, no WebSocket layer (Flask-SocketIO, per decision), no
+  frontend yet — in progress, see the plan at
+  `C:\Users\Lenovo\.claude\plans\dapper-sprouting-pnueli.md`.
+- Known, accepted gap: `DhanBroker.subscribe_feed`'s first-ever call blocks
+  the calling thread forever (`WebSocketApp.run_forever()`) and drops its own
+  instrument list — must be bootstrapped on a dedicated background thread
+  with an empty instrument list at startup, never from a Flask request
+  thread. See the plan file for the full writeup.
+- Local git repo has commits but nothing has been pushed to
+  `origin` (`https://github.com/neerajarorachd/AlgoTrading.git`) yet.
 - Decide on persistent tunnel (autossh) vs. manual `ssh -L` per dev session.
-- One pre-existing test bug: `backend/tests/test_dhan_feed.py` asserts exact
-  float equality on a value that round-trips through a 4-byte wire float
-  (fails by ~1e-4) — needs `pytest.approx`/rounding, not a logic bug.

@@ -1,0 +1,87 @@
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import create_engine
+
+from app import create_app
+from brokers.models import Quote
+from db.models import Base
+from db.session import build_session_factory
+
+
+@pytest.fixture
+def db_engine():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def session_factory(db_engine):
+    return build_session_factory(db_engine)
+
+
+class FakeBroker:
+    """Shared fake broker for API-level tests — no real network/WS involved."""
+
+    def __init__(self):
+        self.connected = False
+        self.subscribed_calls = []
+        self.unsubscribed_calls = []
+        self.callback = None
+        self.quotes = {}  # security_id -> Quote, populate per-test as needed
+
+    def connect(self):
+        self.connected = True
+
+    def disconnect(self):
+        self.connected = False
+
+    def subscribe_feed(self, instruments, on_tick):
+        self.subscribed_calls.append(instruments)
+        self.callback = on_tick
+
+    def unsubscribe_feed(self, instruments):
+        self.unsubscribed_calls.append(instruments)
+
+    def get_quote(self, symbol, security_id, exchange_segment):
+        if security_id in self.quotes:
+            return self.quotes[security_id]
+        return Quote(
+            symbol=symbol, ltp=100.0, open=99.0, high=101.0, low=98.0, close=97.5,
+            volume=0, timestamp=datetime.now(timezone.utc),
+        )
+
+
+class FakeInstrumentMaster:
+    """Resolves any symbol deterministically, no CSV/network involved."""
+
+    def resolve(self, symbol, exchange="NSE", segment="EQUITY"):
+        return {
+            "symbol": symbol,
+            "exchange": exchange,
+            "segment": segment,
+            "exchange_segment": f"{exchange}_EQ",
+            "security_id": f"SEC-{symbol}",
+            "raw": {},
+        }
+
+
+@pytest.fixture
+def fake_broker():
+    return FakeBroker()
+
+
+@pytest.fixture
+def app(db_engine, session_factory, fake_broker):
+    flask_app = create_app(
+        broker=fake_broker, engine=db_engine, session_factory=session_factory,
+        instrument_master=FakeInstrumentMaster(), testing=True,
+    )
+    return flask_app
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
