@@ -1,3 +1,17 @@
+def test_search_instruments_endpoint(client):
+    resp = client.get("/api/instruments/search?q=nalco&exchange=NSE&segment=EQUITY")
+    assert resp.status_code == 200
+    results = resp.get_json()
+    assert len(results) == 1
+    assert results[0]["symbol"] == "NALCO"  # FakeInstrumentMaster.search() echoes the query
+
+
+def test_search_instruments_empty_query_returns_empty_list(client):
+    resp = client.get("/api/instruments/search")
+    assert resp.status_code == 200
+    assert resp.get_json() == []
+
+
 def test_post_symbol_creates_row_and_subscribes(client, fake_broker):
     resp = client.post("/api/symbols", json={"symbol": "RELIANCE", "exchange": "NSE", "segment": "EQUITY"})
     assert resp.status_code == 201
@@ -59,6 +73,18 @@ def test_delete_already_removed_id_is_idempotent_204(client, fake_broker):
     assert first.status_code == 204
     assert second.status_code == 204
     assert len(fake_broker.unsubscribed_calls) == 1  # second delete didn't call unsubscribe again
+
+
+def test_post_symbol_unknown_instrument_is_404_not_500(client):
+    resp = client.post("/api/symbols", json={"symbol": "UNKNOWN", "exchange": "NSE", "segment": "EQUITY"})
+    assert resp.status_code == 404
+    assert "Unknown instrument" in resp.get_json()["error"]
+
+
+def test_post_symbol_broker_failure_is_502_not_500(client):
+    resp = client.post("/api/symbols", json={"symbol": "BROKER-DOWN", "exchange": "NSE", "segment": "EQUITY"})
+    assert resp.status_code == 502
+    assert "Broker quote lookup failed" in resp.get_json()["error"]
 
 
 def test_list_symbols_only_returns_active_rows(client):

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, g, jsonify, request
 
+from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
 
 symbols_bp = Blueprint("symbols", __name__)
@@ -20,6 +21,17 @@ def _serialize(row: SubscribedSymbol) -> dict:
         "previous_close": float(row.previous_close) if row.previous_close is not None else None,
         "active": row.active,
     }
+
+
+@symbols_bp.get("/api/instruments/search")
+def search_instruments():
+    query = request.args.get("q", "")
+    exchange = request.args.get("exchange", "NSE")
+    segment = request.args.get("segment", "EQUITY")
+    instrument_master = current_app.extensions["instrument_master"]
+
+    results = instrument_master.search(query, exchange, segment)
+    return jsonify(results)
 
 
 @symbols_bp.get("/api/symbols")
@@ -56,8 +68,15 @@ def add_symbol():
         # idempotent: already live, no duplicate subscribe
         return jsonify(_serialize(row)), 200
 
-    resolved = instrument_master.resolve(symbol, exchange, segment)
-    quote = broker.get_quote(resolved["symbol"], resolved["security_id"], resolved["exchange_segment"])
+    try:
+        resolved = instrument_master.resolve(symbol, exchange, segment)
+    except LookupError:
+        return jsonify({"error": f"Unknown instrument: {exchange}:{symbol} ({segment})"}), 404
+
+    try:
+        quote = broker.get_quote(resolved["symbol"], resolved["security_id"], resolved["exchange_segment"])
+    except (BrokerAPIError, BrokerConnectionError) as exc:
+        return jsonify({"error": f"Broker quote lookup failed: {exc}"}), 502
 
     if row is not None:
         # reactivate a previously-unregistered symbol rather than violating the

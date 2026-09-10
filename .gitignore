@@ -1,7 +1,7 @@
 .env
 .venv/
 .pytest_cache/
-data/instruments/
+**/data/instruments/
 __pycache__/
 *.py[cod]
 frontend/node_modules/

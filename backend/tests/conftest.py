@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from app import create_app
-from brokers.models import Quote
+from brokers.models import BrokerAPIError, Quote
 from db.models import Base
 from db.session import build_session_factory
 
@@ -46,6 +46,8 @@ class FakeBroker:
         self.unsubscribed_calls.append(instruments)
 
     def get_quote(self, symbol, security_id, exchange_segment):
+        if symbol == "BROKER-DOWN":
+            raise BrokerAPIError("simulated broker outage")
         if security_id in self.quotes:
             return self.quotes[security_id]
         return Quote(
@@ -58,6 +60,8 @@ class FakeInstrumentMaster:
     """Resolves any symbol deterministically, no CSV/network involved."""
 
     def resolve(self, symbol, exchange="NSE", segment="EQUITY"):
+        if symbol == "UNKNOWN":
+            raise LookupError(f"Dhan instrument not found: {exchange}:{symbol} ({segment})")
         return {
             "symbol": symbol,
             "exchange": exchange,
@@ -66,6 +70,15 @@ class FakeInstrumentMaster:
             "security_id": f"SEC-{symbol}",
             "raw": {},
         }
+
+    def search(self, query, exchange="NSE", segment="EQUITY", limit=15):
+        if not query:
+            return []
+        return [{
+            "symbol": query.upper(), "custom_symbol": None, "company_name": None,
+            "exchange": exchange, "segment": segment,
+            "exchange_segment": f"{exchange}_EQ", "security_id": f"SEC-{query.upper()}",
+        }]
 
 
 @pytest.fixture

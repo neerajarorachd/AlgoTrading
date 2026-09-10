@@ -13,6 +13,11 @@ async function request(path, options) {
 
 export const listSymbols = () => request('/api/symbols')
 
+export const searchInstruments = (query, exchange, segment) => {
+  const params = new URLSearchParams({ q: query, exchange, segment })
+  return request(`/api/instruments/search?${params.toString()}`)
+}
+
 export const addSymbol = (symbol, exchange, segment) =>
   request('/api/symbols', { method: 'POST', body: JSON.stringify({ symbol, exchange, segment }) })
 

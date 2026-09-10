@@ -54,33 +54,105 @@ class InstrumentMaster:
         self._rows = None
         return data_path
 
-    def resolve(self, symbol: str, exchange: str = "NSE", segment: str = "EQUITY") -> dict:
+    def _ensure_rows(self) -> List[dict]:
         path = self.ensure_daily()
         if self._rows is None:
             with path.open(newline="", encoding="utf-8-sig") as handle:
                 self._rows = list(csv.DictReader(handle))
+        return self._rows
 
+    def search(self, query: str, exchange: str = "NSE", segment: str = "EQUITY", limit: int = 15) -> List[dict]:
+        """Symbol/company-name search for a register-instrument autocomplete.
+
+        Matches against trading symbol, custom/common name (e.g. "NALCO"), and
+        company name; prefix matches rank above plain substring matches.
+        """
+        query_upper = query.strip().upper()
+        if not query_upper:
+            return []
+
+        rows = self._ensure_rows()
         expected_segment = _normalise_segment(exchange, segment)
-        symbol_upper = symbol.upper()
-        for row in self._rows:
-            row_symbol = _first(row, "SEM_TRADING_SYMBOL", "TRADING_SYMBOL", "trading_symbol")
+        seen_security_ids = set()
+        prefix_matches: List[dict] = []
+        contains_matches: List[dict] = []
+
+        for row in rows:
             row_exchange = _first(row, "SEM_EXM_EXCH_ID", "EXCHANGE", "exchange")
-            row_segment = _first(row, "SEM_SEGMENT", "SEGMENT", "segment")
-            if row_symbol.upper() != symbol_upper or row_exchange.upper() != exchange.upper():
+            if row_exchange.upper() != exchange.upper():
                 continue
+            row_segment = _first(row, "SEM_SEGMENT", "SEGMENT", "segment")
             if _normalise_segment(row_exchange, row_segment) != expected_segment:
                 continue
 
             security_id = _first(row, "SEM_SMST_SECURITY_ID", "SECURITY_ID", "security_id")
-            if security_id:
-                return {
-                    "symbol": row_symbol,
-                    "exchange": exchange.upper(),
-                    "segment": segment.upper(),
-                    "exchange_segment": expected_segment,
-                    "security_id": security_id,
-                    "raw": row,
-                }
+            if not security_id or security_id in seen_security_ids:
+                continue
+
+            row_symbol = _first(row, "SEM_TRADING_SYMBOL", "TRADING_SYMBOL", "trading_symbol")
+            custom_symbol = _first(row, "SEM_CUSTOM_SYMBOL", "CUSTOM_SYMBOL", "custom_symbol")
+            company_name = _first(row, "SM_SYMBOL_NAME", "SYMBOL_NAME", "company_name")
+            haystacks = [h for h in (row_symbol.upper(), custom_symbol.upper(), company_name.upper()) if h]
+
+            if not any(query_upper in h for h in haystacks):
+                continue
+
+            seen_security_ids.add(security_id)
+            result = {
+                "symbol": row_symbol,
+                "custom_symbol": custom_symbol or None,
+                "company_name": company_name or None,
+                "exchange": exchange.upper(),
+                "segment": segment.upper(),
+                "exchange_segment": expected_segment,
+                "security_id": security_id,
+            }
+
+            if any(h.startswith(query_upper) for h in haystacks):
+                prefix_matches.append(result)
+            else:
+                contains_matches.append(result)
+
+        return (prefix_matches + contains_matches)[:limit]
+
+    def resolve(self, symbol: str, exchange: str = "NSE", segment: str = "EQUITY") -> dict:
+        rows = self._ensure_rows()
+        expected_segment = _normalise_segment(exchange, segment)
+        symbol_upper = symbol.upper()
+        fallback = None  # first row matching by the common/custom name, e.g. "NALCO" for NATIONALUM
+
+        for row in rows:
+            row_exchange = _first(row, "SEM_EXM_EXCH_ID", "EXCHANGE", "exchange")
+            if row_exchange.upper() != exchange.upper():
+                continue
+            row_segment = _first(row, "SEM_SEGMENT", "SEGMENT", "segment")
+            if _normalise_segment(row_exchange, row_segment) != expected_segment:
+                continue
+
+            security_id = _first(row, "SEM_SMST_SECURITY_ID", "SECURITY_ID", "security_id")
+            if not security_id:
+                continue
+
+            row_symbol = _first(row, "SEM_TRADING_SYMBOL", "TRADING_SYMBOL", "trading_symbol")
+            match = {
+                "symbol": row_symbol,
+                "exchange": exchange.upper(),
+                "segment": segment.upper(),
+                "exchange_segment": expected_segment,
+                "security_id": security_id,
+                "raw": row,
+            }
+
+            if row_symbol.upper() == symbol_upper:
+                return match  # exact trading-symbol match always wins over a custom-name fallback
+
+            if fallback is None:
+                custom_symbol = _first(row, "SEM_CUSTOM_SYMBOL", "CUSTOM_SYMBOL", "custom_symbol")
+                if custom_symbol.upper() == symbol_upper:
+                    fallback = match
+
+        if fallback is not None:
+            return fallback
         raise LookupError(f"Dhan instrument not found: {exchange}:{symbol} ({segment})")
 
     @staticmethod
