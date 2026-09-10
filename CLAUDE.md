@@ -153,23 +153,42 @@ Current conventions in use:
 
 ## Open Items
 
-- `subscribed_symbols`/`candles_today` tables exist (SQLAlchemy models in
-  `backend/db/models.py`, engine/session in `backend/db/session.py`) and are
-  live on `trading_db`. Deliberately deferred: `candles_historical`,
-  `last_fetch_status`, `candle_gap_queue`, EOD archiver, gap scanner, Alembic.
-- `backend/feed/candle_aggregator.py` (tick -> 1/3/5-min candles, boundary-
-  driven rollup, UTC timestamps) and `candle_persistence.py` are built and
-  tested. `backend/market_feed.py` now also wires depth (-> `on_depth`,
-  joined via `depth_metrics.calculate_depth_metrics`) and per-tick volume
-  delta (-> `on_candle_tick`) — both additive, existing tests untouched.
-- No Flask app, no WebSocket layer (Flask-SocketIO, per decision), no
-  frontend yet — in progress, see the plan at
-  `C:\Users\Lenovo\.claude\plans\dapper-sprouting-pnueli.md`.
-- Known, accepted gap: `DhanBroker.subscribe_feed`'s first-ever call blocks
-  the calling thread forever (`WebSocketApp.run_forever()`) and drops its own
-  instrument list — must be bootstrapped on a dedicated background thread
-  with an empty instrument list at startup, never from a Flask request
-  thread. See the plan file for the full writeup.
+- Phase 1 slice — instrument register/unregister UI, live ticks/depth %,
+  1/3/5-min candles, live chart — is **built and verified end-to-end against
+  the real Dhan API and WS feed** (2026-09-10, with live credentials). Full
+  writeup/design: `C:\Users\Lenovo\.claude\plans\dapper-sprouting-pnueli.md`.
+  - `subscribed_symbols`/`candles_today` tables (`backend/db/models.py` +
+    `session.py`), live on `trading_db`. Deferred: `candles_historical`,
+    `last_fetch_status`, `candle_gap_queue`, EOD archiver, gap scanner,
+    Alembic.
+  - `backend/feed/candle_aggregator.py` + `candle_persistence.py` — tick ->
+    1/3/5-min candles, boundary-driven rollup, UTC throughout.
+  - `backend/market_feed.py` wires depth (`on_depth`, via
+    `depth_metrics.calculate_depth_metrics`) and per-tick volume delta
+    (`on_candle_tick`) — additive, existing tests untouched.
+  - `backend/app.py` (Flask factory) + `backend/api/routes_symbols.py` +
+    `routes_candles.py` + `ws_live.py` (Flask-SocketIO, room-per-instrument
+    broadcast) + `backend/feed/bootstrap.py` (startup hydration + feed
+    connection bootstrap).
+  - `frontend/` — Vite + React Market Watch page (register/unregister, live
+    ticks/depth, candlestick chart via `lightweight-charts`).
+- Confirmed live and fixed: `DhanBroker.subscribe_feed`'s first-ever call
+  blocks the calling thread forever (`WebSocketApp.run_forever()`) — worked
+  around via a dedicated background thread opening the socket with an empty
+  instrument list at startup. Also found and fixed live: the readiness check
+  after that must test `sock.connected`, not just `sock is not None` — the
+  latter fires before the handshake completes and a subscribe sent that early
+  raises `WebSocketConnectionClosedException`.
+- Minor, not yet fixed: calling `broker.disconnect()` from a thread other
+  than the one running the feed's `run_forever()` loop can raise inside that
+  background thread (observed live during a manual test). Not an issue for
+  the current always-on design (the feed thread runs for the process
+  lifetime, `disconnect()` is never called in normal operation) — will matter
+  once the deferred `session_scheduler` (connect/disconnect around market
+  hours) is built.
 - Local git repo has commits but nothing has been pushed to
   `origin` (`https://github.com/neerajarorachd/AlgoTrading.git`) yet.
 - Decide on persistent tunnel (autossh) vs. manual `ssh -L` per dev session.
+- Dhan access tokens are short-lived (observed ~24h) — `.env`'s
+  `DHAN_ACCESS_TOKEN` will need refreshing periodically; no refresh
+  automation exists yet.
