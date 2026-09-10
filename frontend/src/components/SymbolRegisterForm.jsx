@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { addSymbol, searchInstruments } from '../api/client.js'
 
-const SEARCH_DEBOUNCE_MS = 250
+const SEARCH_DEBOUNCE_MS = 150
 const MIN_QUERY_LENGTH = 2
 
 export default function SymbolRegisterForm({ onRegistered }) {

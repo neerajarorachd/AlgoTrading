@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
 from db.session import session_scope
+
+logger = logging.getLogger(__name__)
 
 # 15:30 IST market close = 10:00 UTC. Candles are aggregated in UTC throughout
 # (see feed/candle_aggregator.py), so the flush timer stays in UTC too rather
@@ -67,20 +71,32 @@ def _wait_for_socket_ready(broker, timeout: float) -> None:
 
 
 def _hydrate(broker, market_feed, session_factory) -> None:
+    """Re-subscribes every active symbol from a prior session.
+
+    One row's broker call failing (rate limit, transient network issue, a
+    since-delisted symbol) must not prevent every other registered symbol
+    from coming back online, and must never crash the whole app at startup —
+    log it and move on to the rest.
+    """
     with session_scope(session_factory) as session:
         rows = session.query(SubscribedSymbol).filter_by(active=True).all()
         for row in rows:
-            quote = broker.get_quote(row.symbol, row.security_id, row.exchange_segment)
-            row.previous_close = quote.close
-            market_feed.subscribe({
-                "security_id": row.security_id,
-                "exchange_segment": row.exchange_segment,
-                "symbol": row.symbol,
-                "exchange": row.exchange,
-                "segment": row.segment,
-                "previous_close": float(quote.close),
-                "ltp": float(quote.ltp),
-            })
+            try:
+                quote = broker.get_quote(row.symbol, row.security_id, row.exchange_segment)
+                row.previous_close = quote.close
+                market_feed.subscribe({
+                    "security_id": row.security_id,
+                    "exchange_segment": row.exchange_segment,
+                    "symbol": row.symbol,
+                    "exchange": row.exchange,
+                    "segment": row.segment,
+                    "previous_close": float(quote.close),
+                    "ltp": float(quote.ltp),
+                })
+            except (BrokerAPIError, BrokerConnectionError) as exc:
+                logger.warning("Hydration: skipping %s (%s) — %s", row.symbol, row.exchange_segment, exc)
+            except Exception:
+                logger.exception("Hydration: unexpected error subscribing %s (%s)", row.symbol, row.exchange_segment)
 
 
 def _schedule_daily_flush(aggregator, hour_utc: int, minute_utc: int) -> None:

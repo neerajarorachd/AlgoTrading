@@ -5,12 +5,14 @@ import json
 import os
 from datetime import date
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import requests
 
 
 DHAN_COMPACT_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
+
+_IndexKey = Tuple[str, str]  # (exchange upper, exchange_segment)
 
 
 class InstrumentMaster:
@@ -25,7 +27,7 @@ class InstrumentMaster:
         self.cache_dir = Path(cache_dir)
         self.downloader = downloader or self._download
         self.source_url = source_url
-        self._rows: Optional[List[dict]] = None
+        self._index: Optional[Dict[_IndexKey, List[dict]]] = None
 
     def ensure_daily(self, today: Optional[date] = None) -> Path:
         today = today or date.today()
@@ -51,15 +53,51 @@ class InstrumentMaster:
             json.dumps({"download_date": today.isoformat(), "source": self.source_url}),
             encoding="utf-8",
         )
-        self._rows = None
+        self._index = None
         return data_path
 
-    def _ensure_rows(self) -> List[dict]:
+    def _ensure_index(self) -> Dict[_IndexKey, List[dict]]:
+        """Bucket rows by (exchange, exchange_segment), built once per CSV load.
+
+        Search/resolve only ever care about one (exchange, segment) bucket at a
+        time, and equities are a small fraction of the ~200k-row file (mostly
+        F&O derivatives) — bucketing turns a full linear scan on every keystroke
+        into one over just that bucket, and precomputes the uppercased fields
+        once instead of on every comparison.
+        """
+        if self._index is not None:
+            return self._index
+
         path = self.ensure_daily()
-        if self._rows is None:
-            with path.open(newline="", encoding="utf-8-sig") as handle:
-                self._rows = list(csv.DictReader(handle))
-        return self._rows
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            rows = csv.DictReader(handle)
+            index: Dict[_IndexKey, List[dict]] = {}
+            for row in rows:
+                row_exchange = _first(row, "SEM_EXM_EXCH_ID", "EXCHANGE", "exchange")
+                security_id = _first(row, "SEM_SMST_SECURITY_ID", "SECURITY_ID", "security_id")
+                if not row_exchange or not security_id:
+                    continue
+                row_segment = _first(row, "SEM_SEGMENT", "SEGMENT", "segment")
+                exchange_segment = _normalise_segment(row_exchange, row_segment)
+
+                symbol = _first(row, "SEM_TRADING_SYMBOL", "TRADING_SYMBOL", "trading_symbol")
+                custom_symbol = _first(row, "SEM_CUSTOM_SYMBOL", "CUSTOM_SYMBOL", "custom_symbol")
+                company_name = _first(row, "SM_SYMBOL_NAME", "SYMBOL_NAME", "company_name")
+
+                entry = {
+                    "symbol": symbol,
+                    "symbol_upper": symbol.upper(),
+                    "custom_symbol": custom_symbol or None,
+                    "custom_symbol_upper": custom_symbol.upper(),
+                    "company_name": company_name or None,
+                    "company_name_upper": company_name.upper(),
+                    "security_id": security_id,
+                    "raw": row,
+                }
+                index.setdefault((row_exchange.upper(), exchange_segment), []).append(entry)
+
+        self._index = index
+        return index
 
     def search(self, query: str, exchange: str = "NSE", segment: str = "EQUITY", limit: int = 15) -> List[dict]:
         """Symbol/company-name search for a register-instrument autocomplete.
@@ -71,41 +109,24 @@ class InstrumentMaster:
         if not query_upper:
             return []
 
-        rows = self._ensure_rows()
         expected_segment = _normalise_segment(exchange, segment)
-        seen_security_ids = set()
+        bucket = self._ensure_index().get((exchange.upper(), expected_segment), [])
         prefix_matches: List[dict] = []
         contains_matches: List[dict] = []
 
-        for row in rows:
-            row_exchange = _first(row, "SEM_EXM_EXCH_ID", "EXCHANGE", "exchange")
-            if row_exchange.upper() != exchange.upper():
-                continue
-            row_segment = _first(row, "SEM_SEGMENT", "SEGMENT", "segment")
-            if _normalise_segment(row_exchange, row_segment) != expected_segment:
-                continue
-
-            security_id = _first(row, "SEM_SMST_SECURITY_ID", "SECURITY_ID", "security_id")
-            if not security_id or security_id in seen_security_ids:
-                continue
-
-            row_symbol = _first(row, "SEM_TRADING_SYMBOL", "TRADING_SYMBOL", "trading_symbol")
-            custom_symbol = _first(row, "SEM_CUSTOM_SYMBOL", "CUSTOM_SYMBOL", "custom_symbol")
-            company_name = _first(row, "SM_SYMBOL_NAME", "SYMBOL_NAME", "company_name")
-            haystacks = [h for h in (row_symbol.upper(), custom_symbol.upper(), company_name.upper()) if h]
-
+        for entry in bucket:
+            haystacks = [h for h in (entry["symbol_upper"], entry["custom_symbol_upper"], entry["company_name_upper"]) if h]
             if not any(query_upper in h for h in haystacks):
                 continue
 
-            seen_security_ids.add(security_id)
             result = {
-                "symbol": row_symbol,
-                "custom_symbol": custom_symbol or None,
-                "company_name": company_name or None,
+                "symbol": entry["symbol"],
+                "custom_symbol": entry["custom_symbol"],
+                "company_name": entry["company_name"],
                 "exchange": exchange.upper(),
                 "segment": segment.upper(),
                 "exchange_segment": expected_segment,
-                "security_id": security_id,
+                "security_id": entry["security_id"],
             }
 
             if any(h.startswith(query_upper) for h in haystacks):
@@ -113,46 +134,25 @@ class InstrumentMaster:
             else:
                 contains_matches.append(result)
 
+            if len(prefix_matches) >= limit:
+                break  # already have enough top-tier matches; no need to scan the rest of the bucket
+
         return (prefix_matches + contains_matches)[:limit]
 
     def resolve(self, symbol: str, exchange: str = "NSE", segment: str = "EQUITY") -> dict:
-        rows = self._ensure_rows()
         expected_segment = _normalise_segment(exchange, segment)
+        bucket = self._ensure_index().get((exchange.upper(), expected_segment), [])
         symbol_upper = symbol.upper()
-        fallback = None  # first row matching by the common/custom name, e.g. "NALCO" for NATIONALUM
+        fallback = None  # first entry matching by the common/custom name, e.g. "NALCO" for NATIONALUM
 
-        for row in rows:
-            row_exchange = _first(row, "SEM_EXM_EXCH_ID", "EXCHANGE", "exchange")
-            if row_exchange.upper() != exchange.upper():
-                continue
-            row_segment = _first(row, "SEM_SEGMENT", "SEGMENT", "segment")
-            if _normalise_segment(row_exchange, row_segment) != expected_segment:
-                continue
-
-            security_id = _first(row, "SEM_SMST_SECURITY_ID", "SECURITY_ID", "security_id")
-            if not security_id:
-                continue
-
-            row_symbol = _first(row, "SEM_TRADING_SYMBOL", "TRADING_SYMBOL", "trading_symbol")
-            match = {
-                "symbol": row_symbol,
-                "exchange": exchange.upper(),
-                "segment": segment.upper(),
-                "exchange_segment": expected_segment,
-                "security_id": security_id,
-                "raw": row,
-            }
-
-            if row_symbol.upper() == symbol_upper:
-                return match  # exact trading-symbol match always wins over a custom-name fallback
-
-            if fallback is None:
-                custom_symbol = _first(row, "SEM_CUSTOM_SYMBOL", "CUSTOM_SYMBOL", "custom_symbol")
-                if custom_symbol.upper() == symbol_upper:
-                    fallback = match
+        for entry in bucket:
+            if entry["symbol_upper"] == symbol_upper:
+                return _resolved(entry, exchange, segment, expected_segment)
+            if fallback is None and entry["custom_symbol_upper"] == symbol_upper:
+                fallback = entry
 
         if fallback is not None:
-            return fallback
+            return _resolved(fallback, exchange, segment, expected_segment)
         raise LookupError(f"Dhan instrument not found: {exchange}:{symbol} ({segment})")
 
     @staticmethod
@@ -160,6 +160,17 @@ class InstrumentMaster:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         return response.content
+
+
+def _resolved(entry: dict, exchange: str, segment: str, exchange_segment: str) -> dict:
+    return {
+        "symbol": entry["symbol"],
+        "exchange": exchange.upper(),
+        "segment": segment.upper(),
+        "exchange_segment": exchange_segment,
+        "security_id": entry["security_id"],
+        "raw": entry["raw"],
+    }
 
 
 def _first(row: dict, *names: str) -> str:
