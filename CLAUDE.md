@@ -247,6 +247,13 @@ Current conventions in use:
     connection bootstrap).
   - `frontend/` — Vite + React Market Watch page (register/unregister, live
     ticks/depth, candlestick chart via `lightweight-charts`).
+- Confirmed live and fixed (2026-09-11): live WS depth never populated
+  because `subscribe_feed` sent `RequestCode: 15` (Ticker), which Dhan
+  doesn't return depth for. Switched to `RequestCode: 21` (Full), which
+  bundles 5-level bid/ask depth into the same packet on the same
+  connection; `dhan_feed.py`'s `_decode_full` was also silently discarding
+  that packet's 100-byte depth block instead of parsing it. Verified live
+  (17/17 tick+depth events for RELIANCE over 15s).
 - Confirmed live and fixed: `DhanBroker.subscribe_feed`'s first-ever call
   blocks the calling thread forever (`WebSocketApp.run_forever()`) — worked
   around via a dedicated background thread opening the socket with an empty
