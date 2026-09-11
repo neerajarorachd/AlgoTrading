@@ -1,10 +1,13 @@
 """Detects candlestick patterns as each 1-/3-/5-min candle closes, and
-persists them to instrument_activity. First slice: single-candle shape
-patterns (doji, hammer, shooting star) and one three-candle pattern pair
-(three white soldiers / three black crows). Indicator-based activity (MACD
-crossover, MA21/MA50 crossover) and outcome tracking (what happened N candles
-after an activity) are deliberately not built yet — this only covers what
-was asked for in this first pass.
+persists them to instrument_activity. Covers, so far: single-candle shape
+patterns (doji, hammer, shooting star), two-candle patterns (bullish/bearish
+engulfing, piercing line, dark cloud cover, tweezer top/bottom), and one
+three-candle pattern pair (three white soldiers / three black crows).
+Larger multi-bar chart formations (double top/bottom, head and shoulders,
+flags, triangles, HH-HL trend structure, etc.) need swing-high/swing-low
+detection as a foundation and aren't built yet. Indicator-based activity
+(MACD crossover, MA21/MA50 crossover) and outcome tracking (what happened N
+candles after an activity) are deliberately not built yet either.
 """
 from __future__ import annotations
 
@@ -169,10 +172,141 @@ def detect_three_black_crows(candles: List[Candle]) -> bool:
     return True
 
 
+# --------------------------------------------------------------------- two-candle patterns
+
+def detect_bullish_engulfing(candles: List[Candle]) -> bool:
+    """Second candle's real body fully contains the first's — a bearish
+    candle swallowed whole by a larger bullish one."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bearish(a) and _is_bullish(b)):
+        return False
+    return b.open <= a.close and b.close >= a.open and _body(b) > _body(a)
+
+
+def detect_bearish_engulfing(candles: List[Candle]) -> bool:
+    """Bullish engulfing's mirror."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bullish(a) and _is_bearish(b)):
+        return False
+    return b.open >= a.close and b.close <= a.open and _body(b) > _body(a)
+
+
+def detect_piercing_line(candles: List[Candle]) -> bool:
+    """Long bearish candle, then a bullish candle opening below the first's
+    low and closing back above the midpoint of its body — but not fully
+    engulfing it (that's bullish engulfing instead)."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bearish(a) and _is_bullish(b)) or _body(a) <= 0:
+        return False
+    midpoint = (a.open + a.close) / 2
+    return b.open < a.low and midpoint < b.close < a.open
+
+
+def detect_dark_cloud_cover(candles: List[Candle]) -> bool:
+    """Piercing line's bearish mirror."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bullish(a) and _is_bearish(b)) or _body(a) <= 0:
+        return False
+    midpoint = (a.open + a.close) / 2
+    return b.open > a.high and a.open < b.close < midpoint
+
+
+def detect_tweezer_bottom(candles: List[Candle]) -> bool:
+    """Two candles with matching lows — a bearish candle then a bullish one,
+    both testing the same floor."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bearish(a) and _is_bullish(b)):
+        return False
+    tolerance = 0.1 * min(_range(a) or 0.01, _range(b) or 0.01)
+    return abs(a.low - b.low) <= tolerance
+
+
+def detect_tweezer_top(candles: List[Candle]) -> bool:
+    """Tweezer bottom's mirror — matching highs."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bullish(a) and _is_bearish(b)):
+        return False
+    tolerance = 0.1 * min(_range(a) or 0.01, _range(b) or 0.01)
+    return abs(a.high - b.high) <= tolerance
+
+
+def engulfing_intensity(candles: List[Candle]) -> float:
+    """How much bigger the engulfing candle's body is than the one it
+    swallowed — the qualifying floor is just >1x (it must fully contain the
+    other body), higher means more dominant."""
+    a, b = candles[-2], candles[-1]
+    body_a = _body(a)
+    return _body(b) / body_a if body_a > 0 else float("inf")
+
+
+def piercing_dark_cloud_intensity(candles: List[Candle]) -> float:
+    """How far past the first candle's midpoint the second candle's close
+    penetrates, as a fraction of the first candle's half-body — 0 at the
+    midpoint (the qualifying floor), 1 at the boundary where it would
+    instead become a full engulfing pattern."""
+    a, b = candles[-2], candles[-1]
+    half_body = _body(a) / 2
+    if half_body <= 0:
+        return float("inf")
+    midpoint = (a.open + a.close) / 2
+    return abs(b.close - midpoint) / half_body
+
+
+def tweezer_bottom_intensity(candles: List[Candle]) -> float:
+    """How closely the two lows match, relative to the candles' own range —
+    smaller gap between the lows means a higher score."""
+    a, b = candles[-2], candles[-1]
+    diff = abs(a.low - b.low)
+    avg_range = (_range(a) + _range(b)) / 2 or 0.01
+    return avg_range / diff if diff > 0 else float("inf")
+
+
+def tweezer_top_intensity(candles: List[Candle]) -> float:
+    """Tweezer bottom's mirror — matching highs."""
+    a, b = candles[-2], candles[-1]
+    diff = abs(a.high - b.high)
+    avg_range = (_range(a) + _range(b)) / 2 or 0.01
+    return avg_range / diff if diff > 0 else float("inf")
+
+
+TWO_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = {
+    "bullish_engulfing": engulfing_intensity,
+    "bearish_engulfing": engulfing_intensity,
+    "piercing_line": piercing_dark_cloud_intensity,
+    "dark_cloud_cover": piercing_dark_cloud_intensity,
+    "tweezer_bottom": tweezer_bottom_intensity,
+    "tweezer_top": tweezer_top_intensity,
+}
+
+
 MULTI_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
+    "bullish_engulfing": detect_bullish_engulfing,
+    "bearish_engulfing": detect_bearish_engulfing,
+    "piercing_line": detect_piercing_line,
+    "dark_cloud_cover": detect_dark_cloud_cover,
+    "tweezer_bottom": detect_tweezer_bottom,
+    "tweezer_top": detect_tweezer_top,
     "three_white_soldiers": detect_three_white_soldiers,
     "three_black_crows": detect_three_black_crows,
 }
+
+# Intensity formulas for multi-candle patterns that have one defined —
+# three_white_soldiers/three_black_crows don't have one yet, so they're
+# absent here rather than guessed at (on_candle_closed treats a missing
+# entry the same as detect-only-no-intensity: stored as NULL).
+MULTI_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = dict(TWO_CANDLE_INTENSITY)
 
 # The data-driven catalog (PatternDefinition rows) — kept next to the
 # detector dicts above so a new pattern's code/kind/description is added in
@@ -181,6 +315,12 @@ PATTERN_CATALOG = [
     ("doji", "single_candle", "Open and close almost equal (body <= 10% of the high-low range) — indecision"),
     ("hammer", "single_candle", "Small body near the top, long lower wick (>= 2x body), little/no upper wick"),
     ("shooting_star", "single_candle", "Small body near the bottom, long upper wick (>= 2x body), little/no lower wick"),
+    ("bullish_engulfing", "multi_candle", "A bearish candle's real body fully swallowed by a larger bullish candle's body"),
+    ("bearish_engulfing", "multi_candle", "A bullish candle's real body fully swallowed by a larger bearish candle's body"),
+    ("piercing_line", "multi_candle", "Bearish candle, then a bullish candle opening below its low and closing back above its midpoint"),
+    ("dark_cloud_cover", "multi_candle", "Bullish candle, then a bearish candle opening above its high and closing back below its midpoint"),
+    ("tweezer_bottom", "multi_candle", "A bearish then a bullish candle with matching lows"),
+    ("tweezer_top", "multi_candle", "A bullish then a bearish candle with matching highs"),
     ("three_white_soldiers", "multi_candle", "Three consecutive bullish candles, each closing higher, opening within the prior body"),
     ("three_black_crows", "multi_candle", "Three consecutive bearish candles, each closing lower, opening within the prior body"),
 ]
@@ -240,10 +380,13 @@ class ActivityEngine:
 
         for name, detector in MULTI_CANDLE_PATTERNS.items():
             try:
-                if detector(list(buffer)):
-                    # no intensity formula defined yet for multi-candle
-                    # patterns — NULL, not a guess
-                    found.append(("candle_pattern", name, None))
+                candles = list(buffer)
+                if detector(candles):
+                    intensity_fn = MULTI_CANDLE_INTENSITY.get(name)
+                    intensity = intensity_fn(candles) if intensity_fn else None
+                    if intensity == float("inf"):
+                        intensity = None
+                    found.append(("candle_pattern", name, intensity))
             except Exception:
                 logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
 

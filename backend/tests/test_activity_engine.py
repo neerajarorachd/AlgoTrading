@@ -4,15 +4,25 @@ import pytest
 
 from activity_engine import (
     ActivityEngine,
+    detect_bearish_engulfing,
+    detect_bullish_engulfing,
+    detect_dark_cloud_cover,
     detect_doji,
     detect_hammer,
+    detect_piercing_line,
     detect_shooting_star,
     detect_three_black_crows,
     detect_three_white_soldiers,
+    detect_tweezer_bottom,
+    detect_tweezer_top,
     doji_intensity,
+    engulfing_intensity,
     hammer_intensity,
+    piercing_dark_cloud_intensity,
     seed_pattern_definitions,
     shooting_star_intensity,
+    tweezer_bottom_intensity,
+    tweezer_top_intensity,
 )
 from brokers.models import Candle
 from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
@@ -98,7 +108,87 @@ def test_doji_intensity_is_infinite_for_a_perfect_doji():
     assert doji_intensity(c) == float("inf")
 
 
-# --------------------------------------------------------------------- multi-candle detectors
+# --------------------------------------------------------------------- two-candle detectors
+
+def test_detect_bullish_engulfing_true():
+    candles = [
+        _candle(0, open=102.0, high=102.2, low=99.8, close=100.0),   # bearish, body=2.0
+        _candle(1, open=99.5, high=102.6, low=99.4, close=102.5),    # bullish, body=3.0, engulfs
+    ]
+    assert detect_bullish_engulfing(candles) is True
+    assert detect_bearish_engulfing(candles) is False
+    assert engulfing_intensity(candles) == pytest.approx(1.5)  # 3.0 / 2.0
+
+
+def test_detect_bullish_engulfing_false_when_body_not_fully_contained():
+    candles = [
+        _candle(0, open=102.0, high=102.2, low=99.8, close=100.0),
+        _candle(1, open=100.5, high=102.6, low=99.9, close=102.5),  # opens above a.close — doesn't engulf
+    ]
+    assert detect_bullish_engulfing(candles) is False
+
+
+def test_detect_bearish_engulfing_true():
+    candles = [
+        _candle(0, open=100.0, high=102.2, low=99.8, close=102.0),   # bullish, body=2.0
+        _candle(1, open=102.5, high=102.6, low=99.4, close=99.5),    # bearish, body=3.0, engulfs
+    ]
+    assert detect_bearish_engulfing(candles) is True
+    assert detect_bullish_engulfing(candles) is False
+
+
+def test_detect_piercing_line_true():
+    # A: long bearish, open=110 close=105 (body=5, midpoint=107.5), low=104.5
+    a = _candle(0, open=110.0, high=110.2, low=104.5, close=105.0)
+    # B: opens below A's low, closes above the midpoint but below A's open
+    b = _candle(1, open=104.0, high=108.2, low=103.8, close=108.0)
+    candles = [a, b]
+    assert detect_piercing_line(candles) is True
+    assert detect_dark_cloud_cover(candles) is False
+    assert piercing_dark_cloud_intensity(candles) == pytest.approx(0.2)  # |108-107.5| / 2.5
+
+
+def test_detect_piercing_line_false_when_it_fully_engulfs_instead():
+    a = _candle(0, open=110.0, high=110.2, low=104.5, close=105.0)
+    b = _candle(1, open=104.0, high=110.3, low=103.8, close=110.1)  # closes above A's open
+    assert detect_piercing_line([a, b]) is False
+
+
+def test_detect_dark_cloud_cover_true():
+    # A: long bullish, open=100 close=105 (body=5, midpoint=102.5), high=105.5
+    a = _candle(0, open=100.0, high=105.5, low=99.8, close=105.0)
+    # B: opens above A's high, closes below the midpoint but above A's open
+    b = _candle(1, open=106.0, high=106.2, low=101.8, close=102.0)
+    candles = [a, b]
+    assert detect_dark_cloud_cover(candles) is True
+    assert detect_piercing_line(candles) is False
+    assert piercing_dark_cloud_intensity(candles) == pytest.approx(0.2)  # |102-102.5| / 2.5
+
+
+def test_detect_tweezer_bottom_true():
+    a = _candle(0, open=102.0, high=102.2, low=99.5, close=100.0)   # bearish
+    b = _candle(1, open=100.2, high=102.3, low=99.52, close=102.0)  # bullish, matching low
+    candles = [a, b]
+    assert detect_tweezer_bottom(candles) is True
+    assert detect_tweezer_top(candles) is False
+    assert tweezer_bottom_intensity(candles) > 100  # lows only 0.02 apart
+
+
+def test_detect_tweezer_bottom_false_when_lows_dont_match():
+    a = _candle(0, open=102.0, high=102.2, low=99.5, close=100.0)
+    b = _candle(1, open=100.2, high=102.3, low=98.0, close=102.0)  # low far from a's
+    assert detect_tweezer_bottom([a, b]) is False
+
+
+def test_detect_tweezer_top_true():
+    a = _candle(0, open=100.0, high=102.5, low=99.8, close=102.0)   # bullish
+    b = _candle(1, open=102.3, high=102.52, low=100.0, close=100.5)  # bearish, matching high
+    candles = [a, b]
+    assert detect_tweezer_top(candles) is True
+    assert detect_tweezer_bottom(candles) is False
+
+
+# --------------------------------------------------------------------- three-candle detectors
 
 def test_detect_three_white_soldiers_true_for_a_steady_climb():
     candles = [
