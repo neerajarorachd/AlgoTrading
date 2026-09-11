@@ -121,6 +121,7 @@ def scan_for_gaps(rest_broker, session_factory, aggregator, now: datetime | None
     calls, no need for a thread per symbol here."""
     now = now or datetime.now(timezone.utc)
     if not _is_market_hours(now):
+        logger.info("Gap scanner: skipping cycle, outside market hours (%s UTC)", now.strftime("%H:%M:%S"))
         return
 
     with session_scope(session_factory) as session:
@@ -129,8 +130,10 @@ def scan_for_gaps(rest_broker, session_factory, aggregator, now: datetime | None
             for row in session.query(SubscribedSymbol).filter_by(active=True).all()
         ]
 
+    logger.info("Gap scanner: checking %d active symbol(s) for gaps", len(targets))
     for symbol, exchange_segment, security_id in targets:
         backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator)
+    logger.info("Gap scanner: cycle complete")
 
 
 def _is_market_hours(now: datetime) -> bool:

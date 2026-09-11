@@ -3,9 +3,12 @@
 Flask's plain app.run() doesn't support WebSocket upgrades — Flask-SocketIO
 needs socketio.run(app, ...) instead so the WS transport is actually wired up.
 """
+import logging
+
 from dotenv import load_dotenv
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 from app import create_app
 from api.ws_live import socketio
