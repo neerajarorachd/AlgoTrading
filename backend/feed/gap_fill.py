@@ -91,9 +91,17 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
         # 3-/5-min rollups they trigger — instead of letting each one open its own
         # DB round-trip; a few hundred historical candles at one-round-trip-apiece
         # over a networked DB was the actual bottleneck making backfill slow.
+        #
+        # Deliberately NOT broadcasting candle_closed per candle here (unlike
+        # the live-tick path) — socketio's "threading" async_mode makes each
+        # emit() a real blocking call, and a few hundred of them per symbol
+        # was itself a major chunk of backfill's wall-clock time. The
+        # frontend doesn't need incremental pushes for a historical catch-up
+        # anyway — it does one full REST re-fetch when it sees the "done"
+        # backfill_status below (CandleChart.jsx), which is both faster and
+        # a cleaner update than hundreds of incremental ones.
         def _collect(sym, seg, c):
             closed.append((sym, seg, c))
-            ws_live.broadcast_candle_closed(sym, seg, c)
 
         for candle in candles:
             aggregator.ingest_historical_1min(symbol, exchange_segment, candle, on_candle_closed=_collect)

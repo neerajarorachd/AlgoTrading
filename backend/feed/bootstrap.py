@@ -126,8 +126,13 @@ def _backfill_all(targets, broker, session_factory, aggregator) -> None:
     thread, instead of spawn_backfill's one-thread-per-symbol — see _hydrate's
     docstring for why concurrent was actually causing failures, not just risk."""
     def _run():
-        for symbol, exchange_segment, security_id in targets:
-            backfill_missing_candles(symbol, exchange_segment, security_id, broker, session_factory, aggregator)
+        for i, (symbol, exchange_segment, security_id) in enumerate(targets):
+            logger.info("Hydration backfill: [%d/%d] starting %s (%s)", i + 1, len(targets), symbol, exchange_segment)
+            try:
+                backfill_missing_candles(symbol, exchange_segment, security_id, broker, session_factory, aggregator)
+            except Exception:
+                logger.exception("Hydration backfill: [%d/%d] %s (%s) raised uncaught", i + 1, len(targets), symbol, exchange_segment)
+            logger.info("Hydration backfill: [%d/%d] finished %s (%s)", i + 1, len(targets), symbol, exchange_segment)
 
     threading.Thread(target=_run, daemon=True, name="hydration-backfill").start()
 

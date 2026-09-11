@@ -72,8 +72,23 @@ export default function CandleChart({ instrument, fillHeight = false }) {
       if (msg.symbol !== instrument.symbol || msg.timeframe !== timeframe) return
       seriesRef.current?.update(toBar(msg.candle))
     }
+    // a background backfill (historical catch-up) doesn't push candle_closed
+    // per candle — it's a bulk REST-shaped update, not a live one — so this
+    // chart does one clean full re-fetch when it sees the matching "done"
+    // status instead, rather than staying stale until the user switches
+    // timeframe or reopens the chart
+    function onBackfillStatus(status) {
+      if (status.symbol !== instrument.symbol || status.status !== 'done') return
+      getCandles(instrument.symbol, instrument.exchange_segment, timeframe)
+        .then((candles) => seriesRef.current?.setData(candles.map(toBar)))
+        .catch(() => {})
+    }
     socket.on('candle_closed', onCandleClosed)
-    return () => socket.off('candle_closed', onCandleClosed)
+    socket.on('backfill_status', onBackfillStatus)
+    return () => {
+      socket.off('candle_closed', onCandleClosed)
+      socket.off('backfill_status', onBackfillStatus)
+    }
   }, [instrument, timeframe])
 
   return (
