@@ -184,6 +184,7 @@ export default function MarketWatch() {
                   <CandleChart instrument={instrument} />
                 </div>
                 <SidePanel
+                  defaultCollapsed
                   panels={[
                     { id: 'depth', label: 'Depth', content: <DepthPanel depth={liveDepth[instrument.symbol]} /> },
                   ]}
