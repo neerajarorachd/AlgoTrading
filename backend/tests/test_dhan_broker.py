@@ -462,7 +462,7 @@ class TestDhanBrokerFeed(unittest.TestCase):
         ws = fake_ws_holder["ws"]
         self.assertIsNotNone(ws.connected_url)
         self.assertEqual(len(ws.sent_messages), 1)
-        self.assertEqual(ws.sent_messages[0]["RequestCode"], 15)
+        self.assertEqual(ws.sent_messages[0]["RequestCode"], 21)  # Subscribe Full (includes depth)
         self.assertEqual(ws.sent_messages[0]["InstrumentList"][0]["SecurityId"], "1333")
 
         # simulate a tick arriving from the broker and confirm our callback fires

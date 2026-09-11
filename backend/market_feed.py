@@ -82,6 +82,22 @@ class MarketFeed:
         self._last_ltp[key] = float(ltp)
         self.on_tick(payload)
 
+        buy_depth = raw_tick.get("buy_depth")
+        sell_depth = raw_tick.get("sell_depth")
+        if buy_depth and sell_depth and self.on_depth is not None:
+            # Full packets carry both sides of the book together, unlike the
+            # separate 20-depth feed's one-side-per-packet format handled by
+            # _handle_depth — no need for the buy/sell cache merge there.
+            metrics = calculate_depth_metrics(float(ltp), buy_depth, sell_depth)
+            self.on_depth({
+                "type": "depth",
+                "symbol": instrument["symbol"],
+                "exchange_segment": instrument["exchange_segment"],
+                "security_id": instrument["security_id"],
+                **metrics,
+                "ts": payload["ts"],
+            })
+
         if self.on_candle_tick is not None:
             cumulative_volume = raw_tick.get("volume")
             volume_delta = 0

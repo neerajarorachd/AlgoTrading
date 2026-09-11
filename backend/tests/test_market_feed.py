@@ -112,6 +112,46 @@ def test_market_feed_seeds_ltp_at_subscribe_time_for_cold_start_depth():
     assert len(depth_events) == 1
 
 
+def test_market_feed_emits_depth_from_embedded_full_packet_fields():
+    # Dhan's "Full" packet (RequestCode 21 subscribe) carries both book sides
+    # in one packet, unlike the separate 20-depth feed's one-side-per-packet
+    # format exercised above — no buy/sell cache merge needed here.
+    broker = FakeBroker()
+    ticks = []
+    depth_events = []
+    feed = MarketFeed(broker, on_tick=ticks.append, on_depth=depth_events.append)
+    feed.subscribe({"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE",
+                    "previous_close": 2828.4})
+
+    buy_depth = [{"price": 2854.0, "quantity": 100, "orders": 3}]
+    sell_depth = [{"price": 2855.0, "quantity": 80, "orders": 4}]
+    broker.callback({
+        "SecurityId": "1333", "ExchangeSegment": "NSE_EQ", "LTP": 2854.65,
+        "Timestamp": "2026-09-10T09:16:02Z", "buy_depth": buy_depth, "sell_depth": sell_depth,
+    })
+
+    assert len(ticks) == 1  # the tick still fires normally alongside depth
+    assert len(depth_events) == 1
+    event = depth_events[0]
+    assert event["type"] == "depth"
+    assert event["symbol"] == "RELIANCE"
+    expected_metrics = calculate_depth_metrics(2854.65, buy_depth, sell_depth)
+    for field, value in expected_metrics.items():
+        assert event[field] == value
+
+
+def test_market_feed_skips_embedded_depth_when_only_one_side_present():
+    broker = FakeBroker()
+    depth_events = []
+    feed = MarketFeed(broker, on_tick=lambda t: None, on_depth=depth_events.append)
+    feed.subscribe({"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE",
+                    "previous_close": 2828.4})
+
+    broker.callback({"SecurityId": "1333", "LTP": 2854.65, "buy_depth": [], "sell_depth": []})
+
+    assert depth_events == []
+
+
 def test_market_feed_computes_volume_delta_from_cumulative_totals():
     broker = FakeBroker()
     candle_ticks = []

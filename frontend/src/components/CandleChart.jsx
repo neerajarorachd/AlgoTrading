@@ -16,6 +16,7 @@ export default function CandleChart({ instrument }) {
     if (!containerRef.current) return
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth, height: CHART_HEIGHT,
+      timeScale: { timeVisible: true, secondsVisible: false },
     })
     const series = chart.addCandlestickSeries()
     chartRef.current = chart

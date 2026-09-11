@@ -109,10 +109,26 @@ def _decode_previous_close(message):
 
 def _decode_full(message):
     values = struct.unpack("<BHBIfHIfIIIIIIffff100s", message[:162])
+    buy_depth, sell_depth = _decode_full_packet_depth(values[18])
     return _base_tick(values[0], values[2], values[3], values[4], values[6], {
         "volume": values[8], "open": values[14], "close": values[15],
         "high": values[16], "low": values[17],
+        "buy_depth": buy_depth, "sell_depth": sell_depth,
     })
+
+
+def _decode_full_packet_depth(raw_levels):
+    """Decode the Full packet's trailing 100-byte, 5-level depth block: each
+    20-byte level is {bid_qty, ask_qty, bid_orders, ask_orders, bid_price,
+    ask_price}, best level first."""
+    buy_depth, sell_depth = [], []
+    for offset in range(0, len(raw_levels), 20):
+        bid_qty, ask_qty, bid_orders, ask_orders, bid_price, ask_price = struct.unpack(
+            "<IIHHff", raw_levels[offset:offset + 20]
+        )
+        buy_depth.append({"price": bid_price, "quantity": bid_qty, "orders": bid_orders})
+        sell_depth.append({"price": ask_price, "quantity": ask_qty, "orders": ask_orders})
+    return buy_depth, sell_depth
 
 
 def _base_tick(packet_type, exchange, security_id, ltp, epoch, fields=None):

@@ -244,7 +244,10 @@ class DhanBroker(BaseBroker):
             )
 
         subscribe_msg = {
-            "RequestCode": 15,   # subscribe (per Dhan feed protocol convention)
+            # 21 = Subscribe Full — bundles OHLC/volume with 5-level market
+            # depth in the same packet (type 8); 15 (Ticker) omits depth
+            # entirely, which is why depth never populated before.
+            "RequestCode": 21,
             "InstrumentCount": len(instruments),
             "InstrumentList": [
                 {"ExchangeSegment": i["exchange_segment"], "SecurityId": i["security_id"]}
