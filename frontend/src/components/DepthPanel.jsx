@@ -1,8 +1,7 @@
 export default function DepthPanel({ depth }) {
   if (!depth) {
     return (
-      <div style={{ minWidth: 260 }}>
-        <h3>Depth</h3>
+      <div style={{ minWidth: 200, fontSize: 13 }}>
         <p style={{ color: '#888' }}>No depth data yet.</p>
       </div>
     )
@@ -16,18 +15,17 @@ export default function DepthPanel({ depth }) {
     ['Ask pressure %', depth.ask_pressure_percentage],
     ['Nearest bid %', depth.nearest_bid_percentage],
     ['Nearest ask %', depth.nearest_ask_percentage],
-    ['Max bid concentration %', depth.maximum_bid_percentage],
-    ['Max ask concentration %', depth.maximum_ask_percentage],
+    ['Max bid conc. %', depth.maximum_bid_percentage],
+    ['Max ask conc. %', depth.maximum_ask_percentage],
   ]
 
   return (
-    <div style={{ minWidth: 260 }}>
-      <h3>Depth — {depth.symbol}</h3>
-      <table cellPadding="4">
+    <div style={{ minWidth: 200, fontSize: 13 }}>
+      <table cellPadding="3">
         <tbody>
           {fields.map(([label, value]) => (
             <tr key={label}>
-              <td>{label}</td>
+              <td style={{ color: '#666' }}>{label}</td>
               <td>{value}</td>
             </tr>
           ))}

@@ -5,6 +5,7 @@ import SymbolRegisterForm from '../components/SymbolRegisterForm.jsx'
 import SymbolTable from '../components/SymbolTable.jsx'
 import DepthPanel from '../components/DepthPanel.jsx'
 import CandleChart from '../components/CandleChart.jsx'
+import SidePanel from '../components/SidePanel.jsx'
 
 const MAX_OPEN_CHARTS = 4
 
@@ -15,6 +16,7 @@ export default function MarketWatch() {
   const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
   const [openSymbols, setOpenSymbols] = useState([]) // up to MAX_OPEN_CHARTS rows
   const [focusedIndex, setFocusedIndex] = useState(-1)
+  const [checkedIds, setCheckedIds] = useState(new Set())
   const joinedRooms = useRef(new Set())
 
   const refresh = useCallback(() => {
@@ -86,6 +88,50 @@ export default function MarketWatch() {
   async function handleRemove(id) {
     await removeSymbol(id)
     setOpenSymbols((prev) => prev.filter((s) => s.id !== id))
+    setCheckedIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    refresh()
+  }
+
+  function handleToggleChecked(id) {
+    setCheckedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function handleToggleCheckAll() {
+    setCheckedIds((prev) => {
+      const allChecked = symbols.length > 0 && symbols.every((s) => prev.has(s.id))
+      return allChecked ? new Set() : new Set(symbols.map((s) => s.id))
+    })
+  }
+
+  function handleOpenSelected() {
+    setOpenSymbols((prev) => {
+      const next = [...prev]
+      for (const row of symbols) {
+        if (!checkedIds.has(row.id)) continue
+        if (next.length >= MAX_OPEN_CHARTS) break
+        if (!next.some((s) => s.id === row.id)) next.push(row)
+      }
+      return next
+    })
+  }
+
+  async function handleRemoveSelected() {
+    const ids = [...checkedIds]
+    for (const id of ids) {
+      await removeSymbol(id)
+    }
+    setOpenSymbols((prev) => prev.filter((s) => !checkedIds.has(s.id)))
+    setCheckedIds(new Set())
     refresh()
   }
 
@@ -105,6 +151,13 @@ export default function MarketWatch() {
       `}</style>
       <h1>Market Watch</h1>
       <SymbolRegisterForm onRegistered={refresh} />
+      {checkedIds.size > 0 && (
+        <div style={{ margin: '8px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span>{checkedIds.size} selected</span>
+          <button onClick={handleOpenSelected}>Open selected</button>
+          <button onClick={handleRemoveSelected}>Remove selected</button>
+        </div>
+      )}
       <SymbolTable
         symbols={symbols}
         liveTicks={liveTicks}
@@ -114,6 +167,9 @@ export default function MarketWatch() {
         onRemove={handleRemove}
         focusedIndex={focusedIndex}
         onFocusedIndexChange={setFocusedIndex}
+        checkedIds={checkedIds}
+        onToggleChecked={handleToggleChecked}
+        onToggleCheckAll={handleToggleCheckAll}
       />
       {openSymbols.length > 0 && (
         <div className="chart-grid" style={{ marginTop: 24 }}>
@@ -123,8 +179,16 @@ export default function MarketWatch() {
                 <strong>{instrument.symbol}</strong>
                 <button onClick={() => handleToggleOpen(instrument)} title="Close chart">×</button>
               </div>
-              <CandleChart instrument={instrument} />
-              <DepthPanel depth={liveDepth[instrument.symbol]} />
+              <div style={{ display: 'flex', minWidth: 0 }}>
+                <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+                  <CandleChart instrument={instrument} />
+                </div>
+                <SidePanel
+                  panels={[
+                    { id: 'depth', label: 'Depth', content: <DepthPanel depth={liveDepth[instrument.symbol]} /> },
+                  ]}
+                />
+              </div>
             </div>
           ))}
         </div>
