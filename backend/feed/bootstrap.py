@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
 from db.session import session_scope
-from feed.gap_fill import spawn_backfill
+from feed.gap_fill import spawn_backfill, start_gap_scanner
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ def start_feed(
     _wait_for_socket_ready(broker, timeout=socket_ready_timeout)
     _hydrate(rest_broker, market_feed, session_factory, aggregator=aggregator)
     _schedule_daily_flush(aggregator, flush_hour_utc, flush_minute_utc)
+    start_gap_scanner(rest_broker, session_factory, aggregator)
 
 
 def _open_feed_socket(broker, market_feed) -> None:

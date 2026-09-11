@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
 from brokers.models import Candle
-from db.models import CandleToday
+from db.models import CandleToday, SubscribedSymbol
 from feed.candle_aggregator import CandleAggregator
-from feed.gap_fill import _todays_market_open, backfill_missing_candles
+from feed.gap_fill import _todays_market_open, backfill_missing_candles, scan_for_gaps
 
 SYMBOL = "RELIANCE"
 SEG = "NSE_EQ"
@@ -115,3 +115,43 @@ def test_backfill_never_raises_even_if_session_factory_is_broken(monkeypatch):
     backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, FakeRestBroker([]), broken_session_factory, aggregator)
 
     assert spy.events[-1][1] == "failed"
+
+
+def _add_subscribed_symbol(session_factory, symbol, security_id, active=True):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=symbol, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id=security_id, previous_close=100.0, active=active,
+        ))
+        session.commit()
+
+
+def test_scan_for_gaps_backfills_every_active_symbol(session_factory, monkeypatch):
+    spy = BroadcastSpy(monkeypatch)
+    _add_subscribed_symbol(session_factory, "RELIANCE", "1333")
+    _add_subscribed_symbol(session_factory, "TCS", "11536")
+    _add_subscribed_symbol(session_factory, "DELISTED", "9999", active=False)
+
+    candles = [Candle(symbol="x", timeframe="1min", timestamp=_todays_market_open(),
+                       open=100, high=101, low=99, close=100.5, volume=10)]
+    rest_broker = FakeRestBroker(candles)
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    scan_for_gaps(rest_broker, session_factory, aggregator, now=_todays_market_open() + timedelta(hours=1))
+
+    called_symbols = {call[0] for call in rest_broker.calls}
+    assert called_symbols == {"RELIANCE", "TCS"}  # inactive symbol skipped
+    assert [e[1] for e in spy.events] == ["started", "done", "started", "done"]
+
+
+def test_scan_for_gaps_skips_entirely_outside_market_hours(session_factory, monkeypatch):
+    spy = BroadcastSpy(monkeypatch)
+    _add_subscribed_symbol(session_factory, "RELIANCE", "1333")
+    rest_broker = FakeRestBroker([])
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    outside_hours = _todays_market_open() - timedelta(hours=2)
+    scan_for_gaps(rest_broker, session_factory, aggregator, now=outside_hours)
+
+    assert rest_broker.calls == []
+    assert spy.events == []
