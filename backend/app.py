@@ -42,6 +42,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
         on_tick=ws_live.broadcast_tick,
         on_depth=ws_live.broadcast_depth,
         on_candle_tick=_make_on_candle_tick(aggregator),
+        candle_lookup=aggregator.get_last_closed_1min,
     )
 
     app.extensions["db_session_factory"] = session_factory

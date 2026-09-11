@@ -121,3 +121,90 @@ def test_flush_all_force_closes_forming_candles_at_every_timeframe():
     assert len(onemin) == 2  # :15 (from the boundary crossing) and :16 (force-closed by flush)
     assert len(threemin) == 1  # the still-partial :15 3-min bucket, force-closed too
     assert threemin[0].volume == 2
+
+
+def test_get_last_closed_1min_is_none_before_any_candle_closes():
+    agg = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    assert agg.get_last_closed_1min(SYMBOL, SEG) is None
+
+    agg.on_tick(SYMBOL, SEG, 100.0, 1, _ts(15))
+    assert agg.get_last_closed_1min(SYMBOL, SEG) is None  # still forming, not closed yet
+
+
+def test_get_last_closed_1min_updates_as_candles_finalize():
+    agg = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    agg.on_tick(SYMBOL, SEG, 100.0, 1, _ts(15))
+    agg.on_tick(SYMBOL, SEG, 105.0, 1, _ts(16))  # finalizes :15
+
+    last = agg.get_last_closed_1min(SYMBOL, SEG)
+    assert last is not None
+    assert last.timestamp == _ts(15, second=0)
+    assert last.close == 100.0
+
+    agg.on_tick(SYMBOL, SEG, 110.0, 1, _ts(17))  # finalizes :16
+    last = agg.get_last_closed_1min(SYMBOL, SEG)
+    assert last.timestamp == _ts(16, second=0)
+    assert last.close == 105.0
+
+
+def test_ingest_historical_1min_produces_correct_rollups_and_persistence_events():
+    from brokers.models import Candle
+
+    events, cb = _collector()
+    agg = CandleAggregator(on_candle_closed=cb)
+
+    for minute, close in [(15, 100.0), (16, 101.0), (17, 99.0)]:
+        agg.ingest_historical_1min(SYMBOL, SEG, Candle(
+            symbol=SYMBOL, timeframe="1min", timestamp=_ts(minute, second=0),
+            open=close, high=close, low=close, close=close, volume=10,
+        ))
+
+    onemin = [c for _, _, c in events if c.timeframe == "1min"]
+    assert len(onemin) == 3
+    assert [c.timestamp for c in onemin] == [_ts(15, 0), _ts(16, 0), _ts(17, 0)]
+
+    # 3-min bucket :15-:17 is still partial (no later candle triggered its emit) —
+    # matches live behavior exactly, no special-casing for historical data
+    threemin = [c for _, _, c in events if c.timeframe == "3min"]
+    assert threemin == []
+
+
+def test_ingest_historical_1min_updates_last_closed_cache():
+    from brokers.models import Candle
+
+    agg = CandleAggregator(on_candle_closed=lambda *a: None)
+    agg.ingest_historical_1min(SYMBOL, SEG, Candle(
+        symbol=SYMBOL, timeframe="1min", timestamp=_ts(15, second=0),
+        open=100.0, high=101.0, low=99.0, close=100.5, volume=10,
+    ))
+
+    last = agg.get_last_closed_1min(SYMBOL, SEG)
+    assert last is not None
+    assert last.close == 100.5
+
+
+def test_backfilled_history_then_live_ticks_continue_seamlessly():
+    """A live tick arriving right after backfill must correctly detect whether it's
+    still in the same 1-min bucket as the last backfilled candle, or starts a new one."""
+    from brokers.models import Candle
+
+    events, cb = _collector()
+    agg = CandleAggregator(on_candle_closed=cb)
+
+    agg.ingest_historical_1min(SYMBOL, SEG, Candle(
+        symbol=SYMBOL, timeframe="1min", timestamp=_ts(15, second=0),
+        open=100.0, high=100.0, low=100.0, close=100.0, volume=10,
+    ))
+
+    # a live tick in the next minute must finalize a *new* forming candle, not
+    # collide with the backfilled one
+    agg.on_tick(SYMBOL, SEG, 102.0, 5, _ts(16))
+    assert agg._forming[(SYMBOL, SEG, "1min")].open == 102.0
+
+    agg.on_tick(SYMBOL, SEG, 103.0, 5, _ts(17))  # finalizes the live :16 candle
+    onemin = [c for _, _, c in events if c.timeframe == "1min"]
+    # both the backfilled :15 candle and the live-tick-driven :16 candle closed
+    assert [c.timestamp for c in onemin] == [_ts(15, second=0), _ts(16, second=0)]
+    assert onemin[-1].close == 102.0

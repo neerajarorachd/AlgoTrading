@@ -45,6 +45,12 @@ def broadcast_depth(payload: dict) -> None:
     socketio.emit("depth", payload, room=room_for_exchange_segment(payload["exchange_segment"], payload["symbol"]))
 
 
+def broadcast_backfill_status(symbol: str, exchange_segment: str, status: str, message: str) -> None:
+    socketio.emit("backfill_status", {
+        "type": "backfill_status", "symbol": symbol, "status": status, "message": message,
+    }, room=room_for_exchange_segment(exchange_segment, symbol))
+
+
 def broadcast_candle_closed(symbol: str, exchange_segment: str, candle) -> None:
     ts = candle.timestamp
     ts_str = ts.isoformat().replace("+00:00", "Z") if ts.tzinfo else ts.isoformat() + "Z"

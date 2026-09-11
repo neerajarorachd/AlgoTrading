@@ -4,7 +4,7 @@ import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from brokers.models import Candle
 
@@ -16,6 +16,7 @@ from brokers.models import Candle
 _ROLLUP_MINUTES = {"3min": 3, "5min": 5}
 
 Key = Tuple[str, str, str]  # (symbol, exchange_segment, timeframe)
+InstrumentKey = Tuple[str, str]  # (symbol, exchange_segment)
 
 
 @dataclass
@@ -42,8 +43,24 @@ class CandleAggregator:
         self._forming: Dict[Key, _Forming] = {}
         self._rollup_buffers: Dict[Key, List[Candle]] = defaultdict(list)
         self._rollup_bucket_start: Dict[Key, datetime] = {}
+        self._last_closed_1min: Dict[InstrumentKey, Candle] = {}
         self._lock = threading.RLock()
         self.dropped_late_ticks = 0
+
+    def get_last_closed_1min(self, symbol: str, exchange_segment: str) -> Optional[Candle]:
+        """Most recent finalized 1-min candle for this instrument, or None before
+        any candle (live or backfilled) has closed yet. Used to compute the
+        "change since last candle" tick field."""
+        with self._lock:
+            return self._last_closed_1min.get((symbol, exchange_segment))
+
+    def ingest_historical_1min(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
+        """Feeds an already-complete 1-min candle from historical backfill through
+        the same finalize/rollup path a live tick-driven candle takes, so 3-/5-min
+        rollups get backfilled correctly too. Candles must arrive in chronological
+        order (Dhan's historical API already returns them that way)."""
+        with self._lock:
+            self._finalize_candle(symbol, exchange_segment, candle)
 
     def on_tick(self, symbol: str, exchange_segment: str, ltp: float, volume: int, ts: datetime) -> None:
         with self._lock:
@@ -94,6 +111,10 @@ class CandleAggregator:
             open=forming.open, high=forming.high, low=forming.low,
             close=forming.close, volume=forming.volume,
         )
+        self._finalize_candle(symbol, exchange_segment, candle)
+
+    def _finalize_candle(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
+        self._last_closed_1min[(symbol, exchange_segment)] = candle
         self.on_candle_closed(symbol, exchange_segment, candle)
         self._roll_up(symbol, exchange_segment, "3min", candle)
         self._roll_up(symbol, exchange_segment, "5min", candle)

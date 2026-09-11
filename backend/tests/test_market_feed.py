@@ -155,3 +155,69 @@ def test_market_feed_tick_only_packets_contribute_zero_volume():
     broker.callback({"SecurityId": "1333", "LTP": 2850.0})  # ticker packet: no "volume" key at all
 
     assert candle_ticks[0]["volume"] == 0
+
+
+def test_change_metrics_none_when_open_and_candle_lookup_unavailable():
+    broker = FakeBroker()
+    received = []
+    feed = MarketFeed(broker, on_tick=received.append)  # no "open" in instrument, no candle_lookup
+    feed.subscribe({"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE",
+                    "previous_close": 2828.4})
+
+    broker.callback({"SecurityId": "1333", "LTP": 2850.0})
+
+    tick = received[0]
+    assert tick["gap_absolute"] is None
+    assert tick["gap_percentage"] is None
+    assert tick["day_change_absolute"] is None
+    assert tick["day_change_percentage"] is None
+    assert tick["candle_change_absolute"] is None
+    assert tick["candle_change_percentage"] is None
+
+
+def test_gap_and_day_change_computed_from_instrument_open():
+    broker = FakeBroker()
+    received = []
+    feed = MarketFeed(broker, on_tick=received.append)
+    feed.subscribe({"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE",
+                    "previous_close": 2800.0, "open": 2820.0})  # gapped up 20 at open
+
+    broker.callback({"SecurityId": "1333", "LTP": 2850.0})
+
+    tick = received[0]
+    assert tick["gap_absolute"] == 20.0
+    assert tick["gap_percentage"] == round(20.0 / 2800.0 * 100, 2)
+    assert tick["day_change_absolute"] == 30.0  # 2850 - 2820
+    assert tick["day_change_percentage"] == round(30.0 / 2820.0 * 100, 2)
+
+
+def test_candle_change_computed_via_candle_lookup_callback():
+    broker = FakeBroker()
+    received = []
+
+    class FakeCandle:
+        close = 2845.0
+
+    feed = MarketFeed(broker, on_tick=received.append, candle_lookup=lambda sym, seg: FakeCandle())
+    feed.subscribe({"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE",
+                    "previous_close": 2828.4})
+
+    broker.callback({"SecurityId": "1333", "LTP": 2850.0})
+
+    tick = received[0]
+    assert tick["candle_change_absolute"] == 5.0  # 2850 - 2845
+    assert tick["candle_change_percentage"] == round(5.0 / 2845.0 * 100, 2)
+
+
+def test_candle_change_none_when_candle_lookup_returns_none():
+    broker = FakeBroker()
+    received = []
+    feed = MarketFeed(broker, on_tick=received.append, candle_lookup=lambda sym, seg: None)
+    feed.subscribe({"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE",
+                    "previous_close": 2828.4})
+
+    broker.callback({"SecurityId": "1333", "LTP": 2850.0})
+
+    tick = received[0]
+    assert tick["candle_change_absolute"] is None
+    assert tick["candle_change_percentage"] is None

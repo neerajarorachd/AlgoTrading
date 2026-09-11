@@ -6,6 +6,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 
 from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
+from feed.gap_fill import spawn_backfill
 
 symbols_bp = Blueprint("symbols", __name__)
 
@@ -105,8 +106,14 @@ def add_symbol():
         "exchange": row.exchange,
         "segment": row.segment,
         "previous_close": float(row.previous_close) if row.previous_close is not None else None,
+        "open": float(quote.open),
         "ltp": float(quote.ltp),
     })
+
+    spawn_backfill(
+        row.symbol, row.exchange_segment, row.security_id, broker,
+        current_app.extensions["db_session_factory"], current_app.extensions["candle_aggregator"],
+    )
 
     return jsonify(_serialize(row)), status
 

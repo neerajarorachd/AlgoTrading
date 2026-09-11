@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
 from db.session import session_scope
+from feed.gap_fill import spawn_backfill
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ def start_feed(
     thread.start()
 
     _wait_for_socket_ready(broker, timeout=socket_ready_timeout)
-    _hydrate(rest_broker, market_feed, session_factory)
+    _hydrate(rest_broker, market_feed, session_factory, aggregator=aggregator)
     _schedule_daily_flush(aggregator, flush_hour_utc, flush_minute_utc)
 
 
@@ -75,13 +76,17 @@ def _wait_for_socket_ready(broker, timeout: float) -> None:
         time.sleep(0.05)
 
 
-def _hydrate(broker, market_feed, session_factory) -> None:
+def _hydrate(broker, market_feed, session_factory, aggregator=None) -> None:
     """Re-subscribes every active symbol from a prior session.
 
     One row's broker call failing (rate limit, transient network issue, a
     since-delisted symbol) must not prevent every other registered symbol
     from coming back online, and must never crash the whole app at startup —
     log it and move on to the rest.
+
+    `aggregator` is optional so existing tests that only care about the
+    subscribe behavior don't need to supply one — when given, each
+    successfully-subscribed symbol also gets its startup gap backfilled.
     """
     with session_scope(session_factory) as session:
         rows = session.query(SubscribedSymbol).filter_by(active=True).all()
@@ -96,8 +101,11 @@ def _hydrate(broker, market_feed, session_factory) -> None:
                     "exchange": row.exchange,
                     "segment": row.segment,
                     "previous_close": float(quote.close),
+                    "open": float(quote.open),
                     "ltp": float(quote.ltp),
                 })
+                if aggregator is not None:
+                    spawn_backfill(row.symbol, row.exchange_segment, row.security_id, broker, session_factory, aggregator)
             except (BrokerAPIError, BrokerConnectionError) as exc:
                 logger.warning("Hydration: skipping %s (%s) — %s", row.symbol, row.exchange_segment, exc)
             except Exception:

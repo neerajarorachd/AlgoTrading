@@ -87,7 +87,15 @@ def fake_broker():
 
 
 @pytest.fixture
-def app(db_engine, session_factory, fake_broker):
+def app(db_engine, session_factory, fake_broker, monkeypatch):
+    # Real backfill spawns a background thread that outlives most tests (this
+    # fixture's own db_engine gets disposed right after the test returns) —
+    # default it to a no-op here so every test doesn't race a background
+    # thread against teardown; feed/test_gap_fill.py tests the real function
+    # directly and unpatched.
+    monkeypatch.setattr("api.routes_symbols.spawn_backfill", lambda *a, **kw: None)
+    monkeypatch.setattr("feed.bootstrap.spawn_backfill", lambda *a, **kw: None)
+
     flask_app = create_app(
         broker=fake_broker, engine=db_engine, session_factory=session_factory,
         instrument_master=FakeInstrumentMaster(), testing=True,

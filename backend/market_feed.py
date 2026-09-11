@@ -16,11 +16,16 @@ class MarketFeed:
         on_tick: Callable[[dict], None],
         on_depth: Optional[Callable[[dict], None]] = None,
         on_candle_tick: Optional[Callable[[dict, dict], None]] = None,
+        candle_lookup: Optional[Callable[[str, str], Optional[object]]] = None,
     ):
         self.broker = broker
         self.on_tick = on_tick
         self.on_depth = on_depth
         self.on_candle_tick = on_candle_tick
+        # plain callback (symbol, exchange_segment) -> last closed 1-min Candle or
+        # None, so MarketFeed doesn't need to import/know about CandleAggregator
+        # as a concrete type — keeps feed/aggregation cleanly decoupled.
+        self.candle_lookup = candle_lookup
         self._instruments: Dict[str, dict] = {}
         self._depth_cache: Dict[str, dict] = {}   # key -> {"buy": [levels], "sell": [levels]}
         self._last_ltp: Dict[str, float] = {}      # key -> last known ltp, needed to join depth packets
@@ -72,6 +77,7 @@ class MarketFeed:
             currency=instrument.get("currency", "INR"),
             ts=timestamp,
         )
+        self._add_change_metrics(payload, instrument, float(ltp), float(previous_close))
         key = self._key(instrument)
         self._last_ltp[key] = float(ltp)
         self.on_tick(payload)
@@ -84,6 +90,33 @@ class MarketFeed:
                 volume_delta = max(0, int(cumulative_volume) - int(last_volume))
                 self._last_volume[key] = int(cumulative_volume)
             self.on_candle_tick(instrument, {"ltp": float(ltp), "volume": volume_delta, "ts": payload["ts"]})
+
+    def _add_change_metrics(self, payload: dict, instrument: dict, ltp: float, previous_close: float) -> None:
+        """Three extra change figures beyond the base tick contract's LTP-vs-
+        previous-close: gap at open, change since today's open, and change since
+        the last closed 1-min candle. Each pair is None until its input is known."""
+        today_open = instrument.get("open")
+        if today_open:
+            today_open = float(today_open)
+            payload["gap_absolute"] = round(today_open - previous_close, 2)
+            payload["gap_percentage"] = round((today_open - previous_close) / previous_close * 100, 2) if previous_close else None
+            payload["day_change_absolute"] = round(ltp - today_open, 2)
+            payload["day_change_percentage"] = round((ltp - today_open) / today_open * 100, 2) if today_open else None
+        else:
+            payload["gap_absolute"] = None
+            payload["gap_percentage"] = None
+            payload["day_change_absolute"] = None
+            payload["day_change_percentage"] = None
+
+        prev_candle = None
+        if self.candle_lookup is not None:
+            prev_candle = self.candle_lookup(instrument["symbol"], instrument["exchange_segment"])
+        if prev_candle is not None and prev_candle.close:
+            payload["candle_change_absolute"] = round(ltp - prev_candle.close, 2)
+            payload["candle_change_percentage"] = round((ltp - prev_candle.close) / prev_candle.close * 100, 2)
+        else:
+            payload["candle_change_absolute"] = None
+            payload["candle_change_percentage"] = None
 
     def _handle_depth(self, raw_tick: dict) -> None:
         key = f"{raw_tick['exchange_segment']}:{raw_tick['security_id']}"
