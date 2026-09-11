@@ -68,7 +68,10 @@ def main() -> None:
             for candle in candles:
                 activity_engine.on_candle_closed(symbol, exchange_segment, candle)
 
-            print(f"{symbol} {timeframe}: replayed {len(candles)} candles")
+            print(f"{symbol} {timeframe}: replayed {len(candles)} candles ({activity_engine.buffered_count()} buffered so far)")
+
+    flushed = activity_engine.flush()  # one bulk write for the whole run, not one per detection
+    print(f"\nflushed {flushed} buffered activities to instrument_activity in one write")
 
     with session_factory() as session:
         rows = (

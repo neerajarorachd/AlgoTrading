@@ -25,17 +25,23 @@ def start_feed(
     flush_minute_utc: int = _DEFAULT_FLUSH_MINUTE_UTC,
     socket_ready_timeout: float = 5.0,
     rest_broker=None,
+    activity_engine=None,
 ) -> None:
     """`broker` opens/owns the live feed socket; `rest_broker` (defaults to the
     same instance) is used for hydration's get_quote() calls — separate tokens
-    for each duty in the real app, same instance for both in tests."""
+    for each duty in the real app, same instance for both in tests.
+    `activity_engine`, if given, gets flushed to instrument_activity on the
+    same EOD timer as the candle aggregator (see ActivityEngine's own
+    docstring for why it buffers in memory rather than writing per
+    detection) — optional so existing tests that don't care about it don't
+    need to supply one."""
     rest_broker = rest_broker if rest_broker is not None else broker
     thread = threading.Thread(target=_open_feed_socket, args=(broker, market_feed), daemon=True, name="broker-ws-feed")
     thread.start()
 
     _wait_for_socket_ready(broker, timeout=socket_ready_timeout)
     _hydrate(rest_broker, market_feed, session_factory, aggregator=aggregator)
-    _schedule_daily_flush(aggregator, flush_hour_utc, flush_minute_utc)
+    _schedule_daily_flush(aggregator, flush_hour_utc, flush_minute_utc, activity_engine)
     start_gap_scanner(rest_broker, session_factory, aggregator)
 
 
@@ -148,10 +154,14 @@ def _backfill_and_subscribe_all(targets, broker, session_factory, aggregator, ma
     threading.Thread(target=_run, daemon=True, name="hydration-backfill").start()
 
 
-def _schedule_daily_flush(aggregator, hour_utc: int, minute_utc: int) -> None:
+def _schedule_daily_flush(aggregator, hour_utc: int, minute_utc: int, activity_engine=None) -> None:
     def _flush_and_reschedule():
         aggregator.flush_all(as_of=datetime.now(timezone.utc))
-        _schedule_daily_flush(aggregator, hour_utc, minute_utc)
+        if activity_engine is not None:
+            n = activity_engine.flush()
+            if n:
+                logger.info("EOD flush: wrote %d buffered activity/activities to instrument_activity", n)
+        _schedule_daily_flush(aggregator, hour_utc, minute_utc, activity_engine)
 
     now = datetime.now(timezone.utc)
     target = now.replace(hour=hour_utc, minute=minute_utc, second=0, microsecond=0)

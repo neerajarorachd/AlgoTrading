@@ -352,12 +352,62 @@ class ActivityEngine:
     rolling buffer per (symbol, exchange_segment, timeframe) in memory for
     multi-candle pattern lookback, so this never needs its own DB read on
     the hot path.
+
+    Detected activities are buffered in memory (a plain list of dicts —
+    cheap, and trivially handed to pandas via to_dataframe() if a caller
+    wants it) rather than written to instrument_activity as they're found.
+    Nothing hits the DB until flush() is called explicitly — once per
+    trading day in production (hooked into the existing EOD timer
+    alongside CandleAggregator.flush_all), or once at the end of a whole
+    backtest/calibration run across many days if a caller wants to buffer
+    that much before ever touching the DB. The point is db calls scale
+    with flushes, not with detections — a session close to a thousand
+    activities is one bulk insert, not a thousand round-trips.
     """
 
     def __init__(self, session_factory):
         self.session_factory = session_factory
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
+        self._buffer: List[dict] = []
+
+    def buffered_count(self) -> int:
+        return len(self._buffer)
+
+    def to_dataframe(self):
+        """Optional convenience for calibration/analysis work — pandas is
+        intentionally not a hard dependency of this module, only imported
+        if a caller actually asks for this.
+
+        Dtypes are tuned rather than left at pandas' defaults: `category`
+        for the low-cardinality string columns (timeframe/activity_type/
+        activity) instead of `object`, `float32` for the numeric ones.
+        Memory isn't actually under pressure at the intended scale (one
+        instrument's full 2-year backtest is ~13 MB this way vs. a still-
+        trivial ~50 MB with default dtypes) — this is worth doing anyway
+        because `category` columns compare/group noticeably faster than
+        plain Python strings once a calibration pass is querying this.
+        """
+        import pandas as pd
+        df = pd.DataFrame(self._buffer)
+        if df.empty:
+            return df
+        df["instrument_id"] = df["instrument_id"].astype("int32")
+        for col in ("timeframe", "activity_type", "activity"):
+            df[col] = df[col].astype("category")
+        for col in ("intensity", "open_price", "high_price", "low_price", "close_price"):
+            df[col] = df[col].astype("float32")
+        return df
+
+    def flush(self) -> int:
+        """Write every buffered activity to instrument_activity in as few
+        DB round-trips as possible, then clear the buffer. Returns the
+        number of activities flushed."""
+        if not self._buffer:
+            return 0
+        rows, self._buffer = self._buffer, []
+        self._persist_bulk(rows)
+        return len(rows)
 
     def on_candle_closed(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
         key: InstrumentKey = (symbol, exchange_segment, candle.timeframe)
@@ -397,7 +447,13 @@ class ActivityEngine:
         if instrument_id is None:
             return
 
-        self._persist(instrument_id, candle, found)
+        for activity_type, activity, intensity in found:
+            self._buffer.append({
+                "instrument_id": instrument_id, "timeframe": candle.timeframe, "ts": candle.timestamp,
+                "activity_type": activity_type, "activity": activity, "intensity": intensity,
+                "open_price": candle.open, "high_price": candle.high,
+                "low_price": candle.low, "close_price": candle.close,
+            })
 
     def _lookup_instrument_id(self, symbol: str, exchange_segment: str):
         cache_key = (symbol, exchange_segment)
@@ -415,25 +471,36 @@ class ActivityEngine:
         self._instrument_ids[cache_key] = instrument_id
         return instrument_id
 
-    def _persist(self, instrument_id: int, candle: Candle, found: List[Tuple[str, str, Optional[float]]]) -> None:
-        timeframe, ts = candle.timeframe, candle.timestamp
-        with session_scope(self.session_factory) as session:
-            for activity_type, activity, intensity in found:
-                try:
-                    with session.begin_nested():
-                        exists = session.query(InstrumentActivity).filter_by(
-                            instrument_id=instrument_id, timeframe=timeframe, ts=ts, activity=activity,
-                        ).one_or_none()
-                        if exists is None:
-                            session.add(InstrumentActivity(
-                                instrument_id=instrument_id, timeframe=timeframe, ts=ts,
-                                activity_type=activity_type, activity=activity, intensity=intensity,
-                                open_price=candle.open, high_price=candle.high,
-                                low_price=candle.low, close_price=candle.close,
-                            ))
-                        session.flush()
-                except IntegrityError:
-                    # a concurrent writer (e.g. a backfill re-run for the same
-                    # candle) already recorded this exact activity — fine,
-                    # same idempotency guarantee as candle persistence
-                    continue
+    def _persist_bulk(self, rows: List[dict]) -> None:
+        """Optimistic bulk insert — the common case (a fresh flush of newly
+        detected activities) really is "all new rows," so skip the
+        per-row existence check entirely and add everything in one flush.
+        Same pattern as feed/candle_persistence.py's persist_candles_bulk,
+        for the same reason: hundreds of individual SELECT-then-INSERT
+        round trips was the actual cost there, not the write itself."""
+        try:
+            with session_scope(self.session_factory) as session:
+                session.add_all([InstrumentActivity(**row) for row in rows])
+                session.flush()
+        except IntegrityError:
+            # a concurrent writer (e.g. a backfill re-run touching the same
+            # candles) already recorded one of these exact activities —
+            # fall back to the slower existence-checked path per row so
+            # that one conflict doesn't lose the rest of the flush
+            for row in rows:
+                self._persist_one(row)
+
+    def _persist_one(self, row: dict) -> None:
+        with self.session_factory() as session:
+            try:
+                with session.begin_nested():
+                    exists = session.query(InstrumentActivity).filter_by(
+                        instrument_id=row["instrument_id"], timeframe=row["timeframe"],
+                        ts=row["ts"], activity=row["activity"],
+                    ).one_or_none()
+                    if exists is None:
+                        session.add(InstrumentActivity(**row))
+                    session.flush()
+                session.commit()
+            except IntegrityError:
+                session.rollback()

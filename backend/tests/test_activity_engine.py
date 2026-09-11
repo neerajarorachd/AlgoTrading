@@ -239,6 +239,16 @@ def test_engine_persists_a_detected_pattern(session_factory):
     doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
     engine.on_candle_closed(SYMBOL, SEG, doji)
 
+    # nothing hits the DB until flush() is called — see ActivityEngine's
+    # own docstring for why (db calls scale with flushes, not detections)
+    assert engine.buffered_count() == 1
+    with session_factory() as session:
+        assert session.query(InstrumentActivity).count() == 0
+
+    flushed = engine.flush()
+    assert flushed == 1
+    assert engine.buffered_count() == 0
+
     with session_factory() as session:
         rows = session.query(InstrumentActivity).filter_by(instrument_id=instrument_id).all()
     assert len(rows) == 1
@@ -265,6 +275,7 @@ def test_engine_stores_null_intensity_for_a_perfect_doji(session_factory):
     engine = ActivityEngine(session_factory)
     perfect_doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.0)  # open == close
     engine.on_candle_closed(SYMBOL, SEG, perfect_doji)
+    engine.flush()
 
     with session_factory() as session:
         row = session.query(InstrumentActivity).filter_by(instrument_id=instrument_id).one()
@@ -288,6 +299,7 @@ def test_engine_stores_null_intensity_for_a_multi_candle_pattern(session_factory
     ]
     for c in candles:
         engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
 
     with session_factory() as session:
         row = session.query(InstrumentActivity).filter_by(
@@ -297,7 +309,10 @@ def test_engine_stores_null_intensity_for_a_multi_candle_pattern(session_factory
     assert float(row.close_price) == 106.0  # OHLC is the triggering (last) candle's own
 
 
-def test_engine_is_idempotent_for_the_same_candle_reprocessed(session_factory):
+def test_engine_is_idempotent_across_separate_flushes(session_factory):
+    """A reconnect replay (or a next-day restart re-touching an overlapping
+    candle) reprocesses the same candle in a later, separate flush cycle —
+    must not duplicate the row, not just within one buffer/flush."""
     with session_factory() as session:
         session.add(SubscribedSymbol(
             symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
@@ -308,18 +323,45 @@ def test_engine_is_idempotent_for_the_same_candle_reprocessed(session_factory):
     engine = ActivityEngine(session_factory)
     doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
     engine.on_candle_closed(SYMBOL, SEG, doji)
-    engine.on_candle_closed(SYMBOL, SEG, doji)  # reconnect replay of the same candle
+    engine.flush()
+    engine.on_candle_closed(SYMBOL, SEG, doji)  # reprocessed in a later cycle
+    engine.flush()
 
     with session_factory() as session:
         rows = session.query(InstrumentActivity).all()
     assert len(rows) == 1  # not duplicated
 
 
+def test_engine_is_idempotent_within_one_flush(session_factory):
+    """Same guarantee, but both detections land in the same buffer before
+    any flush — the optimistic bulk-insert path must fall back correctly
+    on an intra-batch duplicate, not just a cross-flush one."""
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
+    engine.on_candle_closed(SYMBOL, SEG, doji)
+    engine.on_candle_closed(SYMBOL, SEG, doji)  # same candle, buffered twice before any flush
+    assert engine.buffered_count() == 2
+    engine.flush()
+
+    with session_factory() as session:
+        rows = session.query(InstrumentActivity).all()
+    assert len(rows) == 1  # the intra-batch duplicate was resolved, not both inserted
+
+
 def test_engine_skips_silently_when_symbol_not_registered(session_factory):
     engine = ActivityEngine(session_factory)
     doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
     engine.on_candle_closed(SYMBOL, SEG, doji)  # must not raise, no SubscribedSymbol row exists
+    assert engine.buffered_count() == 0  # nothing to buffer — instrument couldn't be resolved
 
+    engine.flush()
     with session_factory() as session:
         rows = session.query(InstrumentActivity).all()
     assert rows == []
@@ -341,10 +383,41 @@ def test_engine_detects_three_white_soldiers_across_calls(session_factory):
     ]
     for c in candles:
         engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
 
     with session_factory() as session:
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "three_white_soldiers" in activities
+
+
+def test_to_dataframe_reflects_the_buffer(session_factory):
+    pytest.importorskip("pandas")
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
+    engine.on_candle_closed(SYMBOL, SEG, doji)
+
+    df = engine.to_dataframe()
+    assert len(df) == 1
+    assert df.iloc[0]["activity"] == "doji"
+    # dtypes are tuned, not left at pandas' defaults — see to_dataframe's docstring
+    assert str(df["activity"].dtype) == "category"
+    assert str(df["timeframe"].dtype) == "category"
+    assert str(df["intensity"].dtype) == "float32"
+    assert str(df["instrument_id"].dtype) == "int32"
+
+
+def test_to_dataframe_empty_buffer_returns_empty_dataframe(session_factory):
+    pytest.importorskip("pandas")
+    engine = ActivityEngine(session_factory)
+    df = engine.to_dataframe()
+    assert len(df) == 0
 
 
 # --------------------------------------------------------------------- pattern catalog

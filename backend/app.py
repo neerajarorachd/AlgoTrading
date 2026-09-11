@@ -67,7 +67,10 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
 
     if not app.testing:
         from feed.bootstrap import start_feed
-        start_feed(feed_broker, market_feed, session_factory, aggregator, rest_broker=rest_broker)
+        start_feed(
+            feed_broker, market_feed, session_factory, aggregator,
+            rest_broker=rest_broker, activity_engine=activity_engine,
+        )
 
     return app
 
