@@ -17,6 +17,8 @@ export default function MarketWatch() {
   const [openSymbols, setOpenSymbols] = useState([]) // up to MAX_OPEN_CHARTS rows
   const [focusedIndex, setFocusedIndex] = useState(-1)
   const [checkedIds, setCheckedIds] = useState(new Set())
+  const [listCollapsed, setListCollapsed] = useState(false)
+  const [dragIndex, setDragIndex] = useState(null)
   const joinedRooms = useRef(new Set())
 
   const refresh = useCallback(() => {
@@ -135,48 +137,84 @@ export default function MarketWatch() {
     refresh()
   }
 
+  function handleDrop(dropIndex) {
+    setOpenSymbols((prev) => {
+      if (dragIndex === null || dragIndex === dropIndex) return prev
+      const next = [...prev]
+      const [moved] = next.splice(dragIndex, 1)
+      next.splice(dropIndex, 0, moved)
+      return next
+    })
+    setDragIndex(null)
+  }
+
   return (
     <div style={{ fontFamily: 'sans-serif', padding: 16, maxWidth: 1200, margin: '0 auto' }}>
       <style>{`
         .chart-grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          display: flex;
+          flex-wrap: wrap;
           gap: 24px;
         }
+        .chart-card {
+          flex: 1 1 340px;
+          min-width: 0;
+        }
         @media (max-width: 700px) {
-          .chart-grid {
-            grid-template-columns: 1fr;
+          .chart-card {
+            flex-basis: 100%;
           }
         }
       `}</style>
-      <h1>Market Watch</h1>
-      <SymbolRegisterForm onRegistered={refresh} />
-      {checkedIds.size > 0 && (
-        <div style={{ margin: '8px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span>{checkedIds.size} selected</span>
-          <button onClick={handleOpenSelected}>Open selected</button>
-          <button onClick={handleRemoveSelected}>Remove selected</button>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <h1>Market Watch</h1>
+        <button onClick={() => setListCollapsed((c) => !c)}>
+          {listCollapsed ? 'Show list' : 'Hide list'}
+        </button>
+      </div>
+      {!listCollapsed && (
+        <>
+          <SymbolRegisterForm onRegistered={refresh} />
+          {checkedIds.size > 0 && (
+            <div style={{ margin: '8px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>{checkedIds.size} selected</span>
+              <button onClick={handleOpenSelected}>Open selected</button>
+              <button onClick={handleRemoveSelected}>Remove selected</button>
+            </div>
+          )}
+          <SymbolTable
+            symbols={symbols}
+            liveTicks={liveTicks}
+            backfillStatus={backfillStatus}
+            openSymbols={openSymbols}
+            onToggleOpen={handleToggleOpen}
+            onRemove={handleRemove}
+            focusedIndex={focusedIndex}
+            onFocusedIndexChange={setFocusedIndex}
+            checkedIds={checkedIds}
+            onToggleChecked={handleToggleChecked}
+            onToggleCheckAll={handleToggleCheckAll}
+          />
+        </>
       )}
-      <SymbolTable
-        symbols={symbols}
-        liveTicks={liveTicks}
-        backfillStatus={backfillStatus}
-        openSymbols={openSymbols}
-        onToggleOpen={handleToggleOpen}
-        onRemove={handleRemove}
-        focusedIndex={focusedIndex}
-        onFocusedIndexChange={setFocusedIndex}
-        checkedIds={checkedIds}
-        onToggleChecked={handleToggleChecked}
-        onToggleCheckAll={handleToggleCheckAll}
-      />
       {openSymbols.length > 0 && (
         <div className="chart-grid" style={{ marginTop: 24 }}>
-          {openSymbols.map((instrument) => (
-            <div key={instrument.id} style={{ border: '1px solid #eee', padding: 12, minWidth: 0 }}>
+          {openSymbols.map((instrument, index) => (
+            <div
+              key={instrument.id}
+              className="chart-card"
+              draggable
+              onDragStart={() => setDragIndex(index)}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => handleDrop(index)}
+              onDragEnd={() => setDragIndex(null)}
+              style={{
+                border: '1px solid #eee', padding: 12, minWidth: 0,
+                opacity: dragIndex === index ? 0.5 : 1,
+              }}
+            >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                <strong>{instrument.symbol}</strong>
+                <strong style={{ cursor: 'grab' }} title="Drag to reorder">⠿ {instrument.symbol}</strong>
                 <button onClick={() => handleToggleOpen(instrument)} title="Close chart">×</button>
               </div>
               <div style={{ display: 'flex', minWidth: 0 }}>
