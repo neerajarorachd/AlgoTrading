@@ -277,6 +277,10 @@ export default function MarketWatch() {
               style={{
                 border: '1px solid #eee', padding: 12, minWidth: 0,
                 opacity: dragIndex === index ? 0.5 : 1,
+                // first open chart always gets its own full-width row; the
+                // rest wrap 3-per-row below it (flex-basis 100% leaves no
+                // room for a sibling beside it, forcing the wrap)
+                flexBasis: index === 0 ? '100%' : undefined,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
