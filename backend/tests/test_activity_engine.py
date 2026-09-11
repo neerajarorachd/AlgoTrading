@@ -1,0 +1,183 @@
+from datetime import datetime, timezone
+
+from activity_engine import (
+    ActivityEngine,
+    detect_doji,
+    detect_hammer,
+    detect_shooting_star,
+    detect_three_black_crows,
+    detect_three_white_soldiers,
+    seed_pattern_definitions,
+)
+from brokers.models import Candle
+from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
+
+SYMBOL = "RELIANCE"
+SEG = "NSE_EQ"
+
+
+def _candle(ts_minute, open, high, low, close, timeframe="1min"):
+    return Candle(
+        symbol=SYMBOL, timeframe=timeframe,
+        timestamp=datetime(2026, 9, 11, 9, ts_minute, tzinfo=timezone.utc),
+        open=open, high=high, low=low, close=close, volume=100,
+    )
+
+
+# --------------------------------------------------------------------- single-candle detectors
+
+def test_detect_doji_true_for_near_equal_open_close():
+    c = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
+    assert detect_doji(c) is True
+
+
+def test_detect_doji_false_for_a_normal_body():
+    c = _candle(0, open=100.0, high=101.0, low=99.0, close=100.8)
+    assert detect_doji(c) is False
+
+
+def test_detect_doji_false_for_zero_range():
+    c = _candle(0, open=100.0, high=100.0, low=100.0, close=100.0)
+    assert detect_doji(c) is False
+
+
+def test_detect_hammer_true_for_small_top_body_long_lower_wick():
+    # body 100->100.5 (0.5), lower wick down to 97 (3.5, >=2x body), tiny upper wick
+    c = _candle(0, open=100.0, high=100.6, low=97.0, close=100.5)
+    assert detect_hammer(c) is True
+
+
+def test_detect_hammer_false_when_upper_wick_too_long():
+    c = _candle(0, open=100.0, high=103.0, low=97.0, close=100.5)
+    assert detect_hammer(c) is False
+
+
+def test_detect_shooting_star_true_for_small_bottom_body_long_upper_wick():
+    c = _candle(0, open=100.0, high=103.5, low=99.9, close=100.1)
+    assert detect_shooting_star(c) is True
+
+
+def test_detect_shooting_star_false_for_a_hammer_shape():
+    c = _candle(0, open=100.0, high=100.6, low=97.0, close=100.5)
+    assert detect_shooting_star(c) is False
+
+
+# --------------------------------------------------------------------- multi-candle detectors
+
+def test_detect_three_white_soldiers_true_for_a_steady_climb():
+    candles = [
+        _candle(0, open=100.0, high=102.1, low=99.9, close=102.0),
+        _candle(1, open=101.0, high=104.1, low=100.9, close=104.0),
+        _candle(2, open=103.0, high=106.1, low=102.9, close=106.0),
+    ]
+    assert detect_three_white_soldiers(candles) is True
+    assert detect_three_black_crows(candles) is False
+
+
+def test_detect_three_white_soldiers_false_when_not_enough_candles():
+    candles = [_candle(0, 100, 102, 99, 101.9), _candle(1, 101, 104, 100, 103.9)]
+    assert detect_three_white_soldiers(candles) is False
+
+
+def test_detect_three_white_soldiers_false_when_gap_opens_outside_prior_body():
+    candles = [
+        _candle(0, open=100.0, high=102.1, low=99.9, close=102.0),
+        _candle(1, open=103.0, high=105.1, low=102.9, close=105.0),  # opens above prior close — a gap
+        _candle(2, open=104.0, high=107.1, low=103.9, close=107.0),
+    ]
+    assert detect_three_white_soldiers(candles) is False
+
+
+def test_detect_three_black_crows_true_for_a_steady_decline():
+    candles = [
+        _candle(0, open=106.0, high=106.1, low=103.9, close=104.0),
+        _candle(1, open=104.5, high=104.6, low=101.9, close=102.0),
+        _candle(2, open=102.5, high=102.6, low=99.9, close=100.0),
+    ]
+    assert detect_three_black_crows(candles) is True
+    assert detect_three_white_soldiers(candles) is False
+
+
+# --------------------------------------------------------------------- engine persistence
+
+def test_engine_persists_a_detected_pattern(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+        instrument_id = session.query(SubscribedSymbol).filter_by(symbol=SYMBOL).one().id
+
+    engine = ActivityEngine(session_factory)
+    doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
+    engine.on_candle_closed(SYMBOL, SEG, doji)
+
+    with session_factory() as session:
+        rows = session.query(InstrumentActivity).filter_by(instrument_id=instrument_id).all()
+    assert len(rows) == 1
+    assert rows[0].activity == "doji"
+    assert rows[0].activity_type == "candle_pattern"
+    assert rows[0].timeframe == "1min"
+
+
+def test_engine_is_idempotent_for_the_same_candle_reprocessed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
+    engine.on_candle_closed(SYMBOL, SEG, doji)
+    engine.on_candle_closed(SYMBOL, SEG, doji)  # reconnect replay of the same candle
+
+    with session_factory() as session:
+        rows = session.query(InstrumentActivity).all()
+    assert len(rows) == 1  # not duplicated
+
+
+def test_engine_skips_silently_when_symbol_not_registered(session_factory):
+    engine = ActivityEngine(session_factory)
+    doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
+    engine.on_candle_closed(SYMBOL, SEG, doji)  # must not raise, no SubscribedSymbol row exists
+
+    with session_factory() as session:
+        rows = session.query(InstrumentActivity).all()
+    assert rows == []
+
+
+def test_engine_detects_three_white_soldiers_across_calls(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    candles = [
+        _candle(0, open=100.0, high=102.1, low=99.9, close=102.0),
+        _candle(1, open=101.0, high=104.1, low=100.9, close=104.0),
+        _candle(2, open=103.0, high=106.1, low=102.9, close=106.0),
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "three_white_soldiers" in activities
+
+
+# --------------------------------------------------------------------- pattern catalog
+
+def test_seed_pattern_definitions_is_idempotent(session_factory):
+    seed_pattern_definitions(session_factory)
+    seed_pattern_definitions(session_factory)  # must not raise or duplicate
+
+    with session_factory() as session:
+        rows = session.query(PatternDefinition).all()
+    codes = {row.code for row in rows}
+    assert {"doji", "hammer", "shooting_star", "three_white_soldiers", "three_black_crows"} <= codes

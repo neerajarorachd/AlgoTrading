@@ -66,6 +66,66 @@ class CandleToday(Base):
     )
 
 
+class InstrumentActivity(Base):
+    """One detected candlestick/indicator event for one instrument.
+
+    Keyed by instrument_id (SubscribedSymbol.id), not the raw symbol string —
+    SubscribedSymbol already IS this project's broker-instrument mapping
+    (its own id alongside the broker's security_id), so activities reference
+    that id rather than duplicating a separate instrument table for a system
+    with exactly one broker wired up today. If/when a second broker adapter
+    is actually built, SubscribedSymbol is the natural place to grow a
+    broker-agnostic instrument identity — this table wouldn't need to change.
+
+    activity_type is the broad category (e.g. "candle_pattern",
+    "ma_crossover", "macd_crossover" — categories grow over time); activity
+    is the specific name within that category (e.g. "doji", "hammer",
+    "three_white_soldiers"). The unique constraint makes detection idempotent
+    — re-processing the same candle (a reconnect replay, a backfill re-run)
+    never duplicates the same finding.
+    """
+
+    __tablename__ = "instrument_activity"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    activity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    activity: Mapped[str] = mapped_column(String(64), nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "timeframe", "ts", "activity", name="uq_instrument_activity",
+        ),
+        Index("ix_instrument_activity_instrument_ts", "instrument_id", "ts"),
+    )
+
+
+class PatternDefinition(Base):
+    """Catalog of known candle formations — data-driven metadata sitting on
+    top of the actual detection logic (backend/activity_engine.py), not a
+    replacement for it. The condition itself (the OHLC geometry) stays in
+    code: expressing arbitrary shape rules as DB rows would need a small
+    rule-evaluation engine, which is overkill for today's fixed, small
+    pattern set. This table exists so the known-pattern list — code, kind,
+    a human description of the condition — is queryable without reading
+    Python, and so a future UI can show "why did this fire" from `description`
+    rather than the detector's source.
+
+    `code` matches the keys used in activity_engine.py's SINGLE_CANDLE_PATTERNS
+    / MULTI_CANDLE_PATTERNS dicts and InstrumentActivity.activity values.
+    """
+
+    __tablename__ = "pattern_definitions"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # "single_candle" | "multi_candle" | "indicator"
+    description: Mapped[str] = mapped_column(String(256), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class BrokerAccount(Base):
     """Mirror of the Trading project's own BrokerAccount table (SQLite, on the VM).
 

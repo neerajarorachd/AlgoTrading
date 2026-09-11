@@ -7,6 +7,7 @@ from typing import Optional
 from flask import Flask, g
 from flask_cors import CORS
 
+from activity_engine import ActivityEngine, seed_pattern_definitions
 from config import DHAN_TOKEN_TYPE_FEED, DHAN_TOKEN_TYPE_REST, cors_origins, load_dhan_tokens
 from db.models import Base
 from db.session import build_engine, build_session_factory
@@ -36,7 +37,9 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
 
     instrument_master = instrument_master or InstrumentMaster()
 
-    aggregator = CandleAggregator(on_candle_closed=_make_on_candle_closed(session_factory))
+    seed_pattern_definitions(session_factory)
+    activity_engine = ActivityEngine(session_factory)
+    aggregator = CandleAggregator(on_candle_closed=_make_on_candle_closed(session_factory, activity_engine))
     market_feed = MarketFeed(
         feed_broker,
         on_tick=ws_live.broadcast_tick,
@@ -51,6 +54,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.extensions["market_feed"] = market_feed
     app.extensions["candle_aggregator"] = aggregator
     app.extensions["instrument_master"] = instrument_master
+    app.extensions["activity_engine"] = activity_engine
 
     _register_db_session_hooks(app, session_factory)
 
@@ -93,9 +97,10 @@ def _build_dhan_brokers(session_factory):
     return feed_broker, rest_broker
 
 
-def _make_on_candle_closed(session_factory):
+def _make_on_candle_closed(session_factory, activity_engine: ActivityEngine):
     def _on_candle_closed(symbol: str, exchange_segment: str, candle) -> None:
         persist_candle(session_factory, symbol, exchange_segment, candle)
+        activity_engine.on_candle_closed(symbol, exchange_segment, candle)
         ws_live.broadcast_candle_closed(symbol, exchange_segment, candle)
     return _on_candle_closed
 
