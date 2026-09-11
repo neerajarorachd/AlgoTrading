@@ -19,6 +19,7 @@ export default function MarketWatch() {
   const [checkedIds, setCheckedIds] = useState(new Set())
   const [listCollapsed, setListCollapsed] = useState(false)
   const [dragIndex, setDragIndex] = useState(null)
+  const [multiOpenMode, setMultiOpenMode] = useState(true)
   const joinedRooms = useRef(new Set())
 
   const refresh = useCallback(() => {
@@ -79,12 +80,26 @@ export default function MarketWatch() {
   }, [backfillStatus])
 
   function handleToggleOpen(row) {
+    if (!multiOpenMode) {
+      // single-graph mode: clicking any row always switches the one open chart
+      setOpenSymbols((prev) => (prev.length === 1 && prev[0].id === row.id ? prev : [row]))
+      return
+    }
     setOpenSymbols((prev) => {
       const isOpen = prev.some((s) => s.id === row.id)
       if (isOpen) return prev.filter((s) => s.id !== row.id)
       if (prev.length >= MAX_OPEN_CHARTS) return prev // silently ignore — row is shown as at-capacity
       return [...prev, row]
     })
+  }
+
+  function handleMultiOpenModeChange(e) {
+    const checked = e.target.checked
+    setMultiOpenMode(checked)
+    if (!checked) {
+      // collapsing down to single-graph mode: keep only the first open chart
+      setOpenSymbols((prev) => (prev.length > 1 ? [prev[0]] : prev))
+    }
   }
 
   async function handleRemove(id) {
@@ -198,7 +213,19 @@ export default function MarketWatch() {
         </>
       )}
       {openSymbols.length > 0 && (
-        <div className="chart-grid" style={{ marginTop: 24 }}>
+        <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label style={{ cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={multiOpenMode}
+              onChange={handleMultiOpenModeChange}
+            />{' '}
+            Multiple charts
+          </label>
+        </div>
+      )}
+      {openSymbols.length > 0 && (
+        <div className="chart-grid" style={{ marginTop: 8 }}>
           {openSymbols.map((instrument, index) => (
             <div
               key={instrument.id}
