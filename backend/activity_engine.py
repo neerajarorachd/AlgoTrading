@@ -40,6 +40,11 @@ _BB_STDDEV_MULT = 2.0
 # How many recent width readings a squeeze/widening call compares the
 # current one against. Needs a full window before either can fire.
 _BB_WIDTH_LOOKBACK = 20
+# Squeeze/widening fire when the current width sits within this fraction of
+# the lookback window's own (max - min) range from its low/high — i.e. in
+# the bottom or top quartile of its own recent range, not necessarily the
+# single most extreme reading.
+_BB_EXTREME_BAND = 0.25
 
 # VWAP resets every trading day (cumulative from session open). "Divergence"
 # and "gap fill" are read off (close - vwap)/vwap over this many recent
@@ -366,40 +371,58 @@ def compute_bollinger(closes: Sequence[float], stddev_mult: float = _BB_STDDEV_M
 
 
 def detect_bb_squeeze(widths: Sequence[float]) -> bool:
-    """True when the current (last) width is the tightest reading in the
-    lookback window and meaningfully tighter than the window's own average —
-    volatility compression, the classic setup ahead of a breakout."""
+    """True when the current (last) width sits within the bottom
+    _BB_EXTREME_BAND fraction of the lookback window's own (max - min)
+    range — near the floor of its recent range, not necessarily the single
+    lowest reading. Volatility compression, the classic setup ahead of a
+    breakout."""
     if len(widths) < _BB_WIDTH_LOOKBACK:
         return False
     current = widths[-1]
-    avg = statistics.fmean(widths)
-    return avg > 0 and current <= min(widths) and current < 0.7 * avg
+    lo, hi = min(widths), max(widths)
+    span = hi - lo
+    if span <= 0:
+        return False
+    return (current - lo) <= _BB_EXTREME_BAND * span
 
 
 def detect_bb_widening(widths: Sequence[float]) -> bool:
-    """Squeeze's mirror: current width is a new high in the lookback window
-    and meaningfully wider than the window's own average — volatility
-    expansion, typically during a strong directional move."""
+    """Squeeze's mirror: current width sits within the top _BB_EXTREME_BAND
+    fraction of the window's range — near the ceiling of its recent range.
+    Volatility expansion, typically during a strong directional move."""
     if len(widths) < _BB_WIDTH_LOOKBACK:
         return False
     current = widths[-1]
-    avg = statistics.fmean(widths)
-    return avg > 0 and current >= max(widths) and current > 1.3 * avg
+    lo, hi = min(widths), max(widths)
+    span = hi - lo
+    if span <= 0:
+        return False
+    return (hi - current) <= _BB_EXTREME_BAND * span
 
 
 def bb_squeeze_intensity(widths: Sequence[float]) -> float:
-    """How tight the squeeze is relative to the window's own average width —
-    higher means a more pronounced compression."""
+    """_BB_EXTREME_BAND divided by how far (as a fraction of the window's
+    range) the current width sits above the floor — 1.0 right at the
+    qualifying edge, growing toward infinity as the width approaches the
+    exact floor of its recent range."""
     current = widths[-1]
-    avg = statistics.fmean(widths)
-    return avg / current if current > 0 else float("inf")
+    lo, hi = min(widths), max(widths)
+    span = hi - lo
+    if span <= 0:
+        return float("inf")
+    frac = (current - lo) / span
+    return _BB_EXTREME_BAND / frac if frac > 0 else float("inf")
 
 
 def bb_widening_intensity(widths: Sequence[float]) -> float:
-    """Widening's mirror — current width relative to the window's average."""
+    """Squeeze intensity's mirror — distance below the window's ceiling."""
     current = widths[-1]
-    avg = statistics.fmean(widths)
-    return current / avg if avg > 0 else float("inf")
+    lo, hi = min(widths), max(widths)
+    span = hi - lo
+    if span <= 0:
+        return float("inf")
+    frac = (hi - current) / span
+    return _BB_EXTREME_BAND / frac if frac > 0 else float("inf")
 
 
 def detect_price_vwap_divergence(gaps: Sequence[float]) -> bool:
@@ -472,8 +495,8 @@ PATTERN_CATALOG = [
     ("tweezer_top", "multi_candle", "A bullish then a bearish candle with matching highs"),
     ("three_white_soldiers", "multi_candle", "Three consecutive bullish candles, each closing higher, opening within the prior body"),
     ("three_black_crows", "multi_candle", "Three consecutive bearish candles, each closing lower, opening within the prior body"),
-    ("bb_squeeze", "price_action", "Bollinger Band width contracts to a new low across the lookback window — volatility compression, often precedes a breakout"),
-    ("bb_widening", "price_action", "Bollinger Band width expands to a new high across the lookback window — volatility expansion, typically during a strong directional move"),
+    ("bb_squeeze", "price_action", "Bollinger Band width sits within 25% of its lookback window's low — volatility compression, often precedes a breakout"),
+    ("bb_widening", "price_action", "Bollinger Band width sits within 25% of its lookback window's high — volatility expansion, typically during a strong directional move"),
     ("price_vwap_divergence", "price_action", "Price stretches to a new extreme distance from VWAP across the lookback window, past a minimum threshold"),
     ("vwap_gap_fill", "price_action", "Price reverts back toward VWAP after stretching away from it, closing most of the prior gap"),
 ]

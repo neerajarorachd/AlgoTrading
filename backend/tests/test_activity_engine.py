@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from activity_engine import (
+    _BB_EXTREME_BAND,
     ActivityEngine,
     bb_squeeze_intensity,
     bb_widening_intensity,
@@ -282,14 +283,41 @@ def test_detect_bb_squeeze_false_before_full_lookback():
     assert detect_bb_squeeze([0.01] * 19) is False
 
 
-def test_detect_bb_squeeze_false_when_not_meaningfully_tighter():
-    widths = [0.05] * 19 + [0.048]  # a new low, but barely — not a real squeeze
+def test_detect_bb_squeeze_true_just_inside_the_25pct_band():
+    # lo=0.0, hi=0.10, span=0.10 — 0.024 sits at 24% of the span above lo
+    widths = [0.0] * 10 + [0.10] * 9 + [0.024]
+    assert detect_bb_squeeze(widths) is True
+
+
+def test_detect_bb_squeeze_false_just_outside_the_25pct_band():
+    widths = [0.0] * 10 + [0.10] * 9 + [0.026]
     assert detect_bb_squeeze(widths) is False
+
+
+def test_detect_bb_widening_true_just_inside_the_25pct_band():
+    # lo=0.0, hi=0.10, span=0.10 — 0.076 sits 24% of the span below hi
+    widths = [0.10] * 10 + [0.0] * 9 + [0.076]
+    assert detect_bb_widening(widths) is True
+
+
+def test_detect_bb_widening_false_just_outside_the_25pct_band():
+    widths = [0.10] * 10 + [0.0] * 9 + [0.074]
+    assert detect_bb_widening(widths) is False
+
+
+def test_detect_bb_squeeze_and_widening_false_when_range_is_flat():
+    assert detect_bb_squeeze([0.05] * 20) is False
+    assert detect_bb_widening([0.05] * 20) is False
 
 
 def test_bb_squeeze_and_widening_intensity_exceed_one():
     assert bb_squeeze_intensity([0.05] * 19 + [0.02]) > 1.0
     assert bb_widening_intensity([0.02] * 19 + [0.05]) > 1.0
+
+
+def test_bb_squeeze_intensity_near_the_boundary_is_close_to_one():
+    widths = [0.0] * 10 + [0.10] * 9 + [0.024]
+    assert bb_squeeze_intensity(widths) == pytest.approx(_BB_EXTREME_BAND / 0.24)
 
 
 # --------------------------------------------------------------------- VWAP divergence / gap-fill (pure)
