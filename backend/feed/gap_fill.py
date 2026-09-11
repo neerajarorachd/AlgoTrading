@@ -25,10 +25,26 @@ MARKET_CLOSE_MINUTE_UTC = 0
 
 _DEFAULT_SCAN_INTERVAL_SECONDS = 300
 
+# In-memory "how far have we already checked" watermark, per (symbol,
+# exchange_segment) — process-lifetime only, deliberately not persisted (see
+# backfill_missing_candles docstring). Cleared implicitly by a process
+# restart, which is correct: a fresh process should re-derive its starting
+# point from real candle data, same as the original one-shot backfill.
+_last_scanned_through: dict[tuple[str, str], datetime] = {}
+
 
 def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator) -> None:
     """Fetches whatever 1-min candles are missing between the last one we have and
     now, and feeds them through the aggregator so 3-/5-min rollups backfill too.
+
+    The starting point is the later of: the last actual candle we have for
+    *today* (_last_known_ts), or the last point a prior call already checked
+    through (_last_scanned_through) — whether or not that call found any
+    candles. Without the latter, an illiquid symbol with a genuinely empty
+    stretch (or any other reason the broker returns no candles for a range)
+    would never advance _last_known_ts, so the periodic scanner would re-ask
+    the broker for the exact same already-checked range every cycle forever.
+    Falls back to today's market open when neither is known yet.
 
     Runs synchronously — callers use spawn_backfill() to run this on a background
     thread instead, since a historical-data REST call shouldn't block a
@@ -39,7 +55,13 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
     discipline as hydration and the broker's own rate-limit handling.
     """
     try:
-        from_ts = _last_known_ts(session_factory, symbol, exchange_segment) or _todays_market_open()
+        key = (symbol, exchange_segment)
+        market_open = _todays_market_open()
+        cached = _last_scanned_through.get(key)
+        if cached is not None and cached < market_open:
+            cached = None  # stale watermark left over from a previous day
+        candidates = [c for c in (_last_known_ts(session_factory, symbol, exchange_segment), cached) if c is not None]
+        from_ts = max(candidates) if candidates else market_open
         to_ts = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         if from_ts >= to_ts:
             return  # already caught up — no message needed, avoids noisy "up to date" spam
@@ -51,6 +73,7 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
         candles = rest_broker.get_historical_data(symbol, security_id, exchange_segment, "1min", from_ts, to_ts)
         for candle in candles:
             aggregator.ingest_historical_1min(symbol, exchange_segment, candle)
+        _last_scanned_through[key] = to_ts  # mark this range checked, even if candles came back empty
         ws_live.broadcast_backfill_status(symbol, exchange_segment, "done", f"Backfilled {len(candles)} candles")
     except Exception as e:
         ws_live.broadcast_backfill_status(symbol, exchange_segment, "failed", str(e))
@@ -65,6 +88,15 @@ def spawn_backfill(symbol, exchange_segment, security_id, rest_broker, session_f
 
 
 def _last_known_ts(session_factory, symbol, exchange_segment):
+    """Latest 1-min candle timestamp for *today* only — candles_today has no EOD
+    archiver yet (deferred, see CLAUDE.md), so a prior day's rows can still be
+    sitting in the table on a fresh trading day. A stale yesterday-close
+    timestamp must not be mistaken for "already caught up today," or a fresh
+    day would never correctly start its backfill from this morning's market
+    open. The date-cutoff comparison is done in Python (not pushed into the SQL
+    filter) to sidestep any naive/aware datetime mismatch between what got
+    stored and what gets compared — this table is small, one extra row read
+    costs nothing."""
     with session_scope(session_factory) as session:
         latest = (
             session.query(CandleToday.ts)
@@ -75,7 +107,8 @@ def _last_known_ts(session_factory, symbol, exchange_segment):
         if latest is None:
             return None
         ts = latest[0]
-        return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+        ts = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+        return ts if ts >= _todays_market_open() else None
 
 
 def _todays_market_open() -> datetime:

@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
+import feed.gap_fill as gap_fill
 from brokers.models import Candle
 from db.models import CandleToday, SubscribedSymbol
 from feed.candle_aggregator import CandleAggregator
@@ -8,6 +11,16 @@ from feed.gap_fill import _todays_market_open, backfill_missing_candles, scan_fo
 SYMBOL = "RELIANCE"
 SEG = "NSE_EQ"
 SECURITY_ID = "1333"
+
+
+@pytest.fixture(autouse=True)
+def _clear_scan_watermark_cache():
+    """_last_scanned_through is module-level, in-memory, process-lifetime state
+    (see backfill_missing_candles) — reset it around every test so one test's
+    calls can't leak into another's expectations."""
+    gap_fill._last_scanned_through.clear()
+    yield
+    gap_fill._last_scanned_through.clear()
 
 
 class FakeRestBroker:
@@ -155,3 +168,65 @@ def test_scan_for_gaps_skips_entirely_outside_market_hours(session_factory, monk
 
     assert rest_broker.calls == []
     assert spy.events == []
+
+
+def test_backfill_ignores_a_stale_prior_day_candle_and_starts_from_todays_open(session_factory, monkeypatch):
+    # candles_today has no EOD archiver yet — a previous day's last candle can
+    # still be sitting in the table. It must not be mistaken for "today's last
+    # known candle," or the backfill range would be wrong (or missed entirely).
+    spy = BroadcastSpy(monkeypatch)
+    yesterdays_close = _todays_market_open() - timedelta(hours=20)
+    with session_factory() as session:
+        session.add(CandleToday(
+            symbol=SYMBOL, exchange_segment=SEG, timeframe="1min", ts=yesterdays_close,
+            open_price=100, high_price=101, low_price=99, close_price=100.5, volume=10,
+        ))
+        session.commit()
+
+    rest_broker = FakeRestBroker([])
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert len(rest_broker.calls) == 1
+    from_date = rest_broker.calls[0][4]
+    assert from_date == _todays_market_open()  # not yesterdays_close
+    assert [e[1] for e in spy.events] == ["started", "done"]
+
+
+def test_backfill_does_not_reask_for_an_already_checked_empty_range(session_factory, monkeypatch):
+    # An illiquid symbol (or any broker response with no candles for a range)
+    # must not be re-fetched every cycle just because no CandleToday rows ever
+    # got written for it — the watermark should advance regardless. Seed the
+    # watermark directly (rather than relying on two real calls landing in
+    # different wall-clock minutes, which the minute-truncated `now()` can't
+    # guarantee inside a single fast test) to keep this deterministic.
+    spy = BroadcastSpy(monkeypatch)
+    already_checked_through = _todays_market_open() + timedelta(minutes=10)
+    gap_fill._last_scanned_through[(SYMBOL, SEG)] = already_checked_through
+    rest_broker = FakeRestBroker([])  # broker never has anything to return
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert len(rest_broker.calls) == 1
+    from_date = rest_broker.calls[0][4]
+    assert from_date == already_checked_through  # not market open again
+    assert [e[1] for e in spy.events] == ["started", "done"]
+    # the watermark itself must have advanced past the checked point
+    assert gap_fill._last_scanned_through[(SYMBOL, SEG)] > already_checked_through
+
+
+def test_backfill_discards_a_stale_watermark_from_a_previous_day(session_factory, monkeypatch):
+    spy = BroadcastSpy(monkeypatch)
+    stale_watermark = _todays_market_open() - timedelta(hours=20)  # yesterday
+    gap_fill._last_scanned_through[(SYMBOL, SEG)] = stale_watermark
+    rest_broker = FakeRestBroker([])
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert len(rest_broker.calls) == 1
+    from_date = rest_broker.calls[0][4]
+    assert from_date == _todays_market_open()  # not the stale watermark
+    assert [e[1] for e in spy.events] == ["started", "done"]
