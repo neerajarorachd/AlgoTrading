@@ -15,12 +15,14 @@ SECURITY_ID = "1333"
 
 @pytest.fixture(autouse=True)
 def _clear_scan_watermark_cache():
-    """_last_scanned_through is module-level, in-memory, process-lifetime state
-    (see backfill_missing_candles) — reset it around every test so one test's
-    calls can't leak into another's expectations."""
+    """_last_scanned_through/_in_progress are module-level, in-memory,
+    process-lifetime state (see backfill_missing_candles) — reset them around
+    every test so one test's calls can't leak into another's expectations."""
     gap_fill._last_scanned_through.clear()
+    gap_fill._in_progress.clear()
     yield
     gap_fill._last_scanned_through.clear()
+    gap_fill._in_progress.clear()
 
 
 class FakeRestBroker:
@@ -59,6 +61,31 @@ def test_backfill_fetches_from_market_open_when_no_existing_candles(session_fact
     assert aggregator.get_last_closed_1min(SYMBOL, SEG).close == 100.5
 
 
+def test_backfill_persists_1min_and_rollup_candles_via_one_bulk_write(session_factory, monkeypatch):
+    # three consecutive 1-min candles spanning one 3-min boundary — closing the
+    # third should also emit (and persist) one 3-min rollup candle
+    spy = BroadcastSpy(monkeypatch)
+    base = _todays_market_open()
+    candles = [
+        Candle(symbol=SYMBOL, timeframe="1min", timestamp=base + timedelta(minutes=i),
+               open=100 + i, high=101 + i, low=99 + i, close=100.5 + i, volume=10)
+        for i in range(4)  # the 4th candle's arrival closes the first 3-min bucket
+    ]
+    rest_broker = FakeRestBroker(candles)
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert [e[1] for e in spy.events] == ["started", "done"]
+    with session_factory() as session:
+        one_min_rows = session.query(CandleToday).filter_by(symbol=SYMBOL, timeframe="1min").all()
+        three_min_rows = session.query(CandleToday).filter_by(symbol=SYMBOL, timeframe="3min").all()
+    assert len(one_min_rows) == 4
+    assert len(three_min_rows) == 1
+    assert float(three_min_rows[0].open_price) == 100.0
+    assert float(three_min_rows[0].close_price) == 102.5  # close of the 3rd (last) member candle
+
+
 def test_backfill_fetches_from_last_known_candle_not_market_open(session_factory, monkeypatch):
     spy = BroadcastSpy(monkeypatch)
     last_ts = _todays_market_open() + timedelta(minutes=30)
@@ -77,6 +104,32 @@ def test_backfill_fetches_from_last_known_candle_not_market_open(session_factory
     assert len(rest_broker.calls) == 1
     from_date = rest_broker.calls[0][4]
     assert from_date == last_ts.replace(tzinfo=timezone.utc)
+    assert [e[1] for e in spy.events] == ["started", "done"]
+
+
+def test_backfill_skips_when_already_in_progress_elsewhere(session_factory, monkeypatch):
+    # simulates the periodic scanner's tick landing on a symbol whose startup
+    # backfill (or another scan cycle) hasn't finished yet — the second caller
+    # must not duplicate the work against an already-throttled connection
+    spy = BroadcastSpy(monkeypatch)
+    gap_fill._in_progress.add((SYMBOL, SEG))
+    rest_broker = FakeRestBroker([])
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert rest_broker.calls == []
+    assert spy.events == []
+
+
+def test_backfill_clears_in_progress_flag_after_completing(session_factory, monkeypatch):
+    spy = BroadcastSpy(monkeypatch)
+    rest_broker = FakeRestBroker([])
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert (SYMBOL, SEG) not in gap_fill._in_progress
     assert [e[1] for e in spy.events] == ["started", "done"]
 
 

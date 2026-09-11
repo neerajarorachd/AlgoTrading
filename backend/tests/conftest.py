@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 
 from app import create_app
 from brokers.models import BrokerAPIError, Quote
@@ -12,6 +12,21 @@ from db.session import build_session_factory
 @pytest.fixture
 def db_engine():
     engine = create_engine("sqlite:///:memory:")
+
+    # pysqlite's own implicit transaction handling fights SQLAlchemy's
+    # SAVEPOINT support (session.begin_nested(), used by
+    # feed/candle_persistence.py to isolate one candle's insert-conflict from
+    # the rest of a batch) unless disabled like this — the standard
+    # documented workaround. Production never runs on SQLite (real DB is SQL
+    # Server, which has no such quirk), so this only matters for tests.
+    @event.listens_for(engine, "connect")
+    def _do_connect(dbapi_connection, connection_record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def _do_begin(conn):
+        conn.exec_driver_sql("BEGIN")
+
     Base.metadata.create_all(engine)
     yield engine
     engine.dispose()
@@ -94,7 +109,7 @@ def app(db_engine, session_factory, fake_broker, monkeypatch):
     # thread against teardown; feed/test_gap_fill.py tests the real function
     # directly and unpatched.
     monkeypatch.setattr("api.routes_symbols.spawn_backfill", lambda *a, **kw: None)
-    monkeypatch.setattr("feed.bootstrap.spawn_backfill", lambda *a, **kw: None)
+    monkeypatch.setattr("feed.bootstrap._backfill_all", lambda *a, **kw: None)
 
     flask_app = create_app(
         broker=fake_broker, engine=db_engine, session_factory=session_factory,

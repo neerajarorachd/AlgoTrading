@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
 from db.session import session_scope
-from feed.gap_fill import spawn_backfill, start_gap_scanner
+from feed.gap_fill import backfill_missing_candles, start_gap_scanner
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,14 @@ def _hydrate(broker, market_feed, session_factory, aggregator=None) -> None:
 
     `aggregator` is optional so existing tests that only care about the
     subscribe behavior don't need to supply one — when given, each
-    successfully-subscribed symbol also gets its startup gap backfilled.
+    successfully-subscribed symbol also gets its startup gap backfilled,
+    sequentially (see _backfill_all below), not via spawn_backfill — a
+    dozen-plus registered symbols each opening their own DB session on their
+    own background thread, all at once, was starving the connection pool
+    (the still-open hydration session on top of N concurrent backfill
+    sessions) and silently failing most of them.
     """
+    backfill_targets = []
     with session_scope(session_factory) as session:
         rows = session.query(SubscribedSymbol).filter_by(active=True).all()
         for row in rows:
@@ -105,12 +111,25 @@ def _hydrate(broker, market_feed, session_factory, aggregator=None) -> None:
                     "open": float(quote.open),
                     "ltp": float(quote.ltp),
                 })
-                if aggregator is not None:
-                    spawn_backfill(row.symbol, row.exchange_segment, row.security_id, broker, session_factory, aggregator)
+                backfill_targets.append((row.symbol, row.exchange_segment, row.security_id))
             except (BrokerAPIError, BrokerConnectionError) as exc:
                 logger.warning("Hydration: skipping %s (%s) — %s", row.symbol, row.exchange_segment, exc)
             except Exception:
                 logger.exception("Hydration: unexpected error subscribing %s (%s)", row.symbol, row.exchange_segment)
+
+    if aggregator is not None and backfill_targets:
+        _backfill_all(backfill_targets, broker, session_factory, aggregator)
+
+
+def _backfill_all(targets, broker, session_factory, aggregator) -> None:
+    """Runs every symbol's startup backfill sequentially on one background
+    thread, instead of spawn_backfill's one-thread-per-symbol — see _hydrate's
+    docstring for why concurrent was actually causing failures, not just risk."""
+    def _run():
+        for symbol, exchange_segment, security_id in targets:
+            backfill_missing_candles(symbol, exchange_segment, security_id, broker, session_factory, aggregator)
+
+    threading.Thread(target=_run, daemon=True, name="hydration-backfill").start()
 
 
 def _schedule_daily_flush(aggregator, hour_utc: int, minute_utc: int) -> None:

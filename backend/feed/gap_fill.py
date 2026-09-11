@@ -6,6 +6,7 @@ from datetime import datetime, time, timezone
 
 from db.models import CandleToday, SubscribedSymbol
 from db.session import session_scope
+from feed.candle_persistence import persist_candles_bulk
 
 import api.ws_live as ws_live
 
@@ -32,6 +33,15 @@ _DEFAULT_SCAN_INTERVAL_SECONDS = 300
 # point from real candle data, same as the original one-shot backfill.
 _last_scanned_through: dict[tuple[str, str], datetime] = {}
 
+# Guards against two callers backfilling the same symbol at once — e.g. the
+# periodic scanner's tick landing while hydration's own startup backfill is
+# still working through a dozen-plus symbols. Both calls are individually
+# safe (idempotent, rate-limit-throttled), but running them concurrently for
+# the same symbol just doubles the load on an already-throttled connection
+# for no benefit — the second caller should skip, not queue up behind it.
+_in_progress: set[tuple[str, str]] = set()
+_in_progress_lock = threading.Lock()
+
 
 def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator) -> None:
     """Fetches whatever 1-min candles are missing between the last one we have and
@@ -54,8 +64,14 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
     surface as an unhandled thread exception, matching the same "never crash"
     discipline as hydration and the broker's own rate-limit handling.
     """
+    key = (symbol, exchange_segment)
+    with _in_progress_lock:
+        if key in _in_progress:
+            logger.info("Backfill for %s (%s) already in progress elsewhere — skipping", symbol, exchange_segment)
+            return
+        _in_progress.add(key)
+
     try:
-        key = (symbol, exchange_segment)
         market_open = _todays_market_open()
         cached = _last_scanned_through.get(key)
         if cached is not None and cached < market_open:
@@ -71,12 +87,25 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
             f"Fetching missing candles since {from_ts.isoformat().replace('+00:00', 'Z')}",
         )
         candles = rest_broker.get_historical_data(symbol, security_id, exchange_segment, "1min", from_ts, to_ts)
+        closed = []  # collect (symbol, exchange_segment, Candle) — 1-min plus any
+        # 3-/5-min rollups they trigger — instead of letting each one open its own
+        # DB round-trip; a few hundred historical candles at one-round-trip-apiece
+        # over a networked DB was the actual bottleneck making backfill slow.
+        def _collect(sym, seg, c):
+            closed.append((sym, seg, c))
+            ws_live.broadcast_candle_closed(sym, seg, c)
+
         for candle in candles:
-            aggregator.ingest_historical_1min(symbol, exchange_segment, candle)
+            aggregator.ingest_historical_1min(symbol, exchange_segment, candle, on_candle_closed=_collect)
+        persist_candles_bulk(session_factory, closed)
         _last_scanned_through[key] = to_ts  # mark this range checked, even if candles came back empty
         ws_live.broadcast_backfill_status(symbol, exchange_segment, "done", f"Backfilled {len(candles)} candles")
     except Exception as e:
+        logger.warning("Backfill failed for %s (%s): %s", symbol, exchange_segment, e)
         ws_live.broadcast_backfill_status(symbol, exchange_segment, "failed", str(e))
+    finally:
+        with _in_progress_lock:
+            _in_progress.discard(key)
 
 
 def spawn_backfill(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator) -> None:

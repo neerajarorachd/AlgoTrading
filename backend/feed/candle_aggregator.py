@@ -54,13 +54,22 @@ class CandleAggregator:
         with self._lock:
             return self._last_closed_1min.get((symbol, exchange_segment))
 
-    def ingest_historical_1min(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
+    def ingest_historical_1min(
+        self, symbol: str, exchange_segment: str, candle: Candle,
+        on_candle_closed: Optional[Callable[[str, str, Candle], None]] = None,
+    ) -> None:
         """Feeds an already-complete 1-min candle from historical backfill through
         the same finalize/rollup path a live tick-driven candle takes, so 3-/5-min
         rollups get backfilled correctly too. Candles must arrive in chronological
-        order (Dhan's historical API already returns them that way)."""
+        order (Dhan's historical API already returns them that way).
+
+        `on_candle_closed`, if given, overrides the instance's default callback
+        for just this call — lets a bulk backfill collect every closed candle
+        (1-min plus any 3-/5-min rollups it triggers) into a list instead of
+        persisting/broadcasting one at a time, then persist them all in one DB
+        round-trip. Live ticks (on_tick, below) never pass this — unchanged."""
         with self._lock:
-            self._finalize_candle(symbol, exchange_segment, candle)
+            self._finalize_candle(symbol, exchange_segment, candle, on_candle_closed=on_candle_closed)
 
     def on_tick(self, symbol: str, exchange_segment: str, ltp: float, volume: int, ts: datetime) -> None:
         with self._lock:
@@ -113,25 +122,35 @@ class CandleAggregator:
         )
         self._finalize_candle(symbol, exchange_segment, candle)
 
-    def _finalize_candle(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
+    def _finalize_candle(
+        self, symbol: str, exchange_segment: str, candle: Candle,
+        on_candle_closed: Optional[Callable[[str, str, Candle], None]] = None,
+    ) -> None:
+        callback = on_candle_closed or self.on_candle_closed
         self._last_closed_1min[(symbol, exchange_segment)] = candle
-        self.on_candle_closed(symbol, exchange_segment, candle)
-        self._roll_up(symbol, exchange_segment, "3min", candle)
-        self._roll_up(symbol, exchange_segment, "5min", candle)
+        callback(symbol, exchange_segment, candle)
+        self._roll_up(symbol, exchange_segment, "3min", candle, on_candle_closed=callback)
+        self._roll_up(symbol, exchange_segment, "5min", candle, on_candle_closed=callback)
 
-    def _roll_up(self, symbol: str, exchange_segment: str, timeframe: str, one_min: Candle) -> None:
+    def _roll_up(
+        self, symbol: str, exchange_segment: str, timeframe: str, one_min: Candle,
+        on_candle_closed: Optional[Callable[[str, str, Candle], None]] = None,
+    ) -> None:
         n = _ROLLUP_MINUTES[timeframe]
         bucket_start = one_min.timestamp - timedelta(minutes=one_min.timestamp.minute % n)
         key: Key = (symbol, exchange_segment, timeframe)
         current_bucket = self._rollup_bucket_start.get(key)
 
         if current_bucket is not None and bucket_start != current_bucket:
-            self._emit_rollup(symbol, exchange_segment, timeframe, key)
+            self._emit_rollup(symbol, exchange_segment, timeframe, key, on_candle_closed=on_candle_closed)
 
         self._rollup_bucket_start[key] = bucket_start
         self._rollup_buffers[key].append(one_min)
 
-    def _emit_rollup(self, symbol: str, exchange_segment: str, timeframe: str, key: Key) -> None:
+    def _emit_rollup(
+        self, symbol: str, exchange_segment: str, timeframe: str, key: Key,
+        on_candle_closed: Optional[Callable[[str, str, Candle], None]] = None,
+    ) -> None:
         members = self._rollup_buffers.pop(key, [])
         if not members:
             return
@@ -141,4 +160,5 @@ class CandleAggregator:
             low=min(c.low for c in members), close=members[-1].close,
             volume=sum(c.volume for c in members),
         )
-        self.on_candle_closed(symbol, exchange_segment, rolled)
+        callback = on_candle_closed or self.on_candle_closed
+        callback(symbol, exchange_segment, rolled)
