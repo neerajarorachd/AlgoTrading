@@ -29,7 +29,7 @@ export default function MarketWatch() {
   const [listCollapsed, setListCollapsed] = useState(false)
   const [dragIndex, setDragIndex] = useState(null)
   const [multiOpenMode, setMultiOpenMode] = useState(true)
-  const [depthCollapsed, setDepthCollapsed] = useState(true)
+  const [depthCollapsedById, setDepthCollapsedById] = useState({}) // instrument id -> collapsed
   const [fullscreenId, setFullscreenId] = useState(null)
   const [fullscreenOrientation, setFullscreenOrientation] = useState('horizontal')
   const joinedRooms = useRef(new Set())
@@ -127,7 +127,13 @@ export default function MarketWatch() {
 
   function handleToggleOpen(row) {
     if (!multiOpenMode) {
-      // single-graph mode: clicking any row always switches the one open chart
+      // single-graph mode: clicking any row always switches the one open chart.
+      // Carry the outgoing stock's depth-open/closed state over to the incoming
+      // one, so switching stocks doesn't reset Depth back to collapsed.
+      const previousId = openSymbols[0]?.id
+      if (previousId !== undefined && previousId !== row.id) {
+        setDepthCollapsedById((prev) => ({ ...prev, [row.id]: prev[previousId] ?? true }))
+      }
       setOpenSymbols((prev) => (prev.length === 1 && prev[0].id === row.id ? prev : [row]))
       return
     }
@@ -195,8 +201,8 @@ export default function MarketWatch() {
             <CandleChart instrument={fullscreenInstrument} fillHeight />
           </div>
           <SidePanel
-            collapsed={depthCollapsed}
-            onToggleCollapsed={setDepthCollapsed}
+            collapsed={depthCollapsedById[fullscreenInstrument.id] ?? true}
+            onToggleCollapsed={(v) => setDepthCollapsedById((prev) => ({ ...prev, [fullscreenInstrument.id]: v }))}
             panels={[
               { id: 'depth', label: 'Depth', content: <DepthPanel depth={liveDepth[fullscreenInstrument.symbol]} /> },
             ]}
@@ -285,8 +291,8 @@ export default function MarketWatch() {
                   <CandleChart instrument={instrument} />
                 </div>
                 <SidePanel
-                  collapsed={depthCollapsed}
-                  onToggleCollapsed={setDepthCollapsed}
+                  collapsed={depthCollapsedById[instrument.id] ?? true}
+                  onToggleCollapsed={(v) => setDepthCollapsedById((prev) => ({ ...prev, [instrument.id]: v }))}
                   panels={[
                     { id: 'depth', label: 'Depth', content: <DepthPanel depth={liveDepth[instrument.symbol]} /> },
                   ]}
