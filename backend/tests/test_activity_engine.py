@@ -1,20 +1,27 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from activity_engine import (
     ActivityEngine,
+    bb_squeeze_intensity,
+    bb_widening_intensity,
+    compute_bollinger,
+    detect_bb_squeeze,
+    detect_bb_widening,
     detect_bearish_engulfing,
     detect_bullish_engulfing,
     detect_dark_cloud_cover,
     detect_doji,
     detect_hammer,
     detect_piercing_line,
+    detect_price_vwap_divergence,
     detect_shooting_star,
     detect_three_black_crows,
     detect_three_white_soldiers,
     detect_tweezer_bottom,
     detect_tweezer_top,
+    detect_vwap_gap_fill,
     doji_intensity,
     engulfing_intensity,
     hammer_intensity,
@@ -23,6 +30,8 @@ from activity_engine import (
     shooting_star_intensity,
     tweezer_bottom_intensity,
     tweezer_top_intensity,
+    vwap_divergence_intensity,
+    vwap_gap_fill_intensity,
 )
 from brokers.models import Candle
 from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
@@ -36,6 +45,20 @@ def _candle(ts_minute, open, high, low, close, timeframe="1min"):
         symbol=SYMBOL, timeframe=timeframe,
         timestamp=datetime(2026, 9, 11, 9, ts_minute, tzinfo=timezone.utc),
         open=open, high=high, low=low, close=close, volume=100,
+    )
+
+
+_BASE_TS = datetime(2026, 9, 11, 9, 15, tzinfo=timezone.utc)
+
+
+def _pc(i, close, volume=1000, timeframe="1min"):
+    """A price-action test candle: flat body (open == close) so candlestick
+    shape detectors stay out of the way, high/low +-1 around close so a
+    constant-volume run's VWAP typical price reduces to the close itself."""
+    return Candle(
+        symbol=SYMBOL, timeframe=timeframe,
+        timestamp=_BASE_TS + timedelta(minutes=i),
+        open=close, high=close + 1.0, low=close - 1.0, close=close, volume=volume,
     )
 
 
@@ -224,6 +247,85 @@ def test_detect_three_black_crows_true_for_a_steady_decline():
     assert detect_three_white_soldiers(candles) is False
 
 
+# --------------------------------------------------------------------- Bollinger Bands (pure)
+
+def test_compute_bollinger_none_before_full_window():
+    assert compute_bollinger([100.0] * 19) is None
+
+
+def test_compute_bollinger_zero_width_for_constant_closes():
+    bb = compute_bollinger([100.0] * 20)
+    assert bb is not None
+    assert bb.middle == 100.0
+    assert bb.width == 0.0
+
+
+def test_compute_bollinger_widens_with_more_spread():
+    tight = compute_bollinger([100.0, 100.1] * 10)
+    wide = compute_bollinger([90.0, 110.0] * 10)
+    assert wide.width > tight.width
+
+
+def test_detect_bb_squeeze_true_for_a_new_low_width():
+    widths = [0.05] * 19 + [0.02]
+    assert detect_bb_squeeze(widths) is True
+    assert detect_bb_widening(widths) is False
+
+
+def test_detect_bb_widening_true_for_a_new_high_width():
+    widths = [0.02] * 19 + [0.05]
+    assert detect_bb_widening(widths) is True
+    assert detect_bb_squeeze(widths) is False
+
+
+def test_detect_bb_squeeze_false_before_full_lookback():
+    assert detect_bb_squeeze([0.01] * 19) is False
+
+
+def test_detect_bb_squeeze_false_when_not_meaningfully_tighter():
+    widths = [0.05] * 19 + [0.048]  # a new low, but barely — not a real squeeze
+    assert detect_bb_squeeze(widths) is False
+
+
+def test_bb_squeeze_and_widening_intensity_exceed_one():
+    assert bb_squeeze_intensity([0.05] * 19 + [0.02]) > 1.0
+    assert bb_widening_intensity([0.02] * 19 + [0.05]) > 1.0
+
+
+# --------------------------------------------------------------------- VWAP divergence / gap-fill (pure)
+
+def test_detect_price_vwap_divergence_true_for_a_new_extreme_past_threshold():
+    gaps = [0.001] * 9 + [0.004]
+    assert detect_price_vwap_divergence(gaps) is True
+
+
+def test_detect_price_vwap_divergence_false_below_threshold():
+    assert detect_price_vwap_divergence([0.0005] * 10) is False
+
+
+def test_detect_price_vwap_divergence_false_before_full_lookback():
+    assert detect_price_vwap_divergence([0.01] * 9) is False
+
+
+def test_detect_vwap_gap_fill_true_after_a_big_reversion():
+    gaps = [0.001] * 8 + [0.006, 0.002]
+    assert detect_vwap_gap_fill(gaps) is True
+
+
+def test_detect_vwap_gap_fill_false_when_gap_never_exceeded_threshold():
+    assert detect_vwap_gap_fill([0.001] * 10) is False
+
+
+def test_detect_vwap_gap_fill_false_when_still_extended():
+    gaps = [0.001] * 8 + [0.006, 0.005]  # barely shrunk, still mostly extended
+    assert detect_vwap_gap_fill(gaps) is False
+
+
+def test_vwap_divergence_and_gap_fill_intensity():
+    assert vwap_divergence_intensity([0.001] * 9 + [0.006]) == pytest.approx(0.006 / 0.003)
+    assert vwap_gap_fill_intensity([0.001] * 8 + [0.006, 0.002]) == pytest.approx(0.006 / 0.002)
+
+
 # --------------------------------------------------------------------- engine persistence
 
 def test_engine_persists_a_detected_pattern(session_factory):
@@ -388,6 +490,74 @@ def test_engine_detects_three_white_soldiers_across_calls(session_factory):
     with session_factory() as session:
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "three_white_soldiers" in activities
+
+
+def test_engine_detects_bb_squeeze_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # 19 volatile closes, then flat @100 for the rest — by minute 39 the
+    # rolling 20-close window is entirely flat (width 0), a new low against
+    # the 20-reading width lookback that just finished filling.
+    for i in range(1, 20):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, 105.0 if i % 2 == 0 else 95.0))
+    for i in range(20, 40):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, 100.0))
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "bb_squeeze" in activities
+
+
+def test_engine_detects_bb_widening_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # Mirror of the squeeze test: flat first, then volatile — the rolling
+    # window ends up entirely volatile, a new high against the width lookback.
+    for i in range(1, 20):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, 100.0))
+    for i in range(20, 40):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, 105.0 if i % 2 == 0 else 95.0))
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "bb_widening" in activities
+
+
+def test_engine_detects_vwap_divergence_and_gap_fill_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # Flat, then a steady climb that pulls price further and further ahead
+    # of the (slower-moving) cumulative vwap, then one candle back near
+    # vwap's own level to close most of that gap back up.
+    closes = [100.0, 100.0, 100.0, 100.0, 100.0, 103.0, 106.0, 110.0, 115.0, 121.0, 105.5]
+    for i, close in enumerate(closes, start=1):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, close))
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "price_vwap_divergence" in activities
+    assert "vwap_gap_fill" in activities
 
 
 def test_to_dataframe_reflects_the_buffer(session_factory):

@@ -1,19 +1,23 @@
-"""Detects candlestick patterns as each 1-/3-/5-min candle closes, and
-persists them to instrument_activity. Covers, so far: single-candle shape
-patterns (doji, hammer, shooting star), two-candle patterns (bullish/bearish
-engulfing, piercing line, dark cloud cover, tweezer top/bottom), and one
-three-candle pattern pair (three white soldiers / three black crows).
-Larger multi-bar chart formations (double top/bottom, head and shoulders,
-flags, triangles, HH-HL trend structure, etc.) need swing-high/swing-low
-detection as a foundation and aren't built yet. Indicator-based activity
-(MACD crossover, MA21/MA50 crossover) and outcome tracking (what happened N
+"""Detects candlestick patterns and price-action signals as each 1-/3-/5-min
+candle closes, and persists them to instrument_activity. Covers, so far:
+single-candle shape patterns (doji, hammer, shooting star), two-candle
+patterns (bullish/bearish engulfing, piercing line, dark cloud cover,
+tweezer top/bottom), one three-candle pattern pair (three white soldiers /
+three black crows), and price-action/indicator signals (Bollinger Band
+squeeze/widening, price stretching away from VWAP, price reverting back to
+fill a VWAP gap). Larger multi-bar chart formations (double top/bottom, head
+and shoulders, flags, triangles, HH-HL trend structure, etc.) need
+swing-high/swing-low detection as a foundation and aren't built yet. MACD
+crossover, MA21/MA50 crossover, and outcome tracking (what happened N
 candles after an activity) are deliberately not built yet either.
 """
 from __future__ import annotations
 
 import logging
+import statistics
 from collections import defaultdict, deque
-from typing import Callable, Dict, List, Optional, Tuple
+from datetime import date
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -26,6 +30,24 @@ logger = logging.getLogger(__name__)
 # Longest multi-candle pattern detected today (three soldiers/crows) — the
 # rolling per-instrument buffer only needs to hold this many candles.
 _LOOKBACK = 3
+
+# Bollinger Bands: standard 20-period SMA +/- 2 standard deviations. Width is
+# kept as a fraction of the middle band ((upper-lower)/middle) rather than an
+# absolute price spread, so it's comparable across instruments/price levels
+# and across a stock's own price drifting over time.
+_BB_PERIOD = 20
+_BB_STDDEV_MULT = 2.0
+# How many recent width readings a squeeze/widening call compares the
+# current one against. Needs a full window before either can fire.
+_BB_WIDTH_LOOKBACK = 20
+
+# VWAP resets every trading day (cumulative from session open). "Divergence"
+# and "gap fill" are read off (close - vwap)/vwap over this many recent
+# candles. These starting thresholds, like the candle-pattern ones, are
+# pending calibration against real backtested outcomes, not a final answer.
+_VWAP_GAP_LOOKBACK = 10
+_VWAP_DIVERGENCE_THRESHOLD = 0.003  # 0.3% away from vwap
+_VWAP_GAP_FILL_RATIO = 0.5  # current gap has shrunk to <= half of the recent peak
 
 InstrumentKey = Tuple[str, str, str]  # (symbol, exchange_segment, timeframe)
 
@@ -291,15 +313,26 @@ TWO_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = {
 }
 
 
-MULTI_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
+# Split by candle count so a caller (e.g. the timing benchmark script) can
+# measure each category separately — on_candle_closed itself just iterates
+# the merged MULTI_CANDLE_PATTERNS below, unaffected by this split.
+TWO_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
     "bullish_engulfing": detect_bullish_engulfing,
     "bearish_engulfing": detect_bearish_engulfing,
     "piercing_line": detect_piercing_line,
     "dark_cloud_cover": detect_dark_cloud_cover,
     "tweezer_bottom": detect_tweezer_bottom,
     "tweezer_top": detect_tweezer_top,
+}
+
+THREE_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
     "three_white_soldiers": detect_three_white_soldiers,
     "three_black_crows": detect_three_black_crows,
+}
+
+MULTI_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
+    **TWO_CANDLE_PATTERNS,
+    **THREE_CANDLE_PATTERNS,
 }
 
 # Intensity formulas for multi-candle patterns that have one defined —
@@ -307,6 +340,122 @@ MULTI_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
 # absent here rather than guessed at (on_candle_closed treats a missing
 # entry the same as detect-only-no-intensity: stored as NULL).
 MULTI_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = dict(TWO_CANDLE_INTENSITY)
+
+# --------------------------------------------------------------------- price action (BB / VWAP)
+
+class BollingerBands:
+    __slots__ = ("middle", "upper", "lower", "width")
+
+    def __init__(self, middle: float, upper: float, lower: float, width: float):
+        self.middle = middle
+        self.upper = upper
+        self.lower = lower
+        self.width = width
+
+
+def compute_bollinger(closes: Sequence[float], stddev_mult: float = _BB_STDDEV_MULT) -> Optional[BollingerBands]:
+    """None until a full _BB_PERIOD window of closes is available."""
+    if len(closes) < _BB_PERIOD:
+        return None
+    mean = statistics.fmean(closes)
+    stdev = statistics.pstdev(closes)
+    upper = mean + stddev_mult * stdev
+    lower = mean - stddev_mult * stdev
+    width = (upper - lower) / mean if mean else 0.0
+    return BollingerBands(middle=mean, upper=upper, lower=lower, width=width)
+
+
+def detect_bb_squeeze(widths: Sequence[float]) -> bool:
+    """True when the current (last) width is the tightest reading in the
+    lookback window and meaningfully tighter than the window's own average —
+    volatility compression, the classic setup ahead of a breakout."""
+    if len(widths) < _BB_WIDTH_LOOKBACK:
+        return False
+    current = widths[-1]
+    avg = statistics.fmean(widths)
+    return avg > 0 and current <= min(widths) and current < 0.7 * avg
+
+
+def detect_bb_widening(widths: Sequence[float]) -> bool:
+    """Squeeze's mirror: current width is a new high in the lookback window
+    and meaningfully wider than the window's own average — volatility
+    expansion, typically during a strong directional move."""
+    if len(widths) < _BB_WIDTH_LOOKBACK:
+        return False
+    current = widths[-1]
+    avg = statistics.fmean(widths)
+    return avg > 0 and current >= max(widths) and current > 1.3 * avg
+
+
+def bb_squeeze_intensity(widths: Sequence[float]) -> float:
+    """How tight the squeeze is relative to the window's own average width —
+    higher means a more pronounced compression."""
+    current = widths[-1]
+    avg = statistics.fmean(widths)
+    return avg / current if current > 0 else float("inf")
+
+
+def bb_widening_intensity(widths: Sequence[float]) -> float:
+    """Widening's mirror — current width relative to the window's average."""
+    current = widths[-1]
+    avg = statistics.fmean(widths)
+    return current / avg if avg > 0 else float("inf")
+
+
+def detect_price_vwap_divergence(gaps: Sequence[float]) -> bool:
+    """gaps are signed (close - vwap) / vwap readings, most recent last.
+    Fires when the current absolute gap clears the minimum threshold and is
+    a new extreme across the lookback window — flags the moment price is
+    stretching away from vwap, not every candle that merely sits off it."""
+    if len(gaps) < _VWAP_GAP_LOOKBACK:
+        return False
+    current = abs(gaps[-1])
+    prior_max = max((abs(g) for g in list(gaps)[:-1]), default=0.0)
+    return current >= _VWAP_DIVERGENCE_THRESHOLD and current > prior_max
+
+
+def detect_vwap_gap_fill(gaps: Sequence[float]) -> bool:
+    """Fires when price has closed most of the distance back toward vwap
+    after having stretched away from it: the peak absolute gap across the
+    lookback window cleared the divergence threshold, and the current gap
+    has shrunk to <= _VWAP_GAP_FILL_RATIO of that peak."""
+    if len(gaps) < _VWAP_GAP_LOOKBACK:
+        return False
+    current = abs(gaps[-1])
+    peak = max(abs(g) for g in gaps)
+    return peak >= _VWAP_DIVERGENCE_THRESHOLD and current <= _VWAP_GAP_FILL_RATIO * peak
+
+
+def vwap_divergence_intensity(gaps: Sequence[float]) -> float:
+    """Current gap as a multiple of the qualifying threshold — 1.0 is the
+    qualifying floor, higher means a more extended move away from vwap."""
+    return abs(gaps[-1]) / _VWAP_DIVERGENCE_THRESHOLD
+
+
+def vwap_gap_fill_intensity(gaps: Sequence[float]) -> float:
+    """How much of the peak gap has been closed — higher means more of the
+    move back toward vwap has completed."""
+    peak = max(abs(g) for g in gaps)
+    current = abs(gaps[-1])
+    return peak / current if current > 0 else float("inf")
+
+
+PRICE_ACTION_INTENSITY: Dict[str, Callable[[Sequence[float]], float]] = {
+    "bb_squeeze": bb_squeeze_intensity,
+    "bb_widening": bb_widening_intensity,
+    "price_vwap_divergence": vwap_divergence_intensity,
+    "vwap_gap_fill": vwap_gap_fill_intensity,
+}
+
+
+class _VwapState:
+    __slots__ = ("day", "cum_pv", "cum_vol")
+
+    def __init__(self, day: date):
+        self.day = day
+        self.cum_pv = 0.0
+        self.cum_vol = 0.0
+
 
 # The data-driven catalog (PatternDefinition rows) — kept next to the
 # detector dicts above so a new pattern's code/kind/description is added in
@@ -323,6 +472,10 @@ PATTERN_CATALOG = [
     ("tweezer_top", "multi_candle", "A bullish then a bearish candle with matching highs"),
     ("three_white_soldiers", "multi_candle", "Three consecutive bullish candles, each closing higher, opening within the prior body"),
     ("three_black_crows", "multi_candle", "Three consecutive bearish candles, each closing lower, opening within the prior body"),
+    ("bb_squeeze", "price_action", "Bollinger Band width contracts to a new low across the lookback window — volatility compression, often precedes a breakout"),
+    ("bb_widening", "price_action", "Bollinger Band width expands to a new high across the lookback window — volatility expansion, typically during a strong directional move"),
+    ("price_vwap_divergence", "price_action", "Price stretches to a new extreme distance from VWAP across the lookback window, past a minimum threshold"),
+    ("vwap_gap_fill", "price_action", "Price reverts back toward VWAP after stretching away from it, closing most of the prior gap"),
 ]
 
 
@@ -370,6 +523,11 @@ class ActivityEngine:
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
         self._buffer: List[dict] = []
+        # price-action state, one series per (symbol, exchange_segment, timeframe)
+        self._closes: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_BB_PERIOD))
+        self._bb_widths: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_BB_WIDTH_LOOKBACK))
+        self._vwap_state: Dict[InstrumentKey, _VwapState] = {}
+        self._vwap_gaps: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_VWAP_GAP_LOOKBACK))
 
     def buffered_count(self) -> int:
         return len(self._buffer)
@@ -440,6 +598,39 @@ class ActivityEngine:
             except Exception:
                 logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
 
+        closes = self._closes[key]
+        closes.append(candle.close)
+        bb = compute_bollinger(closes)
+        if bb is not None:
+            widths = self._bb_widths[key]
+            widths.append(bb.width)
+            for name, detector in (("bb_squeeze", detect_bb_squeeze), ("bb_widening", detect_bb_widening)):
+                try:
+                    if detector(widths):
+                        intensity = PRICE_ACTION_INTENSITY[name](widths)
+                        if intensity == float("inf"):
+                            intensity = None
+                        found.append(("price_action", name, intensity))
+                except Exception:
+                    logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
+
+        vwap = self._update_vwap(key, candle)
+        if vwap:
+            gaps = self._vwap_gaps[key]
+            gaps.append((candle.close - vwap) / vwap)
+            for name, detector in (
+                ("price_vwap_divergence", detect_price_vwap_divergence),
+                ("vwap_gap_fill", detect_vwap_gap_fill),
+            ):
+                try:
+                    if detector(gaps):
+                        intensity = PRICE_ACTION_INTENSITY[name](gaps)
+                        if intensity == float("inf"):
+                            intensity = None
+                        found.append(("price_action", name, intensity))
+                except Exception:
+                    logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
+
         if not found:
             return
 
@@ -454,6 +645,24 @@ class ActivityEngine:
                 "open_price": candle.open, "high_price": candle.high,
                 "low_price": candle.low, "close_price": candle.close,
             })
+
+    def _update_vwap(self, key: InstrumentKey, candle: Candle) -> Optional[float]:
+        """Cumulative volume-weighted average price since the day's first
+        candle for this instrument/timeframe — resets whenever the candle's
+        date rolls over (market open/close are both well inside the same
+        UTC calendar date, so a plain date() compare is enough, no IST
+        conversion needed). Returns None until at least one candle with
+        nonzero volume has been seen today."""
+        day = candle.timestamp.date()
+        state = self._vwap_state.get(key)
+        if state is None or state.day != day:
+            state = _VwapState(day=day)
+            self._vwap_state[key] = state
+        if candle.volume:
+            typical_price = (candle.high + candle.low + candle.close) / 3
+            state.cum_pv += typical_price * candle.volume
+            state.cum_vol += candle.volume
+        return state.cum_pv / state.cum_vol if state.cum_vol > 0 else None
 
     def _lookup_instrument_id(self, symbol: str, exchange_segment: str):
         cache_key = (symbol, exchange_segment)

@@ -141,7 +141,7 @@ class PatternDefinition(Base):
     __tablename__ = "pattern_definitions"
 
     code: Mapped[str] = mapped_column(String(64), primary_key=True)
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # "single_candle" | "multi_candle" | "indicator"
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # "single_candle" | "multi_candle" | "price_action" | "indicator"
     description: Mapped[str] = mapped_column(String(256), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
