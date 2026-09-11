@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict, deque
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -224,18 +224,26 @@ class ActivityEngine:
         buffer = self._recent[key]
         buffer.append(candle)
 
-        found: List[Tuple[str, str]] = []  # (activity_type, activity)
+        found: List[Tuple[str, str, Optional[float]]] = []  # (activity_type, activity, intensity)
         for name, detector in SINGLE_CANDLE_PATTERNS.items():
             try:
                 if detector(candle):
-                    found.append(("candle_pattern", name))
+                    intensity = SINGLE_CANDLE_INTENSITY[name](candle)
+                    # a mathematically infinite ratio (open == close exactly)
+                    # is a real result, not an error — store NULL rather
+                    # than a sentinel that would read as an ordinary number
+                    if intensity == float("inf"):
+                        intensity = None
+                    found.append(("candle_pattern", name, intensity))
             except Exception:
                 logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
 
         for name, detector in MULTI_CANDLE_PATTERNS.items():
             try:
                 if detector(list(buffer)):
-                    found.append(("candle_pattern", name))
+                    # no intensity formula defined yet for multi-candle
+                    # patterns — NULL, not a guess
+                    found.append(("candle_pattern", name, None))
             except Exception:
                 logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
 
@@ -246,7 +254,7 @@ class ActivityEngine:
         if instrument_id is None:
             return
 
-        self._persist(instrument_id, candle.timeframe, candle.timestamp, found)
+        self._persist(instrument_id, candle, found)
 
     def _lookup_instrument_id(self, symbol: str, exchange_segment: str):
         cache_key = (symbol, exchange_segment)
@@ -264,9 +272,10 @@ class ActivityEngine:
         self._instrument_ids[cache_key] = instrument_id
         return instrument_id
 
-    def _persist(self, instrument_id: int, timeframe: str, ts, found: List[Tuple[str, str]]) -> None:
+    def _persist(self, instrument_id: int, candle: Candle, found: List[Tuple[str, str, Optional[float]]]) -> None:
+        timeframe, ts = candle.timeframe, candle.timestamp
         with session_scope(self.session_factory) as session:
-            for activity_type, activity in found:
+            for activity_type, activity, intensity in found:
                 try:
                     with session.begin_nested():
                         exists = session.query(InstrumentActivity).filter_by(
@@ -275,7 +284,9 @@ class ActivityEngine:
                         if exists is None:
                             session.add(InstrumentActivity(
                                 instrument_id=instrument_id, timeframe=timeframe, ts=ts,
-                                activity_type=activity_type, activity=activity,
+                                activity_type=activity_type, activity=activity, intensity=intensity,
+                                open_price=candle.open, high_price=candle.high,
+                                low_price=candle.low, close_price=candle.close,
                             ))
                         session.flush()
                 except IntegrityError:

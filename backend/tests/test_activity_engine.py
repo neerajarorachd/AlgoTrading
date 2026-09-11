@@ -152,9 +152,59 @@ def test_engine_persists_a_detected_pattern(session_factory):
     with session_factory() as session:
         rows = session.query(InstrumentActivity).filter_by(instrument_id=instrument_id).all()
     assert len(rows) == 1
-    assert rows[0].activity == "doji"
-    assert rows[0].activity_type == "candle_pattern"
-    assert rows[0].timeframe == "1min"
+    row = rows[0]
+    assert row.activity == "doji"
+    assert row.activity_type == "candle_pattern"
+    assert row.timeframe == "1min"
+    assert float(row.intensity) == pytest.approx(40.0)  # range=2.0, body=0.05 -> 40x
+    assert float(row.open_price) == 100.0
+    assert float(row.high_price) == 101.0
+    assert float(row.low_price) == 99.0
+    assert float(row.close_price) == 100.05
+
+
+def test_engine_stores_null_intensity_for_a_perfect_doji(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+        instrument_id = session.query(SubscribedSymbol).filter_by(symbol=SYMBOL).one().id
+
+    engine = ActivityEngine(session_factory)
+    perfect_doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.0)  # open == close
+    engine.on_candle_closed(SYMBOL, SEG, perfect_doji)
+
+    with session_factory() as session:
+        row = session.query(InstrumentActivity).filter_by(instrument_id=instrument_id).one()
+    assert row.intensity is None  # infinite ratio stored as NULL, not a sentinel
+
+
+def test_engine_stores_null_intensity_for_a_multi_candle_pattern(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+        instrument_id = session.query(SubscribedSymbol).filter_by(symbol=SYMBOL).one().id
+
+    engine = ActivityEngine(session_factory)
+    candles = [
+        _candle(0, open=100.0, high=102.1, low=99.9, close=102.0),
+        _candle(1, open=101.0, high=104.1, low=100.9, close=104.0),
+        _candle(2, open=103.0, high=106.1, low=102.9, close=106.0),
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+
+    with session_factory() as session:
+        row = session.query(InstrumentActivity).filter_by(
+            instrument_id=instrument_id, activity="three_white_soldiers",
+        ).one()
+    assert row.intensity is None  # no intensity formula defined for this pattern yet
+    assert float(row.close_price) == 106.0  # OHLC is the triggering (last) candle's own
 
 
 def test_engine_is_idempotent_for_the_same_candle_reprocessed(session_factory):

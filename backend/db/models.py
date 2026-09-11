@@ -83,6 +83,21 @@ class InstrumentActivity(Base):
     "three_white_soldiers"). The unique constraint makes detection idempotent
     — re-processing the same candle (a reconnect replay, a backfill re-run)
     never duplicates the same finding.
+
+    intensity is the same wick/body (or range/body) ratio the detector
+    checked against its own qualifying threshold — NULL for a pattern with
+    no defined intensity formula yet (today: the multi-candle patterns) or
+    for a mathematically infinite ratio (a perfect doji, open == close
+    exactly) rather than persisting a sentinel that reads as a real number.
+    The OHLC columns are the triggering candle's own prices — for a
+    multi-candle pattern that's the last candle in the sequence, matching
+    `ts`. Both exist so a pattern's geometry can be reviewed or re-scored
+    later without re-reading candles_today. This is deliberately NOT yet
+    the full picture: a second table (not built yet) will link here to
+    record volume/RSI/MACD/stochastic at formation time, and a backtesting
+    pass (not built yet) will record what each pattern's outcome actually
+    was over the following N candles — thresholds here are a starting
+    point pending calibration against that, not a final answer.
     """
 
     __tablename__ = "instrument_activity"
@@ -93,6 +108,11 @@ class InstrumentActivity(Base):
     ts: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     activity_type: Mapped[str] = mapped_column(String(32), nullable=False)
     activity: Mapped[str] = mapped_column(String(64), nullable=False)
+    intensity: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    open_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    high_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    low_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    close_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
     detected_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
 
     __table_args__ = (
