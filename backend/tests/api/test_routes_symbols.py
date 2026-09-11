@@ -12,7 +12,7 @@ def test_search_instruments_empty_query_returns_empty_list(client):
     assert resp.get_json() == []
 
 
-def test_post_symbol_creates_row_and_subscribes(client, fake_broker):
+def test_post_symbol_creates_row_and_subscribes(client, fake_broker, wait_until):
     resp = client.post("/api/symbols", json={"symbol": "RELIANCE", "exchange": "NSE", "segment": "EQUITY"})
     assert resp.status_code == 201
     body = resp.get_json()
@@ -21,12 +21,16 @@ def test_post_symbol_creates_row_and_subscribes(client, fake_broker):
     assert body["security_id"] == "SEC-RELIANCE"
     assert body["active"] is True
 
-    assert len(fake_broker.subscribed_calls) == 1
+    # subscribe happens after backfill, on a background thread — see
+    # backfill_then_subscribe's docstring for why the order matters
+    assert wait_until(lambda: len(fake_broker.subscribed_calls) == 1)
     assert fake_broker.subscribed_calls[0][0]["security_id"] == "SEC-RELIANCE"
 
 
-def test_post_symbol_is_idempotent_when_already_active(client, fake_broker):
+def test_post_symbol_is_idempotent_when_already_active(client, fake_broker, wait_until):
     client.post("/api/symbols", json={"symbol": "TCS", "exchange": "NSE", "segment": "EQUITY"})
+    assert wait_until(lambda: len(fake_broker.subscribed_calls) == 1)
+
     resp = client.post("/api/symbols", json={"symbol": "TCS", "exchange": "NSE", "segment": "EQUITY"})
 
     assert resp.status_code == 200
@@ -41,9 +45,10 @@ def test_post_symbol_without_symbol_field_is_400(client):
     assert resp.status_code == 400
 
 
-def test_delete_then_post_reactivates_same_row(client, fake_broker):
+def test_delete_then_post_reactivates_same_row(client, fake_broker, wait_until):
     created = client.post("/api/symbols", json={"symbol": "INFY", "exchange": "NSE", "segment": "EQUITY"}).get_json()
     row_id = created["id"]
+    assert wait_until(lambda: len(fake_broker.subscribed_calls) == 1)
 
     del_resp = client.delete(f"/api/symbols/{row_id}")
     assert del_resp.status_code == 204
@@ -55,7 +60,7 @@ def test_delete_then_post_reactivates_same_row(client, fake_broker):
     reactivated = client.post("/api/symbols", json={"symbol": "INFY", "exchange": "NSE", "segment": "EQUITY"}).get_json()
     assert reactivated["id"] == row_id  # same row, not a new one — unique constraint upheld
     assert reactivated["active"] is True
-    assert len(fake_broker.subscribed_calls) == 2  # original register + reactivate
+    assert wait_until(lambda: len(fake_broker.subscribed_calls) == 2)  # original register + reactivate
 
 
 def test_delete_unknown_id_is_404(client):

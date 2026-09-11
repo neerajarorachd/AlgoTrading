@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
 from db.session import session_scope
-from feed.gap_fill import backfill_missing_candles, start_gap_scanner
+from feed.gap_fill import backfill_then_subscribe, start_gap_scanner
 
 logger = logging.getLogger(__name__)
 
@@ -86,22 +86,22 @@ def _hydrate(broker, market_feed, session_factory, aggregator=None) -> None:
     log it and move on to the rest.
 
     `aggregator` is optional so existing tests that only care about the
-    subscribe behavior don't need to supply one — when given, each
-    successfully-subscribed symbol also gets its startup gap backfilled,
-    sequentially (see _backfill_all below), not via spawn_backfill — a
-    dozen-plus registered symbols each opening their own DB session on their
-    own background thread, all at once, was starving the connection pool
-    (the still-open hydration session on top of N concurrent backfill
-    sessions) and silently failing most of them.
+    subscribe behavior don't need to supply one — when given, each row is
+    backfilled BEFORE it's subscribed to the live feed, not after (see
+    feed/gap_fill.py's backfill_then_subscribe docstring for why order
+    matters), sequentially on one background thread — a dozen-plus
+    registered symbols each opening their own DB session on their own
+    thread, all at once, was starving the connection pool and silently
+    failing most of them.
     """
-    backfill_targets = []
+    targets = []
     with session_scope(session_factory) as session:
         rows = session.query(SubscribedSymbol).filter_by(active=True).all()
         for row in rows:
             try:
                 quote = broker.get_quote(row.symbol, row.security_id, row.exchange_segment)
                 row.previous_close = quote.close
-                market_feed.subscribe({
+                instrument = {
                     "security_id": row.security_id,
                     "exchange_segment": row.exchange_segment,
                     "symbol": row.symbol,
@@ -110,29 +110,40 @@ def _hydrate(broker, market_feed, session_factory, aggregator=None) -> None:
                     "previous_close": float(quote.close),
                     "open": float(quote.open),
                     "ltp": float(quote.ltp),
-                })
-                backfill_targets.append((row.symbol, row.exchange_segment, row.security_id))
+                }
+                if aggregator is None:
+                    # no aggregator given (tests that only care about
+                    # subscribe behavior) — nothing to backfill against, so
+                    # just subscribe immediately, same as always
+                    market_feed.subscribe(instrument)
+                else:
+                    targets.append(instrument)
             except (BrokerAPIError, BrokerConnectionError) as exc:
                 logger.warning("Hydration: skipping %s (%s) — %s", row.symbol, row.exchange_segment, exc)
             except Exception:
                 logger.exception("Hydration: unexpected error subscribing %s (%s)", row.symbol, row.exchange_segment)
 
-    if aggregator is not None and backfill_targets:
-        _backfill_all(backfill_targets, broker, session_factory, aggregator)
+    if aggregator is not None and targets:
+        _backfill_and_subscribe_all(targets, broker, session_factory, aggregator, market_feed)
 
 
-def _backfill_all(targets, broker, session_factory, aggregator) -> None:
-    """Runs every symbol's startup backfill sequentially on one background
-    thread, instead of spawn_backfill's one-thread-per-symbol — see _hydrate's
-    docstring for why concurrent was actually causing failures, not just risk."""
+def _backfill_and_subscribe_all(targets, broker, session_factory, aggregator, market_feed) -> None:
+    """Backfills, then subscribes, every symbol sequentially on one
+    background thread — not spawn_backfill's one-thread-per-symbol (see
+    _hydrate's docstring for why concurrent was actually causing failures,
+    not just risk), and not subscribe-then-backfill (see
+    feed/gap_fill.py's backfill_then_subscribe for the ordering reason)."""
     def _run():
-        for i, (symbol, exchange_segment, security_id) in enumerate(targets):
-            logger.info("Hydration backfill: [%d/%d] starting %s (%s)", i + 1, len(targets), symbol, exchange_segment)
+        for i, instrument in enumerate(targets):
+            logger.info("Hydration: [%d/%d] starting %s (%s)", i + 1, len(targets), instrument["symbol"], instrument["exchange_segment"])
             try:
-                backfill_missing_candles(symbol, exchange_segment, security_id, broker, session_factory, aggregator)
+                backfill_then_subscribe(instrument, broker, session_factory, aggregator, market_feed)
             except Exception:
-                logger.exception("Hydration backfill: [%d/%d] %s (%s) raised uncaught", i + 1, len(targets), symbol, exchange_segment)
-            logger.info("Hydration backfill: [%d/%d] finished %s (%s)", i + 1, len(targets), symbol, exchange_segment)
+                logger.exception(
+                    "Hydration: [%d/%d] %s (%s) raised uncaught", i + 1, len(targets),
+                    instrument["symbol"], instrument["exchange_segment"],
+                )
+            logger.info("Hydration: [%d/%d] live %s (%s)", i + 1, len(targets), instrument["symbol"], instrument["exchange_segment"])
 
     threading.Thread(target=_run, daemon=True, name="hydration-backfill").start()
 

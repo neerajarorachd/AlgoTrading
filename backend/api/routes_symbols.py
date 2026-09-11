@@ -6,7 +6,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 
 from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
-from feed.gap_fill import spawn_backfill
+from feed.gap_fill import spawn_backfill_then_subscribe
 
 symbols_bp = Blueprint("symbols", __name__)
 
@@ -99,20 +99,24 @@ def add_symbol():
 
     g.db_session.flush()  # populate row.id before it's serialized into the response
 
-    market_feed.subscribe({
-        "security_id": row.security_id,
-        "exchange_segment": row.exchange_segment,
-        "symbol": row.symbol,
-        "exchange": row.exchange,
-        "segment": row.segment,
-        "previous_close": float(row.previous_close) if row.previous_close is not None else None,
-        "open": float(quote.open),
-        "ltp": float(quote.ltp),
-    })
-
-    spawn_backfill(
-        row.symbol, row.exchange_segment, row.security_id, broker,
-        current_app.extensions["db_session_factory"], current_app.extensions["candle_aggregator"],
+    # backfill first, THEN subscribe to the live feed — not the other way
+    # around, see backfill_then_subscribe's docstring. The row is already
+    # visible via GET /api/symbols at this point (added/reactivated above),
+    # so the frontend can show it immediately with a spinner in the ticker
+    # cell until the first live tick actually arrives.
+    spawn_backfill_then_subscribe(
+        {
+            "security_id": row.security_id,
+            "exchange_segment": row.exchange_segment,
+            "symbol": row.symbol,
+            "exchange": row.exchange,
+            "segment": row.segment,
+            "previous_close": float(row.previous_close) if row.previous_close is not None else None,
+            "open": float(quote.open),
+            "ltp": float(quote.ltp),
+        },
+        broker, current_app.extensions["db_session_factory"],
+        current_app.extensions["candle_aggregator"], market_feed,
     )
 
     return jsonify(_serialize(row)), status

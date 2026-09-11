@@ -1,17 +1,71 @@
+import time
+import uuid
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, event
+from sqlalchemy.pool import QueuePool
 
 from app import create_app
 from brokers.models import BrokerAPIError, Quote
 from db.models import Base
 from db.session import build_session_factory
+from feed.gap_fill import backfill_then_subscribe
+
+
+@pytest.fixture
+def wait_until():
+    """POST /api/symbols now backfills-then-subscribes on a real background
+    thread (see feed/gap_fill.py's backfill_then_subscribe) instead of
+    subscribing synchronously — tests that need to observe the resulting
+    subscribe_feed call poll for it instead of asserting immediately after
+    the request returns."""
+    def _wait(predicate, timeout=2.0, interval=0.01):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(interval)
+        return predicate()
+    return _wait
 
 
 @pytest.fixture
 def db_engine():
-    engine = create_engine("sqlite:///:memory:")
+    # Shared-cache URI, not plain ":memory:": a route handler's own
+    # g.db_session transaction is still open (uncommitted) while its request
+    # runs, and backfill_then_subscribe (called synchronously within that
+    # same request — see the app fixture below) opens its OWN session at
+    # the same time. Plain ":memory:" defaults to SingletonThreadPool (one
+    # shared connection per thread) — and SQLAlchemy picks that same pool
+    # for THIS url too by default (verified directly: `mode=memory` in the
+    # query string is enough to trigger it, shared-cache or not), so every
+    # session on this thread was still handed the exact same DBAPI
+    # connection, hitting "cannot start a transaction within a transaction"
+    # the moment a second session tried to BEGIN while the first's was still
+    # open.
+    #
+    # poolclass=QueuePool (explicit — NullPool was tried first and made
+    # things worse: it closes each connection immediately after use, and an
+    # in-memory shared-cache SQLite DB is garbage-collected the moment zero
+    # connections reference it, so the schema/data vanished between uses).
+    # QueuePool keeps a real pool of open connections, handing out a
+    # genuinely different one for a concurrent/nested checkout while never
+    # letting the connection count hit zero — cache=shared is what keeps all
+    # of those separate connections seeing the same in-memory data —
+    # separate transactions, same data, matching how production's real
+    # connection pool (SQL Server) behaves.
+    #
+    # A unique DB name per fixture invocation matters here, not just
+    # ":memory:" — shared-cache in-memory SQLite DBs are identified by name
+    # and stay alive as long as ANY connection to that name exists anywhere
+    # in the process; reusing the same bare name across test runs would risk
+    # leaking a previous test's rows into a "fresh" fixture.
+    db_name = f"test_{uuid.uuid4().hex}"
+    engine = create_engine(
+        f"sqlite:///file:{db_name}?mode=memory&cache=shared&uri=true",
+        connect_args={"check_same_thread": False}, poolclass=QueuePool, pool_size=5,
+    )
 
     # pysqlite's own implicit transaction handling fights SQLAlchemy's
     # SAVEPOINT support (session.begin_nested(), used by
@@ -103,13 +157,25 @@ def fake_broker():
 
 @pytest.fixture
 def app(db_engine, session_factory, fake_broker, monkeypatch):
-    # Real backfill spawns a background thread that outlives most tests (this
-    # fixture's own db_engine gets disposed right after the test returns) —
-    # default it to a no-op here so every test doesn't race a background
-    # thread against teardown; feed/test_gap_fill.py tests the real function
-    # directly and unpatched.
-    monkeypatch.setattr("api.routes_symbols.spawn_backfill", lambda *a, **kw: None)
-    monkeypatch.setattr("feed.bootstrap._backfill_all", lambda *a, **kw: None)
+    # spawn_backfill_then_subscribe normally spawns a real background thread
+    # (production behavior) — deliberately NOT done here. A daemon thread
+    # left running past a test's own teardown, touching SQLite (not
+    # thread-safe at the C level for every access pattern even with
+    # check_same_thread=False) right as the *next* test's db_engine fixture
+    # is being created/disposed, produced a genuine interpreter crash
+    # (not a catchable exception) roughly 1 run in 8 — a real flake risk
+    # worth avoiding in the shared fixture rather than chasing further.
+    # Running backfill_then_subscribe directly instead (no thread) exercises
+    # the exact same logic synchronously; db_engine's shared-cache setup
+    # already gives it a genuinely separate connection from the request's
+    # own g.db_session (which is what actually fixed the original "cannot
+    # start a transaction within a transaction" error — not the threading).
+    monkeypatch.setattr("api.routes_symbols.spawn_backfill_then_subscribe", backfill_then_subscribe)
+
+    # _hydrate/_backfill_and_subscribe_all never actually run in any test
+    # using this fixture (testing=True skips start_feed entirely in
+    # create_app), so nothing to patch there; feed/test_bootstrap.py's own
+    # aggregator tests call _hydrate directly, unpatched.
 
     flask_app = create_app(
         broker=fake_broker, engine=db_engine, session_factory=session_factory,

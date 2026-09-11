@@ -124,6 +124,35 @@ def spawn_backfill(symbol, exchange_segment, security_id, rest_broker, session_f
     ).start()
 
 
+def backfill_then_subscribe(instrument, rest_broker, session_factory, aggregator, market_feed) -> None:
+    """Backfill a symbol's historical candles BEFORE subscribing it to the
+    live feed, not after (which is what subscribe-then-backfill used to do).
+
+    Ordering matters here: if the live feed is already subscribed while
+    backfill is still working through older minutes, a live tick can finalize
+    "now"'s 1-min candle before the backfill has ingested everything before
+    it — ingest_historical_1min (and the 3-/5-min rollup logic built on top
+    of it) assumes candles always arrive in chronological order, and a
+    historical candle landing after a newer live one breaks that assumption.
+    Doing backfill first, then subscribing, means the first live tick that
+    can possibly arrive is already >= the backfill's own cutoff — no
+    interleaving is possible by construction, not by locking.
+    """
+    backfill_missing_candles(
+        instrument["symbol"], instrument["exchange_segment"], instrument["security_id"],
+        rest_broker, session_factory, aggregator,
+    )
+    market_feed.subscribe(instrument)
+
+
+def spawn_backfill_then_subscribe(instrument, rest_broker, session_factory, aggregator, market_feed) -> None:
+    threading.Thread(
+        target=backfill_then_subscribe,
+        args=(instrument, rest_broker, session_factory, aggregator, market_feed),
+        daemon=True, name=f"add-symbol-{instrument['symbol']}",
+    ).start()
+
+
 def _last_known_ts(session_factory, symbol, exchange_segment):
     """Latest 1-min candle timestamp for *today* only — candles_today has no EOD
     archiver yet (deferred, see CLAUDE.md), so a prior day's rows can still be

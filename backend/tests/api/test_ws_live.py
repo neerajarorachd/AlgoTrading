@@ -1,8 +1,11 @@
-def test_subscribed_room_receives_broadcast_tick(client, app, fake_broker):
+def test_subscribed_room_receives_broadcast_tick(client, app, fake_broker, wait_until):
     socketio = app.extensions["socketio"]
     market_feed = app.extensions["market_feed"]
 
     client.post("/api/symbols", json={"symbol": "RELIANCE", "exchange": "NSE", "segment": "EQUITY"})
+    # subscribe happens after backfill, on a background thread — wait for
+    # fake_broker.callback to actually be set before using it
+    assert wait_until(lambda: fake_broker.callback is not None)
 
     ws_client = socketio.test_client(app, flask_test_client=client)
     ws_client.emit("subscribe_ticks", {"rooms": ["NSE:RELIANCE"]})
@@ -24,9 +27,10 @@ def test_subscribed_room_receives_broadcast_tick(client, app, fake_broker):
     ws_client.disconnect()
 
 
-def test_unsubscribed_room_receives_nothing(client, app, fake_broker):
+def test_unsubscribed_room_receives_nothing(client, app, fake_broker, wait_until):
     socketio = app.extensions["socketio"]
     client.post("/api/symbols", json={"symbol": "TCS", "exchange": "NSE", "segment": "EQUITY"})
+    assert wait_until(lambda: fake_broker.callback is not None)
 
     ws_client = socketio.test_client(app, flask_test_client=client)
     ws_client.get_received()  # no subscribe_ticks call at all
