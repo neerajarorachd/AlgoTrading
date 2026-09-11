@@ -92,6 +92,22 @@ export default function MarketWatch() {
     }
   }, [openSymbols])
 
+  // server-side room membership is per-connection — a dropped/reconnected
+  // socket (e.g. the backend restarting) loses it silently, and the
+  // symbols-sync effect above only (re)subscribes on a *symbol list* change,
+  // not on reconnect, so ticks/depth would otherwise just stop arriving until
+  // a full page refresh. Re-join everything currently desired on every
+  // (re)connect instead — join_room is idempotent, so this is a safe no-op
+  // on the very first connect too (joinedRooms is still empty then).
+  useEffect(() => {
+    const socket = getSocket()
+    function handleConnect() {
+      subscribeRooms([...joinedRooms.current])
+    }
+    socket.on('connect', handleConnect)
+    return () => socket.off('connect', handleConnect)
+  }, [])
+
   useEffect(() => {
     const socket = getSocket()
     const onTick = (payload) => setLiveTicks((prev) => ({ ...prev, [payload.symbol]: payload }))
