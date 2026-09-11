@@ -90,6 +90,41 @@ SINGLE_CANDLE_PATTERNS: Dict[str, Callable[[Candle], bool]] = {
 }
 
 
+# --------------------------------------------------------------------- intensity
+
+def hammer_intensity(c: Candle) -> float:
+    """How strongly a candle qualifies as a hammer: lower wick / body. The
+    detector's own qualifying threshold is 2.0 (wick >= 2x body), so
+    anything that matched at all already scores >= 2 here — higher means a
+    more pronounced hammer, exactly the "more than double is good, more and
+    more increases intensity" rule as stated."""
+    body = _body(c)
+    return _lower_wick(c) / body if body > 0 else float("inf")
+
+
+def shooting_star_intensity(c: Candle) -> float:
+    """Shooting star's mirror of hammer_intensity: upper wick / body."""
+    body = _body(c)
+    return _upper_wick(c) / body if body > 0 else float("inf")
+
+
+def doji_intensity(c: Candle) -> float:
+    """How strongly a candle qualifies as a doji: range / body. The
+    detector's qualifying threshold is body <= 10% of range, i.e. this ratio
+    >= 10 — higher means the open/close sit closer together, a "more
+    perfect" doji."""
+    body = _body(c)
+    rng = _range(c)
+    return rng / body if body > 0 else float("inf")
+
+
+SINGLE_CANDLE_INTENSITY: Dict[str, Callable[[Candle], float]] = {
+    "doji": doji_intensity,
+    "hammer": hammer_intensity,
+    "shooting_star": shooting_star_intensity,
+}
+
+
 # --------------------------------------------------------------------- multi-candle patterns
 
 def detect_three_white_soldiers(candles: List[Candle]) -> bool:

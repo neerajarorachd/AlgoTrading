@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from activity_engine import (
     ActivityEngine,
     detect_doji,
@@ -7,7 +9,10 @@ from activity_engine import (
     detect_shooting_star,
     detect_three_black_crows,
     detect_three_white_soldiers,
+    doji_intensity,
+    hammer_intensity,
     seed_pattern_definitions,
+    shooting_star_intensity,
 )
 from brokers.models import Candle
 from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
@@ -60,6 +65,37 @@ def test_detect_shooting_star_true_for_small_bottom_body_long_upper_wick():
 def test_detect_shooting_star_false_for_a_hammer_shape():
     c = _candle(0, open=100.0, high=100.6, low=97.0, close=100.5)
     assert detect_shooting_star(c) is False
+
+
+# --------------------------------------------------------------------- intensity
+
+def test_hammer_intensity_is_wick_to_body_ratio():
+    # body=0.5, lower_wick=3.0 -> 6x — a strong hammer, well past the 2x floor
+    c = _candle(0, open=100.0, high=100.6, low=97.0, close=100.5)
+    assert hammer_intensity(c) == 6.0
+
+
+def test_hammer_intensity_higher_for_a_longer_wick_same_body():
+    weak = _candle(0, open=100.0, high=100.6, low=98.0, close=100.5)  # wick=2.0, body=0.5 -> 4x
+    strong = _candle(1, open=100.0, high=100.6, low=95.0, close=100.5)  # wick=5.0, body=0.5 -> 10x
+    assert hammer_intensity(strong) > hammer_intensity(weak)
+
+
+def test_shooting_star_intensity_is_wick_to_body_ratio():
+    # body=0.1, upper_wick=3.4 -> 34x
+    c = _candle(0, open=100.0, high=103.5, low=99.9, close=100.1)
+    assert shooting_star_intensity(c) == pytest.approx(34.0)
+
+
+def test_doji_intensity_is_range_to_body_ratio():
+    # body=0.05, range=2.0 -> 40x
+    c = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
+    assert doji_intensity(c) == pytest.approx(40.0)
+
+
+def test_doji_intensity_is_infinite_for_a_perfect_doji():
+    c = _candle(0, open=100.0, high=101.0, low=99.0, close=100.0)  # open == close exactly
+    assert doji_intensity(c) == float("inf")
 
 
 # --------------------------------------------------------------------- multi-candle detectors
