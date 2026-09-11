@@ -14,25 +14,15 @@ function changeCell(absolute, percentage) {
 
 export default function SymbolTable({
   symbols, liveTicks, backfillStatus, openSymbols, onToggleOpen, onRemove,
-  focusedIndex, onFocusedIndexChange, checkedIds, onToggleChecked, onToggleCheckAll,
+  focusedIndex, onFocusedIndexChange,
 }) {
   const containerRef = useRef(null)
-  const headerCheckboxRef = useRef(null)
 
   useEffect(() => {
     if (focusedIndex < 0 || !containerRef.current) return
     const row = containerRef.current.querySelectorAll('tbody tr')[focusedIndex]
     row?.scrollIntoView({ block: 'nearest' })
   }, [focusedIndex])
-
-  const allChecked = symbols.length > 0 && symbols.every((s) => checkedIds.has(s.id))
-  const someChecked = symbols.some((s) => checkedIds.has(s.id))
-
-  useEffect(() => {
-    if (headerCheckboxRef.current) {
-      headerCheckboxRef.current.indeterminate = someChecked && !allChecked
-    }
-  }, [someChecked, allChecked])
 
   function handleKeyDown(e) {
     if (symbols.length === 0) return
@@ -61,15 +51,6 @@ export default function SymbolTable({
       <table border="1" cellPadding="6" style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead style={{ position: 'sticky', top: 0, background: 'white' }}>
           <tr>
-            <th>
-              <input
-                ref={headerCheckboxRef}
-                type="checkbox"
-                checked={allChecked}
-                onChange={onToggleCheckAll}
-                title="Select all"
-              />
-            </th>
             <th>Symbol</th><th>Exchange</th><th>LTP</th><th>Chg</th><th>Chg %</th><th>Dir</th>
             <th>Gap</th><th>Day</th><th>Candle</th><th></th>
           </tr>
@@ -93,14 +74,6 @@ export default function SymbolTable({
                   opacity: atCapacity ? 0.6 : 1,
                 }}
               >
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={checkedIds.has(row.id)}
-                    onChange={() => onToggleChecked(row.id)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </td>
                 <td>
                   {row.symbol}
                   {status && status.status !== 'done' && (
@@ -130,7 +103,7 @@ export default function SymbolTable({
             )
           })}
           {symbols.length === 0 && (
-            <tr><td colSpan={11} style={{ textAlign: 'center', color: '#888' }}>No instruments registered yet</td></tr>
+            <tr><td colSpan={10} style={{ textAlign: 'center', color: '#888' }}>No instruments registered yet</td></tr>
           )}
         </tbody>
       </table>

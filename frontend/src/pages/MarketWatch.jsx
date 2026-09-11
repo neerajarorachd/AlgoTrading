@@ -8,6 +8,16 @@ import CandleChart from '../components/CandleChart.jsx'
 import SidePanel from '../components/SidePanel.jsx'
 
 const MAX_OPEN_CHARTS = 4
+const OPEN_SYMBOL_IDS_KEY = 'marketWatch.openSymbolIds'
+
+function loadStoredOpenIds() {
+  try {
+    const raw = localStorage.getItem(OPEN_SYMBOL_IDS_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
 
 export default function MarketWatch() {
   const [symbols, setSymbols] = useState([])
@@ -16,11 +26,11 @@ export default function MarketWatch() {
   const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
   const [openSymbols, setOpenSymbols] = useState([]) // up to MAX_OPEN_CHARTS rows
   const [focusedIndex, setFocusedIndex] = useState(-1)
-  const [checkedIds, setCheckedIds] = useState(new Set())
   const [listCollapsed, setListCollapsed] = useState(false)
   const [dragIndex, setDragIndex] = useState(null)
   const [multiOpenMode, setMultiOpenMode] = useState(true)
   const joinedRooms = useRef(new Set())
+  const restoredOpenSymbols = useRef(false)
 
   const refresh = useCallback(() => {
     listSymbols().then(setSymbols).catch(() => {})
@@ -44,7 +54,28 @@ export default function MarketWatch() {
     const stillValidIds = new Set(symbols.map((s) => s.id))
     setOpenSymbols((prev) => prev.filter((s) => stillValidIds.has(s.id)))
     setFocusedIndex((prev) => (prev >= symbols.length ? symbols.length - 1 : prev))
+
+    // restore the chart selection from a previous page load, once, after the
+    // real symbol rows are available to match stored ids against
+    if (!restoredOpenSymbols.current && symbols.length > 0) {
+      restoredOpenSymbols.current = true
+      const storedIds = loadStoredOpenIds()
+      if (storedIds.length > 0) {
+        const byId = new Map(symbols.map((s) => [s.id, s]))
+        const restored = storedIds.map((id) => byId.get(id)).filter(Boolean).slice(0, MAX_OPEN_CHARTS)
+        if (restored.length > 0) setOpenSymbols(restored)
+      }
+    }
   }, [symbols])
+
+  // persist the chart selection so it survives a page refresh
+  useEffect(() => {
+    try {
+      localStorage.setItem(OPEN_SYMBOL_IDS_KEY, JSON.stringify(openSymbols.map((s) => s.id)))
+    } catch {
+      // ignore — e.g. private browsing with storage disabled
+    }
+  }, [openSymbols])
 
   useEffect(() => {
     const socket = getSocket()
@@ -105,50 +136,6 @@ export default function MarketWatch() {
   async function handleRemove(id) {
     await removeSymbol(id)
     setOpenSymbols((prev) => prev.filter((s) => s.id !== id))
-    setCheckedIds((prev) => {
-      if (!prev.has(id)) return prev
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
-    refresh()
-  }
-
-  function handleToggleChecked(id) {
-    setCheckedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  function handleToggleCheckAll() {
-    setCheckedIds((prev) => {
-      const allChecked = symbols.length > 0 && symbols.every((s) => prev.has(s.id))
-      return allChecked ? new Set() : new Set(symbols.map((s) => s.id))
-    })
-  }
-
-  function handleOpenSelected() {
-    setOpenSymbols((prev) => {
-      const next = [...prev]
-      for (const row of symbols) {
-        if (!checkedIds.has(row.id)) continue
-        if (next.length >= MAX_OPEN_CHARTS) break
-        if (!next.some((s) => s.id === row.id)) next.push(row)
-      }
-      return next
-    })
-  }
-
-  async function handleRemoveSelected() {
-    const ids = [...checkedIds]
-    for (const id of ids) {
-      await removeSymbol(id)
-    }
-    setOpenSymbols((prev) => prev.filter((s) => !checkedIds.has(s.id)))
-    setCheckedIds(new Set())
     refresh()
   }
 
@@ -190,13 +177,6 @@ export default function MarketWatch() {
       {!listCollapsed && (
         <>
           <SymbolRegisterForm onRegistered={refresh} />
-          {checkedIds.size > 0 && (
-            <div style={{ margin: '8px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span>{checkedIds.size} selected</span>
-              <button onClick={handleOpenSelected}>Open selected</button>
-              <button onClick={handleRemoveSelected}>Remove selected</button>
-            </div>
-          )}
           <SymbolTable
             symbols={symbols}
             liveTicks={liveTicks}
@@ -206,9 +186,6 @@ export default function MarketWatch() {
             onRemove={handleRemove}
             focusedIndex={focusedIndex}
             onFocusedIndexChange={setFocusedIndex}
-            checkedIds={checkedIds}
-            onToggleChecked={handleToggleChecked}
-            onToggleCheckAll={handleToggleCheckAll}
           />
         </>
       )}
