@@ -62,12 +62,26 @@ registered instrument:
   "absolute_change": 26.25,
   "percentage_change": 0.93,
   "direction": "up",
-  "ts": "2026-09-10T09:16:02Z"
+  "ts": "2026-09-10T09:16:02Z",
+  "gap_absolute": 12.5,
+  "gap_percentage": 0.44,
+  "day_change_absolute": 8.15,
+  "day_change_percentage": 0.29,
+  "candle_change_absolute": 1.2,
+  "candle_change_percentage": 0.04
 }
 ```
 
 The backend computes `absolute_change`, `percentage_change`, and `direction`.
 The frontend only renders the normalized market state.
+
+Three additional change pairs, added 2026-09-11 (`backend/market_feed.py`'s
+`_add_change_metrics`), each `None` until its input is known:
+- `gap_*` — today's open vs. `previous_close` (the opening gap).
+- `day_change_*` — LTP vs. today's open (intraday move since open).
+- `candle_change_*` — LTP vs. the last closed 1-min candle's close (very-short-
+  term momentum). `None` until at least one 1-min candle has closed for that
+  instrument (live or backfilled).
 
 ## Azure VM / Storage Notes
 

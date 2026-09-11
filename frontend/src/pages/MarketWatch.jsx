@@ -6,11 +6,15 @@ import SymbolTable from '../components/SymbolTable.jsx'
 import DepthPanel from '../components/DepthPanel.jsx'
 import CandleChart from '../components/CandleChart.jsx'
 
+const MAX_OPEN_CHARTS = 4
+
 export default function MarketWatch() {
   const [symbols, setSymbols] = useState([])
   const [liveTicks, setLiveTicks] = useState({}) // symbol -> tick payload
   const [liveDepth, setLiveDepth] = useState({}) // symbol -> depth payload
-  const [selected, setSelected] = useState(null)
+  const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
+  const [openSymbols, setOpenSymbols] = useState([]) // up to MAX_OPEN_CHARTS rows
+  const [focusedIndex, setFocusedIndex] = useState(-1)
   const joinedRooms = useRef(new Set())
 
   const refresh = useCallback(() => {
@@ -30,41 +34,99 @@ export default function MarketWatch() {
     subscribeRooms(toJoin)
     unsubscribeRooms(toLeave)
     joinedRooms.current = desired
+
+    // drop any open charts / focus for symbols that got removed elsewhere
+    const stillValidIds = new Set(symbols.map((s) => s.id))
+    setOpenSymbols((prev) => prev.filter((s) => stillValidIds.has(s.id)))
+    setFocusedIndex((prev) => (prev >= symbols.length ? symbols.length - 1 : prev))
   }, [symbols])
 
   useEffect(() => {
     const socket = getSocket()
     const onTick = (payload) => setLiveTicks((prev) => ({ ...prev, [payload.symbol]: payload }))
     const onDepth = (payload) => setLiveDepth((prev) => ({ ...prev, [payload.symbol]: payload }))
+    const onBackfillStatus = (payload) =>
+      setBackfillStatus((prev) => ({ ...prev, [payload.symbol]: payload }))
     socket.on('tick', onTick)
     socket.on('depth', onDepth)
+    socket.on('backfill_status', onBackfillStatus)
     return () => {
       socket.off('tick', onTick)
       socket.off('depth', onDepth)
+      socket.off('backfill_status', onBackfillStatus)
     }
   }, [])
 
+  // clear a "done" backfill status a few seconds after it lands, so the table
+  // doesn't permanently show a stale "Backfilled N candles" note
+  useEffect(() => {
+    const timers = Object.entries(backfillStatus)
+      .filter(([, status]) => status.status === 'done')
+      .map(([symbol]) =>
+        setTimeout(() => {
+          setBackfillStatus((prev) => {
+            const next = { ...prev }
+            delete next[symbol]
+            return next
+          })
+        }, 4000),
+      )
+    return () => timers.forEach(clearTimeout)
+  }, [backfillStatus])
+
+  function handleToggleOpen(row) {
+    setOpenSymbols((prev) => {
+      const isOpen = prev.some((s) => s.id === row.id)
+      if (isOpen) return prev.filter((s) => s.id !== row.id)
+      if (prev.length >= MAX_OPEN_CHARTS) return prev // silently ignore — row is shown as at-capacity
+      return [...prev, row]
+    })
+  }
+
   async function handleRemove(id) {
     await removeSymbol(id)
-    if (selected?.id === id) setSelected(null)
+    setOpenSymbols((prev) => prev.filter((s) => s.id !== id))
     refresh()
   }
 
   return (
-    <div style={{ fontFamily: 'sans-serif', padding: 16, maxWidth: 1000, margin: '0 auto' }}>
+    <div style={{ fontFamily: 'sans-serif', padding: 16, maxWidth: 1200, margin: '0 auto' }}>
+      <style>{`
+        .chart-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 24px;
+        }
+        @media (max-width: 700px) {
+          .chart-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
       <h1>Market Watch</h1>
       <SymbolRegisterForm onRegistered={refresh} />
       <SymbolTable
         symbols={symbols}
         liveTicks={liveTicks}
-        selected={selected}
-        onSelect={setSelected}
+        backfillStatus={backfillStatus}
+        openSymbols={openSymbols}
+        onToggleOpen={handleToggleOpen}
         onRemove={handleRemove}
+        focusedIndex={focusedIndex}
+        onFocusedIndexChange={setFocusedIndex}
       />
-      {selected && (
-        <div style={{ display: 'flex', gap: 24, marginTop: 24 }}>
-          <DepthPanel depth={liveDepth[selected.symbol]} />
-          <CandleChart instrument={selected} />
+      {openSymbols.length > 0 && (
+        <div className="chart-grid" style={{ marginTop: 24 }}>
+          {openSymbols.map((instrument) => (
+            <div key={instrument.id} style={{ border: '1px solid #eee', padding: 12, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <strong>{instrument.symbol}</strong>
+                <button onClick={() => handleToggleOpen(instrument)} title="Close chart">×</button>
+              </div>
+              <CandleChart instrument={instrument} />
+              <DepthPanel depth={liveDepth[instrument.symbol]} />
+            </div>
+          ))}
         </div>
       )}
     </div>

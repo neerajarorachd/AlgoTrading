@@ -12,7 +12,9 @@ export default function SymbolRegisterForm({ onRegistered }) {
   const [submitting, setSubmitting] = useState(false)
   const [suggestions, setSuggestions] = useState([])
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const debounceRef = useRef(null)
+  const listRef = useRef(null)
 
   useEffect(() => {
     clearTimeout(debounceRef.current)
@@ -23,16 +25,43 @@ export default function SymbolRegisterForm({ onRegistered }) {
     }
     debounceRef.current = setTimeout(() => {
       searchInstruments(query, exchange, segment)
-        .then(setSuggestions)
+        .then((results) => {
+          setSuggestions(results)
+          setHighlightedIndex(results.length ? 0 : -1)
+        })
         .catch(() => setSuggestions([]))
     }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(debounceRef.current)
   }, [symbol, exchange, segment])
 
+  useEffect(() => {
+    if (highlightedIndex < 0 || !listRef.current) return
+    const item = listRef.current.children[highlightedIndex]
+    item?.scrollIntoView({ block: 'nearest' })
+  }, [highlightedIndex])
+
   function selectSuggestion(match) {
     setSymbol(match.symbol) // the real trading symbol, e.g. NATIONALUM — not whatever alias was typed
     setSuggestions([])
     setShowSuggestions(false)
+    setHighlightedIndex(-1)
+  }
+
+  function handleKeyDown(e) {
+    if (!showSuggestions || suggestions.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlightedIndex((i) => (i + 1) % suggestions.length)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlightedIndex((i) => (i - 1 + suggestions.length) % suggestions.length)
+    } else if (e.key === 'Enter' && highlightedIndex >= 0) {
+      e.preventDefault()
+      selectSuggestion(suggestions[highlightedIndex])
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false)
+      setHighlightedIndex(-1)
+    }
   }
 
   async function handleSubmit(e) {
@@ -61,20 +90,26 @@ export default function SymbolRegisterForm({ onRegistered }) {
           onChange={(e) => setSymbol(e.target.value)}
           onFocus={() => setShowSuggestions(true)}
           onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+          onKeyDown={handleKeyDown}
         />
         {showSuggestions && suggestions.length > 0 && (
           <ul
+            ref={listRef}
             style={{
               position: 'absolute', top: '100%', left: 0, zIndex: 10, margin: 0, padding: 4,
               listStyle: 'none', background: 'white', border: '1px solid #ccc', width: 320,
               maxHeight: 220, overflowY: 'auto',
             }}
           >
-            {suggestions.map((match) => (
+            {suggestions.map((match, index) => (
               <li
                 key={match.security_id}
                 onMouseDown={() => selectSuggestion(match)}
-                style={{ padding: '4px 6px', cursor: 'pointer' }}
+                onMouseEnter={() => setHighlightedIndex(index)}
+                style={{
+                  padding: '4px 6px', cursor: 'pointer',
+                  background: index === highlightedIndex ? '#eef' : undefined,
+                }}
               >
                 <strong>{match.symbol}</strong>
                 {match.custom_symbol && match.custom_symbol !== match.symbol && (
