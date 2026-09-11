@@ -29,6 +29,9 @@ export default function MarketWatch() {
   const [listCollapsed, setListCollapsed] = useState(false)
   const [dragIndex, setDragIndex] = useState(null)
   const [multiOpenMode, setMultiOpenMode] = useState(true)
+  const [depthCollapsed, setDepthCollapsed] = useState(true)
+  const [fullscreenId, setFullscreenId] = useState(null)
+  const [fullscreenOrientation, setFullscreenOrientation] = useState('horizontal')
   const joinedRooms = useRef(new Set())
   const restoredOpenSymbols = useRef(false)
 
@@ -67,6 +70,14 @@ export default function MarketWatch() {
       }
     }
   }, [symbols])
+
+  // drop fullscreen if the card it points at is no longer open (closed,
+  // removed, or swapped out by a single-graph-mode stock change)
+  useEffect(() => {
+    if (fullscreenId !== null && !openSymbols.some((s) => s.id === fullscreenId)) {
+      setFullscreenId(null)
+    }
+  }, [openSymbols, fullscreenId])
 
   // persist the chart selection so it survives a page refresh — gated on the
   // restore attempt above having already run, otherwise the empty initial
@@ -154,6 +165,47 @@ export default function MarketWatch() {
     setDragIndex(null)
   }
 
+  const fullscreenInstrument = openSymbols.find((s) => s.id === fullscreenId) ?? null
+
+  if (fullscreenInstrument) {
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, background: 'white', zIndex: 1000,
+        padding: 16, display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
+        fontFamily: 'sans-serif',
+      }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+          <strong>{fullscreenInstrument.symbol}</strong>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => setFullscreenOrientation((o) => (o === 'horizontal' ? 'vertical' : 'horizontal'))}
+            >
+              {fullscreenOrientation === 'horizontal' ? 'Vertical layout' : 'Horizontal layout'}
+            </button>
+            <button onClick={() => setFullscreenId(null)}>← Back</button>
+          </div>
+        </div>
+        <div style={{
+          flex: '1 1 auto', minHeight: 0, display: 'flex',
+          flexDirection: fullscreenOrientation === 'horizontal' ? 'row' : 'column',
+        }}
+        >
+          <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0 }}>
+            <CandleChart instrument={fullscreenInstrument} fillHeight />
+          </div>
+          <SidePanel
+            collapsed={depthCollapsed}
+            onToggleCollapsed={setDepthCollapsed}
+            panels={[
+              { id: 'depth', label: 'Depth', content: <DepthPanel depth={liveDepth[fullscreenInstrument.symbol]} /> },
+            ]}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{ fontFamily: 'sans-serif', padding: 16, maxWidth: 1200, margin: '0 auto' }}>
       <style>{`
@@ -223,14 +275,18 @@ export default function MarketWatch() {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                 <strong style={{ cursor: 'grab' }} title="Drag to reorder">⠿ {instrument.symbol}</strong>
-                <button onClick={() => handleToggleOpen(instrument)} title="Close chart">×</button>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button onClick={() => setFullscreenId(instrument.id)} title="Fullscreen">⛶</button>
+                  <button onClick={() => handleToggleOpen(instrument)} title="Close chart">×</button>
+                </div>
               </div>
               <div style={{ display: 'flex', minWidth: 0 }}>
                 <div style={{ flex: '1 1 auto', minWidth: 0 }}>
                   <CandleChart instrument={instrument} />
                 </div>
                 <SidePanel
-                  defaultCollapsed
+                  collapsed={depthCollapsed}
+                  onToggleCollapsed={setDepthCollapsed}
                   panels={[
                     { id: 'depth', label: 'Depth', content: <DepthPanel depth={liveDepth[instrument.symbol]} /> },
                   ]}

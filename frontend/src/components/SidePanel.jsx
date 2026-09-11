@@ -5,20 +5,24 @@ import { useState } from 'react'
  * (today just "Depth", built to take more later: walkthroughs, order book, etc.
  * without changing this component). Clicking the already-active tab collapses
  * it back down to just the button bar; clicking a different tab switches to it.
+ *
+ * `collapsed`/`onToggleCollapsed` are controlled by the parent rather than kept
+ * as internal state, so the panel's open/closed state survives the card itself
+ * being unmounted and remounted (e.g. single-graph mode swapping which
+ * instrument occupies the one open card) instead of resetting every time.
  */
-export default function SidePanel({ panels, defaultCollapsed = false }) {
+export default function SidePanel({ panels, collapsed, onToggleCollapsed }) {
   const [activeId, setActiveId] = useState(panels[0]?.id ?? null)
-  const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
   if (panels.length === 0) return null
-  const active = panels.find((p) => p.id === activeId)
+  const active = panels.find((p) => p.id === activeId) ?? panels[0]
 
   function handleTabClick(panel) {
     if (panel.id === activeId && !collapsed) {
-      setCollapsed(true)
+      onToggleCollapsed(true)
     } else {
       setActiveId(panel.id)
-      setCollapsed(false)
+      onToggleCollapsed(false)
     }
   }
 

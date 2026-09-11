@@ -6,7 +6,7 @@ import { getSocket } from '../api/ws.js'
 const TIMEFRAMES = ['1min', '3min', '5min']
 const CHART_HEIGHT = 280
 
-export default function CandleChart({ instrument }) {
+export default function CandleChart({ instrument, fillHeight = false }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
@@ -15,7 +15,8 @@ export default function CandleChart({ instrument }) {
   useEffect(() => {
     if (!containerRef.current) return
     const chart = createChart(containerRef.current, {
-      width: containerRef.current.clientWidth, height: CHART_HEIGHT,
+      width: containerRef.current.clientWidth,
+      height: fillHeight ? containerRef.current.clientHeight || CHART_HEIGHT : CHART_HEIGHT,
       timeScale: { timeVisible: true, secondsVisible: false },
     })
     const series = chart.addCandlestickSeries()
@@ -24,10 +25,15 @@ export default function CandleChart({ instrument }) {
 
     // responsive: the chart's own canvas is fixed-size at creation, so it must
     // be told to resize whenever its container does (e.g. the grid reflowing
-    // between 3-per-row on desktop and 1-per-row on mobile)
+    // between 3-per-row on desktop and 1-per-row on mobile, or entering/leaving
+    // fullscreen where fillHeight lets it track the container's actual height
+    // instead of the fixed CHART_HEIGHT)
     const resizeObserver = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect?.width
-      if (width) chart.applyOptions({ width })
+      const rect = entries[0]?.contentRect
+      if (!rect) return
+      const options = { width: rect.width }
+      if (fillHeight && rect.height) options.height = rect.height
+      chart.applyOptions(options)
     })
     resizeObserver.observe(containerRef.current)
 
@@ -35,7 +41,7 @@ export default function CandleChart({ instrument }) {
       resizeObserver.disconnect()
       chart.remove()
     }
-  }, [])
+  }, [fillHeight])
 
   useEffect(() => {
     if (!instrument || !seriesRef.current) return
@@ -56,7 +62,13 @@ export default function CandleChart({ instrument }) {
   }, [instrument, timeframe])
 
   return (
-    <div style={{ width: '100%', minWidth: 0 }}>
+    <div style={{
+      width: '100%', minWidth: 0,
+      height: fillHeight ? '100%' : undefined,
+      display: fillHeight ? 'flex' : undefined,
+      flexDirection: fillHeight ? 'column' : undefined,
+    }}
+    >
       <div style={{ marginBottom: 8 }}>
         {TIMEFRAMES.map((tf) => (
           <button
@@ -68,7 +80,10 @@ export default function CandleChart({ instrument }) {
           </button>
         ))}
       </div>
-      <div ref={containerRef} style={{ width: '100%' }} />
+      <div
+        ref={containerRef}
+        style={{ width: '100%', flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}
+      />
     </div>
   )
 }
