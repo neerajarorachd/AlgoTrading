@@ -23,12 +23,17 @@ def start_feed(
     flush_hour_utc: int = _DEFAULT_FLUSH_HOUR_UTC,
     flush_minute_utc: int = _DEFAULT_FLUSH_MINUTE_UTC,
     socket_ready_timeout: float = 5.0,
+    rest_broker=None,
 ) -> None:
+    """`broker` opens/owns the live feed socket; `rest_broker` (defaults to the
+    same instance) is used for hydration's get_quote() calls — separate tokens
+    for each duty in the real app, same instance for both in tests."""
+    rest_broker = rest_broker if rest_broker is not None else broker
     thread = threading.Thread(target=_open_feed_socket, args=(broker, market_feed), daemon=True, name="broker-ws-feed")
     thread.start()
 
     _wait_for_socket_ready(broker, timeout=socket_ready_timeout)
-    _hydrate(broker, market_feed, session_factory)
+    _hydrate(rest_broker, market_feed, session_factory)
     _schedule_daily_flush(aggregator, flush_hour_utc, flush_minute_utc)
 
 
