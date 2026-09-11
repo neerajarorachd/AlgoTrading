@@ -5,6 +5,20 @@ import { getSocket } from '../api/ws.js'
 
 const TIMEFRAMES = ['1min', '3min', '5min']
 const CHART_HEIGHT = 280
+const IST_OFFSET_SECONDS = 5.5 * 60 * 60
+
+// NSE always trades in IST, regardless of the viewing browser's own
+// timezone — lightweight-charts otherwise formats time labels using the
+// browser's local timezone (via native Date getters), which showed raw
+// UTC hours here since this environment's browser timezone isn't IST.
+// Shifting by the fixed IST offset and reading back with UTC getters makes
+// the display deterministic instead of viewer-dependent.
+function formatIST(unixSeconds) {
+  const shifted = new Date((unixSeconds + IST_OFFSET_SECONDS) * 1000)
+  const hh = String(shifted.getUTCHours()).padStart(2, '0')
+  const mm = String(shifted.getUTCMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
+}
 
 export default function CandleChart({ instrument, fillHeight = false }) {
   const containerRef = useRef(null)
@@ -17,7 +31,8 @@ export default function CandleChart({ instrument, fillHeight = false }) {
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height: fillHeight ? containerRef.current.clientHeight || CHART_HEIGHT : CHART_HEIGHT,
-      timeScale: { timeVisible: true, secondsVisible: false },
+      timeScale: { timeVisible: true, secondsVisible: false, tickMarkFormatter: formatIST },
+      localization: { timeFormatter: formatIST },
     })
     const series = chart.addCandlestickSeries()
     chartRef.current = chart
