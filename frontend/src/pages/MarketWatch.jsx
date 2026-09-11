@@ -68,8 +68,12 @@ export default function MarketWatch() {
     }
   }, [symbols])
 
-  // persist the chart selection so it survives a page refresh
+  // persist the chart selection so it survives a page refresh — gated on the
+  // restore attempt above having already run, otherwise the empty initial
+  // state (before symbols load) would immediately overwrite last session's
+  // saved selection with []
   useEffect(() => {
+    if (!restoredOpenSymbols.current) return
     try {
       localStorage.setItem(OPEN_SYMBOL_IDS_KEY, JSON.stringify(openSymbols.map((s) => s.id)))
     } catch {
