@@ -234,8 +234,14 @@ Current conventions in use:
   planning round; see "Broker token pool" above for the current one.
   - `subscribed_symbols`/`candles_today` tables (`backend/db/models.py` +
     `session.py`), live on `trading_db`. Deferred: `candles_historical`,
-    `last_fetch_status`, `candle_gap_queue`, EOD archiver, gap scanner,
-    Alembic.
+    `last_fetch_status`, `candle_gap_queue` table, EOD archiver, Alembic.
+  - Gap-fill is **done** in a lighter form than the original LLD's queue+table
+    design: `backend/feed/gap_fill.py`'s `backfill_missing_candles` runs once
+    per symbol at subscribe/hydration time (`spawn_backfill`), and
+    `start_gap_scanner` re-runs the same idempotent check on a recurring
+    5-minute timer for every active symbol (skipped outside market hours) —
+    catches gaps from a WS drop/reconnect that the one-shot backfill can't
+    see, without the separate queue/worker table machinery.
   - `backend/feed/candle_aggregator.py` + `candle_persistence.py` — tick ->
     1/3/5-min candles, boundary-driven rollup, UTC throughout.
   - `backend/market_feed.py` wires depth (`on_depth`, via
