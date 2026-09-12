@@ -13,7 +13,9 @@ from activity_engine import (
     detect_bullish_engulfing,
     detect_dark_cloud_cover,
     detect_doji,
+    detect_evening_star,
     detect_hammer,
+    detect_morning_star,
     detect_piercing_line,
     detect_price_vwap_divergence,
     detect_shooting_star,
@@ -24,7 +26,9 @@ from activity_engine import (
     detect_vwap_gap_fill,
     doji_intensity,
     engulfing_intensity,
+    evening_star_intensity,
     hammer_intensity,
+    morning_star_intensity,
     piercing_dark_cloud_intensity,
     seed_pattern_definitions,
     shooting_star_intensity,
@@ -245,6 +249,72 @@ def test_detect_three_black_crows_true_for_a_steady_decline():
     ]
     assert detect_three_black_crows(candles) is True
     assert detect_three_white_soldiers(candles) is False
+
+
+def test_detect_morning_star_true_for_a_gapped_reversal():
+    candles = [
+        _candle(0, open=110.0, high=110.5, low=99.5, close=100.0),
+        _candle(1, open=98.0, high=99.0, low=97.5, close=98.5),  # star, gaps below a's close
+        _candle(2, open=99.0, high=108.5, low=98.5, close=108.0),  # closes past a's midpoint (105)
+    ]
+    assert detect_morning_star(candles) is True
+    assert detect_evening_star(candles) is False
+
+
+def test_detect_morning_star_false_when_star_does_not_gap_down():
+    candles = [
+        _candle(0, open=110.0, high=110.5, low=99.5, close=100.0),
+        _candle(1, open=101.0, high=102.0, low=100.5, close=102.0),  # overlaps a's close
+        _candle(2, open=99.0, high=108.5, low=98.5, close=108.0),
+    ]
+    assert detect_morning_star(candles) is False
+
+
+def test_detect_morning_star_false_when_third_candle_stops_short_of_midpoint():
+    candles = [
+        _candle(0, open=110.0, high=110.5, low=99.5, close=100.0),
+        _candle(1, open=98.0, high=99.0, low=97.5, close=98.5),
+        _candle(2, open=99.0, high=102.5, low=98.5, close=102.0),  # below midpoint (105)
+    ]
+    assert detect_morning_star(candles) is False
+
+
+def test_detect_evening_star_true_for_a_gapped_reversal():
+    candles = [
+        _candle(0, open=100.0, high=110.5, low=99.5, close=110.0),
+        _candle(1, open=111.5, high=112.5, low=111.0, close=112.0),  # star, gaps above a's close
+        _candle(2, open=111.0, high=111.5, low=101.5, close=102.0),  # closes past a's midpoint (105)
+    ]
+    assert detect_evening_star(candles) is True
+    assert detect_morning_star(candles) is False
+
+
+def test_detect_evening_star_false_when_star_does_not_gap_up():
+    candles = [
+        _candle(0, open=100.0, high=110.5, low=99.5, close=110.0),
+        _candle(1, open=109.0, high=110.0, low=108.5, close=108.0),  # overlaps a's close
+        _candle(2, open=111.0, high=111.5, low=101.5, close=102.0),
+    ]
+    assert detect_evening_star(candles) is False
+
+
+def test_morning_star_and_evening_star_intensity():
+    a_body, half_body = 10.0, 5.0
+    midpoint = 105.0
+    # close exactly at a's own open (110) is a full reversal — intensity 1.0
+    candles = [
+        _candle(0, open=110.0, high=110.5, low=99.5, close=100.0),
+        _candle(1, open=98.0, high=99.0, low=97.5, close=98.5),
+        _candle(2, open=99.0, high=110.5, low=98.5, close=110.0),
+    ]
+    assert morning_star_intensity(candles) == pytest.approx((110.0 - midpoint) / half_body)
+
+    candles_mirror = [
+        _candle(0, open=100.0, high=110.5, low=99.5, close=110.0),
+        _candle(1, open=111.5, high=112.5, low=111.0, close=112.0),
+        _candle(2, open=111.0, high=111.5, low=99.5, close=100.0),
+    ]
+    assert evening_star_intensity(candles_mirror) == pytest.approx((midpoint - 100.0) / half_body)
 
 
 # --------------------------------------------------------------------- Bollinger Bands (pure)
@@ -522,6 +592,29 @@ def test_engine_detects_three_white_soldiers_across_calls(session_factory):
     with session_factory() as session:
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "three_white_soldiers" in activities
+
+
+def test_engine_detects_morning_star_across_calls(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    candles = [
+        _candle(0, open=110.0, high=110.5, low=99.5, close=100.0),
+        _candle(1, open=98.0, high=99.0, low=97.5, close=98.5),
+        _candle(2, open=99.0, high=108.5, low=98.5, close=108.0),
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "morning_star" in activities
 
 
 def test_engine_detects_bb_squeeze_through_on_candle_closed(session_factory):

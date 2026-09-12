@@ -2,14 +2,15 @@
 candle closes, and persists them to instrument_activity. Covers, so far:
 single-candle shape patterns (doji, hammer, shooting star), two-candle
 patterns (bullish/bearish engulfing, piercing line, dark cloud cover,
-tweezer top/bottom), one three-candle pattern pair (three white soldiers /
-three black crows), and price-action/indicator signals (Bollinger Band
-squeeze/widening, price stretching away from VWAP, price reverting back to
-fill a VWAP gap). Larger multi-bar chart formations (double top/bottom, head
-and shoulders, flags, triangles, HH-HL trend structure, etc.) need
-swing-high/swing-low detection as a foundation and aren't built yet. MACD
-crossover, MA21/MA50 crossover, and outcome tracking (what happened N
-candles after an activity) are deliberately not built yet either.
+tweezer top/bottom), three-candle patterns (three white soldiers / three
+black crows, morning star / evening star), and price-action/indicator
+signals (Bollinger Band squeeze/widening, price stretching away from VWAP,
+price reverting back to fill a VWAP gap). Larger multi-bar chart formations
+(double top/bottom, head and shoulders, flags, triangles, HH-HL trend
+structure, etc.) need swing-high/swing-low detection as a foundation and
+aren't built yet. MACD crossover, MA21/MA50 crossover, and outcome tracking
+(what happened N candles after an activity) are deliberately not built yet
+either.
 """
 from __future__ import annotations
 
@@ -189,6 +190,73 @@ def detect_three_black_crows(candles: List[Candle]) -> bool:
     return True
 
 
+def detect_morning_star(candles: List[Candle]) -> bool:
+    """Large bearish candle, then a small-bodied "star" that gaps below its
+    close (indecision), then a large bullish candle closing back above the
+    midpoint of the first candle's body — a bullish reversal."""
+    if len(candles) < 3:
+        return False
+    a, b, c = candles[-3], candles[-2], candles[-1]
+    if not (_is_bearish(a) and _is_bullish(c)):
+        return False
+    body_a, body_c = _body(a), _body(c)
+    if body_a <= 0 or body_c <= 0:
+        return False
+    if _body(b) > 0.3 * body_a:
+        return False
+    if max(b.open, b.close) >= a.close:
+        return False
+    midpoint_a = (a.open + a.close) / 2
+    return c.close > midpoint_a
+
+
+def detect_evening_star(candles: List[Candle]) -> bool:
+    """Morning star's bearish mirror."""
+    if len(candles) < 3:
+        return False
+    a, b, c = candles[-3], candles[-2], candles[-1]
+    if not (_is_bullish(a) and _is_bearish(c)):
+        return False
+    body_a, body_c = _body(a), _body(c)
+    if body_a <= 0 or body_c <= 0:
+        return False
+    if _body(b) > 0.3 * body_a:
+        return False
+    if min(b.open, b.close) <= a.close:
+        return False
+    midpoint_a = (a.open + a.close) / 2
+    return c.close < midpoint_a
+
+
+def morning_star_intensity(candles: List[Candle]) -> float:
+    """How far past the first candle's midpoint the third candle's close
+    penetrates, as a fraction of the first candle's half-body — 0 at the
+    qualifying floor (the midpoint), 1 at the first candle's own open
+    (fully reversing the entire first candle), higher beyond that."""
+    a, _, c = candles[-3], candles[-2], candles[-1]
+    half_body_a = _body(a) / 2
+    if half_body_a <= 0:
+        return float("inf")
+    midpoint_a = (a.open + a.close) / 2
+    return (c.close - midpoint_a) / half_body_a
+
+
+def evening_star_intensity(candles: List[Candle]) -> float:
+    """Morning star intensity's mirror."""
+    a, _, c = candles[-3], candles[-2], candles[-1]
+    half_body_a = _body(a) / 2
+    if half_body_a <= 0:
+        return float("inf")
+    midpoint_a = (a.open + a.close) / 2
+    return (midpoint_a - c.close) / half_body_a
+
+
+THREE_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = {
+    "morning_star": morning_star_intensity,
+    "evening_star": evening_star_intensity,
+}
+
+
 # --------------------------------------------------------------------- two-candle patterns
 
 def detect_bullish_engulfing(candles: List[Candle]) -> bool:
@@ -323,6 +391,8 @@ TWO_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
 THREE_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
     "three_white_soldiers": detect_three_white_soldiers,
     "three_black_crows": detect_three_black_crows,
+    "morning_star": detect_morning_star,
+    "evening_star": detect_evening_star,
 }
 
 MULTI_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
@@ -334,7 +404,10 @@ MULTI_CANDLE_PATTERNS: Dict[str, Callable[[List[Candle]], bool]] = {
 # three_white_soldiers/three_black_crows don't have one yet, so they're
 # absent here rather than guessed at (on_candle_closed treats a missing
 # entry the same as detect-only-no-intensity: stored as NULL).
-MULTI_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = dict(TWO_CANDLE_INTENSITY)
+MULTI_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = {
+    **TWO_CANDLE_INTENSITY,
+    **THREE_CANDLE_INTENSITY,
+}
 
 # --------------------------------------------------------------------- price action (BB / VWAP)
 
@@ -450,6 +523,8 @@ PATTERN_CATALOG = [
     ("tweezer_top", "multi_candle", "A bullish then a bearish candle with matching highs"),
     ("three_white_soldiers", "multi_candle", "Three consecutive bullish candles, each closing higher, opening within the prior body"),
     ("three_black_crows", "multi_candle", "Three consecutive bearish candles, each closing lower, opening within the prior body"),
+    ("morning_star", "multi_candle", "Bearish candle, then a small-bodied star gapping below its close, then a bullish candle closing back above the first candle's midpoint"),
+    ("evening_star", "multi_candle", "Bullish candle, then a small-bodied star gapping above its close, then a bearish candle closing back below the first candle's midpoint"),
     ("bb_squeeze", "price_action", "Bollinger Band width has been consistently narrowing over the last 20 candles — volatility compression, often precedes a breakout"),
     ("bb_widening", "price_action", "Bollinger Band width has been consistently widening over the last 20 candles — volatility expansion, typically during a strong directional move"),
     ("price_vwap_divergence", "price_action", "Price's distance from VWAP has been consistently widening over the last 20 candles — stretching away from vwap"),
