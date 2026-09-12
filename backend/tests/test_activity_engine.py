@@ -19,6 +19,8 @@ from activity_engine import (
     detect_piercing_line,
     detect_price_vwap_divergence,
     detect_shooting_star,
+    detect_swing_high,
+    detect_swing_low,
     detect_three_black_crows,
     detect_three_white_soldiers,
     detect_tweezer_bottom,
@@ -32,6 +34,8 @@ from activity_engine import (
     piercing_dark_cloud_intensity,
     seed_pattern_definitions,
     shooting_star_intensity,
+    swing_high_intensity,
+    swing_low_intensity,
     tweezer_bottom_intensity,
     tweezer_top_intensity,
     vwap_divergence_intensity,
@@ -326,6 +330,61 @@ def test_morning_star_and_evening_star_intensity():
         _candle(2, open=111.0, high=111.5, low=99.5, close=100.0),
     ]
     assert evening_star_intensity(candles_mirror) == pytest.approx((midpoint - 100.0) / half_body)
+
+
+# --------------------------------------------------------------------- swing high/low (pure)
+
+def _swing_candles(highs=None, lows=None):
+    # monotonic, non-flat defaults so overriding just one side (highs or
+    # lows) for a given test never accidentally also satisfies the other
+    # side's swing condition (a flat default would tie at every index)
+    highs = highs or [95.0, 94.0, 93.0, 92.0, 91.0, 90.0, 89.0]
+    lows = lows or [45.0, 44.0, 43.0, 42.0, 41.0, 40.0, 39.0]
+    return [
+        _candle(i, open=100.0, high=h, low=l, close=100.0)
+        for i, (h, l) in enumerate(zip(highs, lows))
+    ]
+
+
+def test_detect_swing_high_true_for_a_peak_in_the_middle():
+    candles = _swing_candles(highs=[100.0, 101.0, 102.0, 105.0, 102.0, 101.0, 100.0])
+    assert detect_swing_high(candles) is True
+    assert detect_swing_low(candles) is False
+
+
+def test_detect_swing_high_false_when_middle_is_not_the_highest():
+    candles = _swing_candles(highs=[100.0, 101.0, 102.0, 101.5, 103.0, 101.0, 100.0])
+    assert detect_swing_high(candles) is False
+
+
+def test_detect_swing_high_false_before_full_window():
+    candles = _swing_candles(highs=[100.0, 101.0, 102.0, 105.0, 102.0, 101.0])[:6]
+    assert detect_swing_high(candles) is False
+
+
+def test_detect_swing_low_true_for_a_trough_in_the_middle():
+    candles = _swing_candles(lows=[100.0, 99.0, 98.0, 95.0, 98.0, 99.0, 100.0])
+    assert detect_swing_low(candles) is True
+    assert detect_swing_high(candles) is False
+
+
+def test_detect_swing_low_false_when_middle_is_not_the_lowest():
+    candles = _swing_candles(lows=[100.0, 99.0, 98.0, 98.5, 97.0, 99.0, 100.0])
+    assert detect_swing_low(candles) is False
+
+
+def test_swing_high_intensity_grows_with_a_sharper_peak():
+    mild = _swing_candles(highs=[100.0, 101.0, 102.0, 103.0, 102.0, 101.0, 100.0])
+    sharp = _swing_candles(highs=[100.0, 101.0, 102.0, 110.0, 102.0, 101.0, 100.0])
+    assert swing_high_intensity(mild) > 0
+    assert swing_high_intensity(sharp) > swing_high_intensity(mild)
+
+
+def test_swing_low_intensity_grows_with_a_sharper_trough():
+    mild = _swing_candles(lows=[100.0, 99.0, 98.0, 97.0, 98.0, 99.0, 100.0])
+    sharp = _swing_candles(lows=[100.0, 99.0, 98.0, 90.0, 98.0, 99.0, 100.0])
+    assert swing_low_intensity(mild) > 0
+    assert swing_low_intensity(sharp) > swing_low_intensity(mild)
 
 
 # --------------------------------------------------------------------- Bollinger Bands (pure)
@@ -732,6 +791,31 @@ def test_engine_detects_morning_star_across_calls(session_factory):
     with session_factory() as session:
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "morning_star" in activities
+
+
+def test_engine_detects_swing_high_with_the_confirmed_candles_own_timestamp(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    highs = [100.0, 101.0, 102.0, 105.0, 102.0, 101.0, 100.0]
+    candles = [_candle(i, open=100.0, high=h, low=99.0, close=100.0) for i, h in enumerate(highs)]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        rows = session.query(InstrumentActivity).filter_by(activity="swing_high").all()
+    assert len(rows) == 1
+    # confirmed 3 candles after it happened (SWING_LOOKBACK=3) — the stored
+    # ts/OHLC must be the peak candle's own, not the latest candle fed in
+    # (DateTime columns come back naive, so compare against a naive value)
+    assert rows[0].ts == candles[3].timestamp.replace(tzinfo=None)
+    assert float(rows[0].high_price) == 105.0
 
 
 def test_engine_detects_bb_squeeze_through_on_candle_closed(session_factory):

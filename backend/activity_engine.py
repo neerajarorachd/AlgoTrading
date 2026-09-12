@@ -1,16 +1,18 @@
-"""Detects candlestick patterns, price-action signals, and indicator
-crossovers as each 1-/3-/5-min candle closes, and persists them to
+"""Detects candlestick patterns, price-action signals, indicator crossovers,
+and swing structure as each 1-/3-/5-min candle closes, and persists them to
 instrument_activity. Covers, so far: single-candle shape patterns (doji,
 hammer, shooting star), two-candle patterns (bullish/bearish engulfing,
 piercing line, dark cloud cover, tweezer top/bottom), three-candle patterns
 (three white soldiers / three black crows, morning star / evening star),
 price-action signals (Bollinger Band squeeze/widening, price stretching
-away from VWAP, price reverting back to fill a VWAP gap), and indicator
+away from VWAP, price reverting back to fill a VWAP gap), indicator
 crossovers (RSI crossing 60/40, MACD crossing its signal line, Stochastic
-%K crossing %D, MA21 crossing MA50). Larger multi-bar chart formations
-(double top/bottom, head
-and shoulders, flags, triangles, HH-HL trend structure, etc.) need
-swing-high/swing-low detection as a foundation and aren't built yet.
+%K crossing %D, MA21 crossing MA50), and swing-high/swing-low (fractal)
+detection — confirmed _SWING_LOOKBACK candles after they happen, since a
+swing point needs to see what came after it to be identified. Swing points
+are the foundation the actual multi-bar chart formations (double top/
+bottom, head and shoulders, flags, triangles, HH-HL trend structure, etc.)
+get built on top of next — those aren't built yet, just their foundation.
 Outcome tracking (what happened N candles after an activity) is
 deliberately not built yet either.
 """
@@ -68,6 +70,18 @@ _RSI_CROSS_ABOVE = 60.0
 _RSI_CROSS_BELOW = 40.0
 _MA_SHORT_PERIOD = 21
 _MA_LONG_PERIOD = 50
+
+# Swing-high/swing-low (fractal) detection — the foundation graph formations
+# (double top/bottom, head & shoulders, etc.) will be built on top of, not
+# built yet themselves. A candle qualifies once it's the highest/lowest
+# across a window of _SWING_LOOKBACK candles on both sides of it — which
+# means a swing point is only confirmed _SWING_LOOKBACK candles after it
+# actually happened (need to see what came after to know it was a local
+# extreme). Standard fractals use 2 on each side (a 5-candle window); this
+# starts wider at 3 (7-candle window) per instruction — 2 was judged too
+# short/noisy for a first pass, pending real calibration once the
+# backtesting engine can check this against 2 years of data.
+_SWING_LOOKBACK = 3
 
 InstrumentKey = Tuple[str, str, str]  # (symbol, exchange_segment, timeframe)
 
@@ -433,6 +447,46 @@ MULTI_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = {
     **THREE_CANDLE_INTENSITY,
 }
 
+# --------------------------------------------------------------------- swing high/low (structure)
+
+def detect_swing_high(candles: List[Candle]) -> bool:
+    """candles is a window of exactly 2*_SWING_LOOKBACK+1 candles, most
+    recent last. True when the MIDDLE candle's high is the highest in the
+    whole window — i.e. this confirms a swing point that happened
+    _SWING_LOOKBACK candles ago, not the latest candle."""
+    if len(candles) < 2 * _SWING_LOOKBACK + 1:
+        return False
+    mid = candles[_SWING_LOOKBACK]
+    return mid.high == max(c.high for c in candles)
+
+
+def detect_swing_low(candles: List[Candle]) -> bool:
+    """Swing high's mirror, on lows."""
+    if len(candles) < 2 * _SWING_LOOKBACK + 1:
+        return False
+    mid = candles[_SWING_LOOKBACK]
+    return mid.low == min(c.low for c in candles)
+
+
+def swing_high_intensity(candles: List[Candle]) -> float:
+    """How far the swing candle's high sits above the average of every
+    other high in the window, as a fraction of that average — 0 at the
+    qualifying floor (a flat tie with the window's other highs), growing
+    for a sharper, more pronounced peak."""
+    mid = candles[_SWING_LOOKBACK]
+    others = [c.high for c in candles if c is not mid]
+    avg_others = statistics.fmean(others)
+    return (mid.high - avg_others) / avg_others if avg_others else float("inf")
+
+
+def swing_low_intensity(candles: List[Candle]) -> float:
+    """Swing high intensity's mirror, on lows."""
+    mid = candles[_SWING_LOOKBACK]
+    others = [c.low for c in candles if c is not mid]
+    avg_others = statistics.fmean(others)
+    return (avg_others - mid.low) / avg_others if avg_others else float("inf")
+
+
 # --------------------------------------------------------------------- price action (BB / VWAP)
 
 class BollingerBands:
@@ -561,6 +615,8 @@ PATTERN_CATALOG = [
     ("ma_death_cross", "indicator", "MA21 crosses below MA50 — short-term trend turning bearish relative to the longer-term trend"),
     ("stoch_bullish_cross", "indicator", "Stochastic %K crosses above %D — short-term momentum turning bullish"),
     ("stoch_bearish_cross", "indicator", "Stochastic %K crosses below %D — short-term momentum turning bearish"),
+    ("swing_high", "structure", "A confirmed local price peak — the highest high across a window of candles on both sides of it"),
+    ("swing_low", "structure", "A confirmed local price trough — the lowest low across a window of candles on both sides of it"),
 ]
 
 
@@ -623,6 +679,8 @@ class ActivityEngine:
         self._prev_macd: Dict[InstrumentKey, Tuple[float, float]] = {}
         self._prev_stoch: Dict[InstrumentKey, Tuple[float, float]] = {}
         self._prev_ma: Dict[InstrumentKey, Tuple[float, float]] = {}
+        # swing-high/swing-low (structure) — rolling 2*_SWING_LOOKBACK+1 window
+        self._swing_window: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=2 * _SWING_LOOKBACK + 1))
 
     def buffered_count(self) -> int:
         return len(self._buffer)
@@ -778,6 +836,34 @@ class ActivityEngine:
                 if crossed_below(prev_ma21, prev_ma50, ma21, ma50):
                     found.append(("indicator", "ma_death_cross", cross_intensity(prev_ma21, prev_ma50, ma21, ma50)))
             self._prev_ma[key] = (ma21, ma50)
+
+        try:
+            window = self._swing_window[key]
+            window.append(candle)
+            window_list = list(window)
+            swing_hits = []
+            if detect_swing_high(window_list):
+                swing_hits.append(("swing_high", swing_high_intensity(window_list)))
+            if detect_swing_low(window_list):
+                swing_hits.append(("swing_low", swing_low_intensity(window_list)))
+            if swing_hits:
+                # the confirmed swing candle is _SWING_LOOKBACK candles behind
+                # the latest one, not the latest candle itself
+                swing_candle = window_list[_SWING_LOOKBACK]
+                instrument_id = self._lookup_instrument_id(symbol, exchange_segment)
+                if instrument_id is not None:
+                    for activity, intensity in swing_hits:
+                        if intensity == float("inf"):
+                            intensity = None
+                        self._buffer.append({
+                            "instrument_id": instrument_id, "timeframe": candle.timeframe,
+                            "ts": swing_candle.timestamp,
+                            "activity_type": "structure", "activity": activity, "intensity": intensity,
+                            "open_price": swing_candle.open, "high_price": swing_candle.high,
+                            "low_price": swing_candle.low, "close_price": swing_candle.close,
+                        })
+        except Exception:
+            logger.exception("Activity engine: swing detection failed for %s (%s)", symbol, exchange_segment)
 
         if not found:
             return
