@@ -39,6 +39,17 @@ from activity_engine import (
 )
 from brokers.models import Candle
 from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
+from indicators import (
+    MacdState,
+    RsiState,
+    StochasticState,
+    cross_intensity,
+    crossed_above,
+    crossed_below,
+    update_macd,
+    update_rsi,
+    update_stochastic,
+)
 
 SYMBOL = "RELIANCE"
 SEG = "NSE_EQ"
@@ -428,6 +439,112 @@ def test_vwap_divergence_and_gap_fill_intensity():
     assert vwap_gap_fill_intensity(_narrowing_gaps(19)) > 1.0
 
 
+# --------------------------------------------------------------------- RSI / MACD (pure)
+
+def test_update_rsi_none_before_seed_window_fills():
+    state = RsiState()
+    rsi = None
+    for close in [100.0] * 14:  # 14 closes = only 13 changes, needs 14
+        rsi = update_rsi(state, close)
+    assert rsi is None
+
+
+def test_update_rsi_100_for_a_monotonic_rise():
+    state = RsiState()
+    rsi = None
+    for close in [100.0 + i for i in range(20)]:
+        rsi = update_rsi(state, close)
+    assert rsi == pytest.approx(100.0)
+
+
+def test_update_rsi_0_for_a_monotonic_fall():
+    state = RsiState()
+    rsi = None
+    for close in [100.0 - i for i in range(20)]:
+        rsi = update_rsi(state, close)
+    assert rsi == pytest.approx(0.0)
+
+
+def test_update_macd_none_before_slow_ema_matures():
+    state = MacdState()
+    line = signal = None
+    for close in [100.0 + i for i in range(25)]:  # < MACD_SLOW (26)
+        line, signal = update_macd(state, close)
+    assert line is None
+    assert signal is None
+
+
+def test_update_macd_line_available_before_signal():
+    state = MacdState()
+    line = signal = None
+    for close in [100.0 + i for i in range(30)]:  # >= 26, < 26+9
+        line, signal = update_macd(state, close)
+    assert line is not None
+    assert signal is None
+
+
+def test_update_macd_positive_for_a_sustained_uptrend():
+    state = MacdState()
+    line = signal = None
+    for close in [100.0 + 0.5 * i for i in range(40)]:
+        line, signal = update_macd(state, close)
+    assert line > 0
+    assert signal > 0
+
+
+def test_update_stochastic_none_before_fastk_window_fills():
+    state = StochasticState()
+    k = d = None
+    for i in range(4):  # < STOCH_FASTK_PERIOD (5)
+        k, d = update_stochastic(state, 100.0 + i + 1, 100.0 + i - 1, 100.0 + i)
+    assert k is None
+    assert d is None
+
+
+def test_update_stochastic_k_before_d_for_a_steady_rise():
+    state = StochasticState()
+    k = d = None
+    for i in range(8):  # k available at 7, d needs 9
+        k, d = update_stochastic(state, 100.0 + i + 1, 100.0 + i - 1, 100.0 + i)
+    assert k is not None
+    assert d is None
+
+
+def test_update_stochastic_both_available_and_matches_known_value():
+    state = StochasticState()
+    k = d = None
+    for i in range(9):
+        k, d = update_stochastic(state, 100.0 + i + 1, 100.0 + i - 1, 100.0 + i)
+    # verified by direct simulation for this exact steady +1/candle rise
+    assert k == pytest.approx(83.33333, rel=1e-4)
+    assert d == pytest.approx(83.33333, rel=1e-4)
+
+
+def test_crossed_above_true_on_a_genuine_cross():
+    assert crossed_above(prev_a=10, prev_b=12, curr_a=13, curr_b=12) is True
+
+
+def test_crossed_above_false_when_already_above():
+    assert crossed_above(prev_a=13, prev_b=12, curr_a=14, curr_b=12) is False
+
+
+def test_crossed_above_false_with_missing_data():
+    assert crossed_above(None, 12, 13, 12) is False
+
+
+def test_crossed_below_true_on_a_genuine_cross():
+    assert crossed_below(prev_a=14, prev_b=12, curr_a=11, curr_b=12) is True
+
+
+def test_crossed_below_false_when_already_below():
+    assert crossed_below(prev_a=11, prev_b=12, curr_a=10, curr_b=12) is False
+
+
+def test_cross_intensity_is_the_step_change_in_spread():
+    # spread goes from -2 (10-12) to +1 (13-12) — a step change of 3
+    assert cross_intensity(prev_a=10, prev_b=12, curr_a=13, curr_b=12) == pytest.approx(3.0)
+
+
 # --------------------------------------------------------------------- engine persistence
 
 def test_engine_persists_a_detected_pattern(session_factory):
@@ -685,6 +802,40 @@ def test_engine_detects_vwap_divergence_and_gap_fill_through_on_candle_closed(se
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "price_vwap_divergence" in activities
     assert "vwap_gap_fill" in activities
+
+
+def test_engine_detects_rsi_macd_stoch_ma_crossovers_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # A long, gently-declining zigzag (60 candles — enough to mature RSI's
+    # seed, MACD's slow EMA + signal, and both MAs all in a clear downtrend
+    # state) followed by a sustained rise, verified by direct simulation to
+    # actually produce all three crossovers rather than the trend simply
+    # starting past the crossing point unobserved.
+    seed = []
+    base = 100.0
+    for i in range(60):
+        base += -0.6 if i % 2 == 0 else 0.4
+        seed.append(round(base, 4))
+    rise = [round(seed[-1] + 0.5 * i, 4) for i in range(1, 40)]
+    closes = seed + rise
+
+    for i, close in enumerate(closes, start=1):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, close))
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "rsi_cross_above_60" in activities
+    assert "macd_bullish_cross" in activities
+    assert "ma_golden_cross" in activities
+    assert "stoch_bullish_cross" in activities
 
 
 def test_to_dataframe_reflects_the_buffer(session_factory):

@@ -1,16 +1,18 @@
-"""Detects candlestick patterns and price-action signals as each 1-/3-/5-min
-candle closes, and persists them to instrument_activity. Covers, so far:
-single-candle shape patterns (doji, hammer, shooting star), two-candle
-patterns (bullish/bearish engulfing, piercing line, dark cloud cover,
-tweezer top/bottom), three-candle patterns (three white soldiers / three
-black crows, morning star / evening star), and price-action/indicator
-signals (Bollinger Band squeeze/widening, price stretching away from VWAP,
-price reverting back to fill a VWAP gap). Larger multi-bar chart formations
-(double top/bottom, head and shoulders, flags, triangles, HH-HL trend
-structure, etc.) need swing-high/swing-low detection as a foundation and
-aren't built yet. MACD crossover, MA21/MA50 crossover, and outcome tracking
-(what happened N candles after an activity) are deliberately not built yet
-either.
+"""Detects candlestick patterns, price-action signals, and indicator
+crossovers as each 1-/3-/5-min candle closes, and persists them to
+instrument_activity. Covers, so far: single-candle shape patterns (doji,
+hammer, shooting star), two-candle patterns (bullish/bearish engulfing,
+piercing line, dark cloud cover, tweezer top/bottom), three-candle patterns
+(three white soldiers / three black crows, morning star / evening star),
+price-action signals (Bollinger Band squeeze/widening, price stretching
+away from VWAP, price reverting back to fill a VWAP gap), and indicator
+crossovers (RSI crossing 60/40, MACD crossing its signal line, Stochastic
+%K crossing %D, MA21 crossing MA50). Larger multi-bar chart formations
+(double top/bottom, head
+and shoulders, flags, triangles, HH-HL trend structure, etc.) need
+swing-high/swing-low detection as a foundation and aren't built yet.
+Outcome tracking (what happened N candles after an activity) is
+deliberately not built yet either.
 """
 from __future__ import annotations
 
@@ -25,7 +27,20 @@ from sqlalchemy.exc import IntegrityError
 from brokers.models import Candle
 from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
 from db.session import session_scope
-from indicators import TREND_LOOKBACK, classify_trend, trend_intensity
+from indicators import (
+    TREND_LOOKBACK,
+    MacdState,
+    RsiState,
+    StochasticState,
+    classify_trend,
+    cross_intensity,
+    crossed_above,
+    crossed_below,
+    trend_intensity,
+    update_macd,
+    update_rsi,
+    update_stochastic,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +59,15 @@ _BB_STDDEV_MULT = 2.0
 # helper in indicators.py (see its docstring — a majority-of-steps check,
 # not a two-point comparison).
 _VWAP_GAP_LOOKBACK = TREND_LOOKBACK
+
+# Crossover thresholds/periods. RSI 60/40 per instruction; MA21/MA50 pairing
+# was already flagged as a planned pair before this module had any indicator
+# state at all. MA_LONG_PERIOD doubles as the closes deque size — MA21 is
+# just a shorter slice of the same window.
+_RSI_CROSS_ABOVE = 60.0
+_RSI_CROSS_BELOW = 40.0
+_MA_SHORT_PERIOD = 21
+_MA_LONG_PERIOD = 50
 
 InstrumentKey = Tuple[str, str, str]  # (symbol, exchange_segment, timeframe)
 
@@ -529,6 +553,14 @@ PATTERN_CATALOG = [
     ("bb_widening", "price_action", "Bollinger Band width has been consistently widening over the last 20 candles — volatility expansion, typically during a strong directional move"),
     ("price_vwap_divergence", "price_action", "Price's distance from VWAP has been consistently widening over the last 20 candles — stretching away from vwap"),
     ("vwap_gap_fill", "price_action", "Price's distance from VWAP has been consistently narrowing over the last 20 candles — reverting back toward vwap"),
+    ("rsi_cross_above_60", "indicator", "RSI(14) crosses above 60 — momentum turning bullish"),
+    ("rsi_cross_below_40", "indicator", "RSI(14) crosses below 40 — momentum turning bearish"),
+    ("macd_bullish_cross", "indicator", "MACD line crosses above its signal line — bullish momentum shift"),
+    ("macd_bearish_cross", "indicator", "MACD line crosses below its signal line — bearish momentum shift"),
+    ("ma_golden_cross", "indicator", "MA21 crosses above MA50 — short-term trend turning bullish relative to the longer-term trend"),
+    ("ma_death_cross", "indicator", "MA21 crosses below MA50 — short-term trend turning bearish relative to the longer-term trend"),
+    ("stoch_bullish_cross", "indicator", "Stochastic %K crosses above %D — short-term momentum turning bullish"),
+    ("stoch_bearish_cross", "indicator", "Stochastic %K crosses below %D — short-term momentum turning bearish"),
 ]
 
 
@@ -576,11 +608,21 @@ class ActivityEngine:
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
         self._buffer: List[dict] = []
-        # price-action state, one series per (symbol, exchange_segment, timeframe)
-        self._closes: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_BB_PERIOD))
+        # price-action state, one series per (symbol, exchange_segment, timeframe).
+        # _closes holds _MA_LONG_PERIOD candles (the longest window any
+        # indicator here needs) — BB(20) reads only the tail slice it needs.
+        self._closes: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_MA_LONG_PERIOD))
         self._bb_widths: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=TREND_LOOKBACK))
         self._vwap_state: Dict[InstrumentKey, _VwapState] = {}
         self._vwap_gaps: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_VWAP_GAP_LOOKBACK))
+        # indicator-crossover state
+        self._rsi_state: Dict[InstrumentKey, RsiState] = defaultdict(RsiState)
+        self._macd_state: Dict[InstrumentKey, MacdState] = defaultdict(MacdState)
+        self._stoch_state: Dict[InstrumentKey, StochasticState] = defaultdict(StochasticState)
+        self._prev_rsi: Dict[InstrumentKey, float] = {}
+        self._prev_macd: Dict[InstrumentKey, Tuple[float, float]] = {}
+        self._prev_stoch: Dict[InstrumentKey, Tuple[float, float]] = {}
+        self._prev_ma: Dict[InstrumentKey, Tuple[float, float]] = {}
 
     def buffered_count(self) -> int:
         return len(self._buffer)
@@ -653,7 +695,7 @@ class ActivityEngine:
 
         closes = self._closes[key]
         closes.append(candle.close)
-        bb = compute_bollinger(closes)
+        bb = compute_bollinger(list(closes)[-_BB_PERIOD:])
         if bb is not None:
             widths = self._bb_widths[key]
             widths.append(bb.width)
@@ -683,6 +725,59 @@ class ActivityEngine:
                         found.append(("price_action", name, intensity))
                 except Exception:
                     logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
+
+        try:
+            rsi = update_rsi(self._rsi_state[key], candle.close)
+            if rsi is not None:
+                prev_rsi = self._prev_rsi.get(key)
+                if prev_rsi is not None:
+                    if crossed_above(prev_rsi, _RSI_CROSS_ABOVE, rsi, _RSI_CROSS_ABOVE):
+                        found.append(("indicator", "rsi_cross_above_60", cross_intensity(prev_rsi, _RSI_CROSS_ABOVE, rsi, _RSI_CROSS_ABOVE)))
+                    if crossed_below(prev_rsi, _RSI_CROSS_BELOW, rsi, _RSI_CROSS_BELOW):
+                        found.append(("indicator", "rsi_cross_below_40", cross_intensity(prev_rsi, _RSI_CROSS_BELOW, rsi, _RSI_CROSS_BELOW)))
+                self._prev_rsi[key] = rsi
+        except Exception:
+            logger.exception("Activity engine: rsi crossover failed for %s (%s)", symbol, exchange_segment)
+
+        try:
+            macd_line, macd_signal = update_macd(self._macd_state[key], candle.close)
+            if macd_line is not None and macd_signal is not None:
+                prev_macd = self._prev_macd.get(key)
+                if prev_macd is not None:
+                    prev_line, prev_signal = prev_macd
+                    if crossed_above(prev_line, prev_signal, macd_line, macd_signal):
+                        found.append(("indicator", "macd_bullish_cross", cross_intensity(prev_line, prev_signal, macd_line, macd_signal)))
+                    if crossed_below(prev_line, prev_signal, macd_line, macd_signal):
+                        found.append(("indicator", "macd_bearish_cross", cross_intensity(prev_line, prev_signal, macd_line, macd_signal)))
+                self._prev_macd[key] = (macd_line, macd_signal)
+        except Exception:
+            logger.exception("Activity engine: macd crossover failed for %s (%s)", symbol, exchange_segment)
+
+        try:
+            stoch_k, stoch_d = update_stochastic(self._stoch_state[key], candle.high, candle.low, candle.close)
+            if stoch_k is not None and stoch_d is not None:
+                prev_stoch = self._prev_stoch.get(key)
+                if prev_stoch is not None:
+                    prev_k, prev_d = prev_stoch
+                    if crossed_above(prev_k, prev_d, stoch_k, stoch_d):
+                        found.append(("indicator", "stoch_bullish_cross", cross_intensity(prev_k, prev_d, stoch_k, stoch_d)))
+                    if crossed_below(prev_k, prev_d, stoch_k, stoch_d):
+                        found.append(("indicator", "stoch_bearish_cross", cross_intensity(prev_k, prev_d, stoch_k, stoch_d)))
+                self._prev_stoch[key] = (stoch_k, stoch_d)
+        except Exception:
+            logger.exception("Activity engine: stochastic crossover failed for %s (%s)", symbol, exchange_segment)
+
+        if len(closes) >= _MA_LONG_PERIOD:
+            ma21 = statistics.fmean(list(closes)[-_MA_SHORT_PERIOD:])
+            ma50 = statistics.fmean(closes)
+            prev_ma = self._prev_ma.get(key)
+            if prev_ma is not None:
+                prev_ma21, prev_ma50 = prev_ma
+                if crossed_above(prev_ma21, prev_ma50, ma21, ma50):
+                    found.append(("indicator", "ma_golden_cross", cross_intensity(prev_ma21, prev_ma50, ma21, ma50)))
+                if crossed_below(prev_ma21, prev_ma50, ma21, ma50):
+                    found.append(("indicator", "ma_death_cross", cross_intensity(prev_ma21, prev_ma50, ma21, ma50)))
+            self._prev_ma[key] = (ma21, ma50)
 
         if not found:
             return
