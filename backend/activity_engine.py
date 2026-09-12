@@ -27,7 +27,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from sqlalchemy.exc import IntegrityError
 
 from brokers.models import Candle
-from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
+from db.models import EngineSetting, InstrumentActivity, PatternDefinition, SubscribedSymbol
 from db.session import session_scope
 from indicators import (
     TREND_LOOKBACK,
@@ -72,16 +72,20 @@ _MA_SHORT_PERIOD = 21
 _MA_LONG_PERIOD = 50
 
 # Swing-high/swing-low (fractal) detection — the foundation graph formations
-# (double top/bottom, head & shoulders, etc.) will be built on top of, not
-# built yet themselves. A candle qualifies once it's the highest/lowest
-# across a window of _SWING_LOOKBACK candles on both sides of it — which
-# means a swing point is only confirmed _SWING_LOOKBACK candles after it
-# actually happened (need to see what came after to know it was a local
-# extreme). Standard fractals use 2 on each side (a 5-candle window); this
-# starts wider at 3 (7-candle window) per instruction — 2 was judged too
-# short/noisy for a first pass, pending real calibration once the
-# backtesting engine can check this against 2 years of data.
-_SWING_LOOKBACK = 3
+# (double top/bottom, HH-HL trend structure, head & shoulders, etc.) are
+# built on top of. A candle qualifies once it's the highest/lowest across a
+# window of _SWING_LOOKBACK candles on both sides of it — which means a
+# swing point is only confirmed _SWING_LOOKBACK candles after it actually
+# happened (need to see what came after to know it was a local extreme).
+# No monotonicity requirement — the path to the extreme can zigzag freely,
+# it just has to BE the extreme over the window. Standard fractals use 2 on
+# each side (5-candle window); this started at 3 (7-candle) and widened to
+# 5 (11-candle, close to "10 candles" per instruction) once real data
+# showed 3 let through noise-level "swings" (intensities as low as 0.01%)
+# that weren't genuinely significant. Still a starting point pending real
+# calibration once the backtesting engine can check this against 2 years
+# of data — just a better-informed one now that real data has been seen.
+_SWING_LOOKBACK = 5
 
 # Double top/bottom — the first actual graph formation, built on swing
 # points. Fires as soon as the pattern's shape completes (two comparable
@@ -459,39 +463,41 @@ MULTI_CANDLE_INTENSITY: Dict[str, Callable[[List[Candle]], float]] = {
 
 # --------------------------------------------------------------------- swing high/low (structure)
 
-def detect_swing_high(candles: List[Candle]) -> bool:
-    """candles is a window of exactly 2*_SWING_LOOKBACK+1 candles, most
-    recent last. True when the MIDDLE candle's high is the highest in the
-    whole window — i.e. this confirms a swing point that happened
-    _SWING_LOOKBACK candles ago, not the latest candle."""
-    if len(candles) < 2 * _SWING_LOOKBACK + 1:
+def detect_swing_high(candles: List[Candle], lookback: int = _SWING_LOOKBACK) -> bool:
+    """candles is a window of exactly 2*lookback+1 candles, most recent
+    last. True when the MIDDLE candle's high is the highest in the whole
+    window — i.e. this confirms a swing point that happened `lookback`
+    candles ago, not the latest candle. `lookback` defaults to the module
+    constant but ActivityEngine passes its own (possibly settings-
+    overridden) value instead — see EngineSetting/load_engine_settings."""
+    if len(candles) < 2 * lookback + 1:
         return False
-    mid = candles[_SWING_LOOKBACK]
+    mid = candles[lookback]
     return mid.high == max(c.high for c in candles)
 
 
-def detect_swing_low(candles: List[Candle]) -> bool:
+def detect_swing_low(candles: List[Candle], lookback: int = _SWING_LOOKBACK) -> bool:
     """Swing high's mirror, on lows."""
-    if len(candles) < 2 * _SWING_LOOKBACK + 1:
+    if len(candles) < 2 * lookback + 1:
         return False
-    mid = candles[_SWING_LOOKBACK]
+    mid = candles[lookback]
     return mid.low == min(c.low for c in candles)
 
 
-def swing_high_intensity(candles: List[Candle]) -> float:
+def swing_high_intensity(candles: List[Candle], lookback: int = _SWING_LOOKBACK) -> float:
     """How far the swing candle's high sits above the average of every
     other high in the window, as a fraction of that average — 0 at the
     qualifying floor (a flat tie with the window's other highs), growing
     for a sharper, more pronounced peak."""
-    mid = candles[_SWING_LOOKBACK]
+    mid = candles[lookback]
     others = [c.high for c in candles if c is not mid]
     avg_others = statistics.fmean(others)
     return (mid.high - avg_others) / avg_others if avg_others else float("inf")
 
 
-def swing_low_intensity(candles: List[Candle]) -> float:
+def swing_low_intensity(candles: List[Candle], lookback: int = _SWING_LOOKBACK) -> float:
     """Swing high intensity's mirror, on lows."""
-    mid = candles[_SWING_LOOKBACK]
+    mid = candles[lookback]
     others = [c.low for c in candles if c is not mid]
     avg_others = statistics.fmean(others)
     return (avg_others - mid.low) / avg_others if avg_others else float("inf")
@@ -717,6 +723,30 @@ def seed_pattern_definitions(session_factory) -> None:
                 row.active = True
 
 
+# Keys read from engine_settings, alongside the module-constant default
+# used whenever a key has no row yet (nothing has been calibrated). This
+# list is what ActivityEngine.__init__ actually resolves at construction
+# time — see load_engine_settings(). Extend this the same way each time a
+# new tunable parameter is added, matching the "same thing for intensity
+# of all patterns" plan (this session, 2026-09-13) — swing_lookback is the
+# first one wired up; the rest of this module's thresholds move onto this
+# same mechanism incrementally, not all at once.
+ENGINE_SETTING_DEFAULTS: Dict[str, float] = {
+    "swing_lookback": float(_SWING_LOOKBACK),
+}
+
+
+def load_engine_settings(session_factory) -> Dict[str, float]:
+    """Reads every stored override from engine_settings. A key absent from
+    the returned dict simply hasn't been calibrated yet — callers combine
+    this with ENGINE_SETTING_DEFAULTS (or their own hardcoded default) to
+    get an actual value, so the table can be completely empty and nothing
+    behaves any differently than before this existed."""
+    with session_scope(session_factory) as session:
+        rows = session.query(EngineSetting).all()
+        return {row.key: float(row.value) for row in rows}
+
+
 # --------------------------------------------------------------------- engine
 
 class ActivityEngine:
@@ -741,6 +771,11 @@ class ActivityEngine:
 
     def __init__(self, session_factory):
         self.session_factory = session_factory
+        settings = load_engine_settings(session_factory)
+        # swing_lookback is the first parameter wired to engine_settings —
+        # falls back to the module default (ENGINE_SETTING_DEFAULTS) when
+        # nothing's been calibrated yet
+        self.swing_lookback = int(settings.get("swing_lookback", ENGINE_SETTING_DEFAULTS["swing_lookback"]))
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
         self._buffer: List[dict] = []
@@ -759,8 +794,8 @@ class ActivityEngine:
         self._prev_macd: Dict[InstrumentKey, Tuple[float, float]] = {}
         self._prev_stoch: Dict[InstrumentKey, Tuple[float, float]] = {}
         self._prev_ma: Dict[InstrumentKey, Tuple[float, float]] = {}
-        # swing-high/swing-low (structure) — rolling 2*_SWING_LOOKBACK+1 window
-        self._swing_window: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=2 * _SWING_LOOKBACK + 1))
+        # swing-high/swing-low (structure) — rolling 2*swing_lookback+1 window
+        self._swing_window: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=2 * self.swing_lookback + 1))
         # last 3 confirmed swing points, chronological — graph formations
         # (double top/bottom so far) read off this
         self._swing_points: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
@@ -925,14 +960,14 @@ class ActivityEngine:
             window.append(candle)
             window_list = list(window)
             swing_hits = []
-            if detect_swing_high(window_list):
-                swing_hits.append(("swing_high", swing_high_intensity(window_list)))
-            if detect_swing_low(window_list):
-                swing_hits.append(("swing_low", swing_low_intensity(window_list)))
+            if detect_swing_high(window_list, self.swing_lookback):
+                swing_hits.append(("swing_high", swing_high_intensity(window_list, self.swing_lookback)))
+            if detect_swing_low(window_list, self.swing_lookback):
+                swing_hits.append(("swing_low", swing_low_intensity(window_list, self.swing_lookback)))
             if swing_hits:
-                # the confirmed swing candle is _SWING_LOOKBACK candles behind
+                # the confirmed swing candle is swing_lookback candles behind
                 # the latest one, not the latest candle itself
-                swing_candle = window_list[_SWING_LOOKBACK]
+                swing_candle = window_list[self.swing_lookback]
                 instrument_id = self._lookup_instrument_id(symbol, exchange_segment)
                 if instrument_id is not None:
                     for activity, intensity in swing_hits:

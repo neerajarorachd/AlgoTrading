@@ -4,6 +4,8 @@ import pytest
 
 from activity_engine import (
     ActivityEngine,
+    ENGINE_SETTING_DEFAULTS,
+    load_engine_settings,
     bb_squeeze_intensity,
     bb_widening_intensity,
     compute_bollinger,
@@ -47,7 +49,7 @@ from activity_engine import (
     vwap_gap_fill_intensity,
 )
 from brokers.models import Candle
-from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
+from db.models import EngineSetting, InstrumentActivity, PatternDefinition, SubscribedSymbol
 from indicators import (
     MacdState,
     RsiState,
@@ -340,11 +342,12 @@ def test_morning_star_and_evening_star_intensity():
 # --------------------------------------------------------------------- swing high/low (pure)
 
 def _swing_candles(highs=None, lows=None):
-    # monotonic, non-flat defaults so overriding just one side (highs or
-    # lows) for a given test never accidentally also satisfies the other
-    # side's swing condition (a flat default would tie at every index)
-    highs = highs or [95.0, 94.0, 93.0, 92.0, 91.0, 90.0, 89.0]
-    lows = lows or [45.0, 44.0, 43.0, 42.0, 41.0, 40.0, 39.0]
+    # monotonic, non-flat defaults (11 candles, matching _SWING_LOOKBACK=5)
+    # so overriding just one side (highs or lows) for a given test never
+    # accidentally also satisfies the other side's swing condition (a flat
+    # default would tie at every index)
+    highs = highs or [99.0, 98.0, 97.0, 96.0, 95.0, 94.0, 93.0, 92.0, 91.0, 90.0, 89.0]
+    lows = lows or [49.0, 48.0, 47.0, 46.0, 45.0, 44.0, 43.0, 42.0, 41.0, 40.0, 39.0]
     return [
         _candle(i, open=100.0, high=h, low=l, close=100.0)
         for i, (h, l) in enumerate(zip(highs, lows))
@@ -352,42 +355,42 @@ def _swing_candles(highs=None, lows=None):
 
 
 def test_detect_swing_high_true_for_a_peak_in_the_middle():
-    candles = _swing_candles(highs=[100.0, 101.0, 102.0, 105.0, 102.0, 101.0, 100.0])
+    candles = _swing_candles(highs=[95.0, 96.0, 97.0, 98.0, 99.0, 105.0, 99.0, 98.0, 97.0, 96.0, 95.0])
     assert detect_swing_high(candles) is True
     assert detect_swing_low(candles) is False
 
 
 def test_detect_swing_high_false_when_middle_is_not_the_highest():
-    candles = _swing_candles(highs=[100.0, 101.0, 102.0, 101.5, 103.0, 101.0, 100.0])
+    candles = _swing_candles(highs=[95.0, 96.0, 97.0, 98.0, 99.0, 100.0, 99.0, 98.0, 103.0, 96.0, 95.0])
     assert detect_swing_high(candles) is False
 
 
 def test_detect_swing_high_false_before_full_window():
-    candles = _swing_candles(highs=[100.0, 101.0, 102.0, 105.0, 102.0, 101.0])[:6]
+    candles = _swing_candles(highs=[95.0, 96.0, 97.0, 98.0, 99.0, 105.0, 99.0, 98.0, 97.0, 96.0, 95.0])[:10]
     assert detect_swing_high(candles) is False
 
 
 def test_detect_swing_low_true_for_a_trough_in_the_middle():
-    candles = _swing_candles(lows=[100.0, 99.0, 98.0, 95.0, 98.0, 99.0, 100.0])
+    candles = _swing_candles(lows=[45.0, 44.0, 43.0, 42.0, 41.0, 35.0, 41.0, 42.0, 43.0, 44.0, 45.0])
     assert detect_swing_low(candles) is True
     assert detect_swing_high(candles) is False
 
 
 def test_detect_swing_low_false_when_middle_is_not_the_lowest():
-    candles = _swing_candles(lows=[100.0, 99.0, 98.0, 98.5, 97.0, 99.0, 100.0])
+    candles = _swing_candles(lows=[45.0, 44.0, 43.0, 42.0, 41.0, 40.0, 41.0, 42.0, 37.0, 44.0, 45.0])
     assert detect_swing_low(candles) is False
 
 
 def test_swing_high_intensity_grows_with_a_sharper_peak():
-    mild = _swing_candles(highs=[100.0, 101.0, 102.0, 103.0, 102.0, 101.0, 100.0])
-    sharp = _swing_candles(highs=[100.0, 101.0, 102.0, 110.0, 102.0, 101.0, 100.0])
+    mild = _swing_candles(highs=[95.0, 96.0, 97.0, 98.0, 99.0, 100.0, 99.0, 98.0, 97.0, 96.0, 95.0])
+    sharp = _swing_candles(highs=[95.0, 96.0, 97.0, 98.0, 99.0, 110.0, 99.0, 98.0, 97.0, 96.0, 95.0])
     assert swing_high_intensity(mild) > 0
     assert swing_high_intensity(sharp) > swing_high_intensity(mild)
 
 
 def test_swing_low_intensity_grows_with_a_sharper_trough():
-    mild = _swing_candles(lows=[100.0, 99.0, 98.0, 97.0, 98.0, 99.0, 100.0])
-    sharp = _swing_candles(lows=[100.0, 99.0, 98.0, 90.0, 98.0, 99.0, 100.0])
+    mild = _swing_candles(lows=[45.0, 44.0, 43.0, 42.0, 41.0, 40.0, 41.0, 42.0, 43.0, 44.0, 45.0])
+    sharp = _swing_candles(lows=[45.0, 44.0, 43.0, 42.0, 41.0, 30.0, 41.0, 42.0, 43.0, 44.0, 45.0])
     assert swing_low_intensity(mild) > 0
     assert swing_low_intensity(sharp) > swing_low_intensity(mild)
 
@@ -851,7 +854,7 @@ def test_engine_detects_swing_high_with_the_confirmed_candles_own_timestamp(sess
         session.commit()
 
     engine = ActivityEngine(session_factory)
-    highs = [100.0, 101.0, 102.0, 105.0, 102.0, 101.0, 100.0]
+    highs = [95.0, 96.0, 97.0, 98.0, 99.0, 105.0, 99.0, 98.0, 97.0, 96.0, 95.0]
     candles = [_candle(i, open=100.0, high=h, low=99.0, close=100.0) for i, h in enumerate(highs)]
     for c in candles:
         engine.on_candle_closed(SYMBOL, SEG, c)
@@ -860,10 +863,10 @@ def test_engine_detects_swing_high_with_the_confirmed_candles_own_timestamp(sess
     with session_factory() as session:
         rows = session.query(InstrumentActivity).filter_by(activity="swing_high").all()
     assert len(rows) == 1
-    # confirmed 3 candles after it happened (SWING_LOOKBACK=3) — the stored
+    # confirmed 5 candles after it happened (SWING_LOOKBACK=5) — the stored
     # ts/OHLC must be the peak candle's own, not the latest candle fed in
     # (DateTime columns come back naive, so compare against a naive value)
-    assert rows[0].ts == candles[3].timestamp.replace(tzinfo=None)
+    assert rows[0].ts == candles[5].timestamp.replace(tzinfo=None)
     assert float(rows[0].high_price) == 105.0
 
 
@@ -891,8 +894,10 @@ def test_engine_detects_double_top_through_on_candle_closed(session_factory):
     engine = ActivityEngine(session_factory)
     # rise to a first peak (100.3), fall to a valley (95.0), rise to a
     # second comparable peak (100.2), fall off — two swing highs within
-    # 0.5% of each other with a >0.3%-deep valley between them
-    highs = _zigzag_highs([(0, 90.0), (6, 100.3), (12, 95.0), (18, 100.2), (24, 92.0)])
+    # 0.5% of each other with a >0.3%-deep valley between them. Checkpoints
+    # spaced 10 candles apart (>= 2*_SWING_LOOKBACK+1=11 needed either side
+    # of each extreme to confirm it) — verified by direct simulation.
+    highs = _zigzag_highs([(0, 90.0), (10, 100.3), (20, 95.0), (30, 100.2), (40, 92.0)])
     candles = [_candle(i, open=h - 0.5, high=h, low=h - 1.0, close=h - 0.5) for i, h in enumerate(highs)]
     for c in candles:
         engine.on_candle_closed(SYMBOL, SEG, c)
@@ -1049,3 +1054,49 @@ def test_seed_pattern_definitions_is_idempotent(session_factory):
         rows = session.query(PatternDefinition).all()
     codes = {row.code for row in rows}
     assert {"doji", "hammer", "shooting_star", "three_white_soldiers", "three_black_crows"} <= codes
+
+
+# --------------------------------------------------------------------- engine settings
+
+def test_load_engine_settings_returns_empty_dict_when_table_is_empty(session_factory):
+    assert load_engine_settings(session_factory) == {}
+
+
+def test_load_engine_settings_returns_stored_overrides(session_factory):
+    with session_factory() as session:
+        session.add(EngineSetting(key="swing_lookback", value=2, description="test override"))
+        session.commit()
+
+    assert load_engine_settings(session_factory) == {"swing_lookback": 2.0}
+
+
+def test_engine_uses_the_default_swing_lookback_when_unset(session_factory):
+    engine = ActivityEngine(session_factory)
+    assert engine.swing_lookback == int(ENGINE_SETTING_DEFAULTS["swing_lookback"])
+
+
+def test_engine_uses_a_calibrated_swing_lookback_override(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.add(EngineSetting(key="swing_lookback", value=2, description="test override"))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    assert engine.swing_lookback == 2
+
+    # a peak that only qualifies as a swing high under a *narrower* window
+    # (2 candles each side, 5 total) than the module default (5 each side,
+    # 11 total) — proves the override actually changes detection behavior,
+    # not just the stored attribute
+    highs = [98.0, 99.0, 102.0, 99.0, 98.0]
+    candles = [_candle(i, open=100.0, high=h, low=99.0, close=100.0) for i, h in enumerate(highs)]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "swing_high" in activities

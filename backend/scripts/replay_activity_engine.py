@@ -21,7 +21,7 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 from activity_engine import ActivityEngine, seed_pattern_definitions
 from brokers.models import Candle
-from db.models import CandleToday, InstrumentActivity, SubscribedSymbol
+from db.models import Base, CandleToday, InstrumentActivity, SubscribedSymbol
 from db.session import build_engine, build_session_factory
 
 TIMEFRAMES = ["1min", "3min", "5min"]
@@ -30,6 +30,10 @@ TIMEFRAMES = ["1min", "3min", "5min"]
 def main() -> None:
     engine_db = build_engine()
     session_factory = build_session_factory(engine_db)
+    # create_all is idempotent (only creates what's missing) — matches
+    # app.py's own unconditional call, so this script stays usable right
+    # after a new model is added without needing the live app to run first
+    Base.metadata.create_all(engine_db)
     seed_pattern_definitions(session_factory)
 
     requested = set(sys.argv[1:])

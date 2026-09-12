@@ -146,6 +146,34 @@ class PatternDefinition(Base):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class EngineSetting(Base):
+    """Tunable numeric parameters for activity_engine.py's detectors —
+    lookback windows, similarity/depth thresholds, etc. — stored here
+    rather than only as hardcoded module constants, so a future
+    backtesting/calibration pass can update them directly (a plain UPDATE
+    or upsert) without a code change or redeploy.
+
+    Deliberately starts empty: a missing key means "no calibrated override
+    yet," and the caller falls back to its own hardcoded default — the
+    system behaves identically whether this table has zero rows or many.
+    This is not a required catalog like PatternDefinition (nothing needs
+    seeding); it only grows rows once something has actually been
+    recalibrated.
+
+    One row per parameter (e.g. key="swing_lookback", value=5.0) — a
+    single float column covers both int-like settings (lookback windows)
+    and true float thresholds (similarity/depth ratios), since an int is
+    just a float with no fractional part.
+    """
+
+    __tablename__ = "engine_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    description: Mapped[str] = mapped_column(String(256), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
 class BrokerAccount(Base):
     """Mirror of the Trading project's own BrokerAccount table (SQLite, on the VM).
 
