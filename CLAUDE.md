@@ -210,9 +210,13 @@ Current conventions in use:
    ```bash
    ssh -L 1433:127.0.0.1:1433 trading-server -N
    ```
-   Add `ServerAliveInterval 60` to SSH config to keep long dev sessions alive.
-   Not yet set up as a persistent/autossh background service — run manually
-   per dev session (see `LOCAL_DEVELOPMENT.md`).
+   `~/.ssh/config`'s `trading-server` entry has `ServerAliveInterval 60` (keeps
+   long dev sessions alive) and connection multiplexing (`ControlMaster auto`,
+   `ControlPersist 600`) so repeated commands against the VM reuse one
+   connection instead of opening a new one each time — done 2026-09-12 partly
+   to avoid tripping the VM's own connection-rate defenses (see
+   "VM connectivity" below). Not yet set up as a persistent/autossh background
+   service — run manually per dev session (see `LOCAL_DEVELOPMENT.md`).
 
 2. Local `.env` (gitignored) points at `127.0.0.1`, never the VM's IP:
    ```
@@ -224,6 +228,37 @@ Current conventions in use:
 
 3. Windows needs ODBC Driver 18 for SQL Server installed
    (`winget install --id Microsoft.msodbcsql.18 -e`).
+
+## Local Dev: SQLite option
+
+For day-to-day local dev/testing that doesn't need real broker-fed data,
+`DB_CONNECTION_STRING` also accepts a local SQLite file instead of the SQL
+Server tunnel above — no VM/tunnel dependency at all:
+```
+DB_CONNECTION_STRING=sqlite:///local_dev.db
+```
+`backend/db_config.py` recognizes the `sqlite` scheme directly (`*.db` is
+gitignored); `backend/db/session.py`'s `build_engine` passes
+`check_same_thread=False` since this app's feed/timer/EOD-flush work runs on
+background threads sharing one engine. `Base.metadata.create_all(engine)`
+(already called unconditionally in `create_app()`) creates all tables in a
+fresh SQLite file automatically on first run — nothing else to seed by hand.
+The unit test suite (`backend/tests/conftest.py`) already runs entirely
+against an in-memory SQLite database and never touches the VM. Switch back
+to the SQL Server tunnel whenever real data or final verification is needed.
+
+## VM connectivity
+
+The Azure VM (`tradingstaging`, alias `trading-server`) has had intermittent
+SSH/tunnel drops (2026-09-12) — most likely a rate-limiting mechanism like
+fail2ban on the VM reacting to repeated connection attempts made while
+troubleshooting, though this was never conclusively confirmed (see
+`~/.claude/projects/.../memory/vm_ssh_unreachable_investigation.md` for the
+full investigation trail — checking `sudo fail2ban-client status sshd` from
+the Azure Portal's Serial Console, which bypasses the network path entirely,
+is the next step if it recurs). Practical mitigation in the meantime: don't
+retry a failed connection immediately — wait 30s+ between attempts — and
+prefer the SQLite option above for local dev so this doesn't block work.
 
 ## Open Items
 

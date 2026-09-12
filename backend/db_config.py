@@ -7,9 +7,16 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 @dataclass(frozen=True)
 class DatabaseConfig:
-    """Connection settings for the SQL Server instance reached through SSH."""
+    """Connection settings for the configured database — either the SQL
+    Server instance reached through the SSH tunnel (real broker-fed data,
+    final verification), or a local SQLite file (day-to-day local dev/
+    testing, so it doesn't depend on the VM/tunnel being reachable — see
+    CLAUDE.md's "Local Dev: SQLite option"). host/port/username/password/
+    driver are only meaningful for the mssql backend; sqlite leaves them
+    blank."""
 
     url: str
+    backend: str  # "mssql" | "sqlite"
     host: str
     port: int
     database: str
@@ -25,8 +32,20 @@ def load_database_config(environ: dict[str, str] | None = None) -> DatabaseConfi
         raise ValueError("DB_CONNECTION_STRING is required")
 
     parsed = urlparse(connection_string)
+
+    if parsed.scheme == "sqlite":
+        database = connection_string[len("sqlite:///"):] if connection_string.startswith("sqlite:///") else ""
+        return DatabaseConfig(
+            url=connection_string, backend="sqlite",
+            host="", port=0, database=database or ":memory:",
+            username="", password="", driver="sqlite",
+        )
+
     if parsed.scheme != "mssql+pyodbc":
-        raise ValueError("DB_CONNECTION_STRING must use the mssql+pyodbc scheme")
+        raise ValueError(
+            "DB_CONNECTION_STRING must use the mssql+pyodbc scheme (SQL Server "
+            "over the SSH tunnel) or sqlite (local dev — e.g. sqlite:///local_dev.db)"
+        )
 
     host = parsed.hostname or ""
     port = parsed.port or 1433
@@ -49,6 +68,7 @@ def load_database_config(environ: dict[str, str] | None = None) -> DatabaseConfi
 
     return DatabaseConfig(
         url=connection_string,
+        backend="mssql",
         host=host,
         port=port,
         database=database,

@@ -8,3 +8,4 @@ frontend/node_modules/
 frontend/dist/
 .claude/
 token_temp.txt
+*.db

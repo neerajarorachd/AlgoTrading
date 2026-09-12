@@ -41,3 +41,23 @@ def test_load_database_config_requires_odbc_driver_18():
 
     with pytest.raises(ValueError, match="ODBC Driver 18"):
         load_database_config(environment)
+
+
+def test_load_database_config_accepts_a_local_sqlite_file():
+    config = load_database_config({"DB_CONNECTION_STRING": "sqlite:///local_dev.db"})
+
+    assert config.backend == "sqlite"
+    assert config.database == "local_dev.db"
+    assert config.url == "sqlite:///local_dev.db"
+
+
+def test_load_database_config_accepts_in_memory_sqlite():
+    config = load_database_config({"DB_CONNECTION_STRING": "sqlite:///:memory:"})
+
+    assert config.backend == "sqlite"
+    assert config.database == ":memory:"
+
+
+def test_load_database_config_rejects_an_unsupported_scheme():
+    with pytest.raises(ValueError, match="mssql\\+pyodbc.*sqlite"):
+        load_database_config({"DB_CONNECTION_STRING": "postgresql://user:pw@localhost/db"})
