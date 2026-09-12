@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from activity_engine import (
-    _BB_EXTREME_BAND,
     ActivityEngine,
     bb_squeeze_intensity,
     bb_widening_intensity,
@@ -267,91 +266,96 @@ def test_compute_bollinger_widens_with_more_spread():
     assert wide.width > tight.width
 
 
-def test_detect_bb_squeeze_true_for_a_new_low_width():
-    widths = [0.05] * 19 + [0.02]
+# 20 widths, 19 consecutive steps. TREND_RATIO=0.7 needs >= 13.3, i.e. >= 14
+# agreeing steps to qualify. _qualifying/_short below give exactly 14 and 13.
+def _narrowing_widths(agreeing_steps):
+    values = [1.0 - 0.01 * i for i in range(agreeing_steps + 1)]
+    values += [values[-1]] * (20 - len(values))
+    return values
+
+
+def _widening_widths(agreeing_steps):
+    return [1.0 - v for v in _narrowing_widths(agreeing_steps)]
+
+
+def test_detect_bb_squeeze_true_when_enough_steps_narrow():
+    widths = _narrowing_widths(14)
     assert detect_bb_squeeze(widths) is True
     assert detect_bb_widening(widths) is False
 
 
-def test_detect_bb_widening_true_for_a_new_high_width():
-    widths = [0.02] * 19 + [0.05]
+def test_detect_bb_squeeze_false_when_not_enough_steps_narrow():
+    widths = _narrowing_widths(13)
+    assert detect_bb_squeeze(widths) is False
+    assert detect_bb_widening(widths) is False
+
+
+def test_detect_bb_widening_true_when_enough_steps_widen():
+    widths = _widening_widths(14)
     assert detect_bb_widening(widths) is True
     assert detect_bb_squeeze(widths) is False
+
+
+def test_detect_bb_widening_false_when_not_enough_steps_widen():
+    widths = _widening_widths(13)
+    assert detect_bb_widening(widths) is False
 
 
 def test_detect_bb_squeeze_false_before_full_lookback():
-    assert detect_bb_squeeze([0.01] * 19) is False
+    assert detect_bb_squeeze(_narrowing_widths(14)[:19]) is False
 
 
-def test_detect_bb_squeeze_true_just_inside_the_25pct_band():
-    # lo=0.0, hi=0.10, span=0.10 — 0.024 sits at 24% of the span above lo
-    widths = [0.0] * 10 + [0.10] * 9 + [0.024]
-    assert detect_bb_squeeze(widths) is True
-
-
-def test_detect_bb_squeeze_false_just_outside_the_25pct_band():
-    widths = [0.0] * 10 + [0.10] * 9 + [0.026]
-    assert detect_bb_squeeze(widths) is False
-
-
-def test_detect_bb_widening_true_just_inside_the_25pct_band():
-    # lo=0.0, hi=0.10, span=0.10 — 0.076 sits 24% of the span below hi
-    widths = [0.10] * 10 + [0.0] * 9 + [0.076]
-    assert detect_bb_widening(widths) is True
-
-
-def test_detect_bb_widening_false_just_outside_the_25pct_band():
-    widths = [0.10] * 10 + [0.0] * 9 + [0.074]
-    assert detect_bb_widening(widths) is False
-
-
-def test_detect_bb_squeeze_and_widening_false_when_range_is_flat():
+def test_detect_bb_squeeze_and_widening_false_when_flat():
     assert detect_bb_squeeze([0.05] * 20) is False
     assert detect_bb_widening([0.05] * 20) is False
 
 
 def test_bb_squeeze_and_widening_intensity_exceed_one():
-    assert bb_squeeze_intensity([0.05] * 19 + [0.02]) > 1.0
-    assert bb_widening_intensity([0.02] * 19 + [0.05]) > 1.0
+    assert bb_squeeze_intensity(_narrowing_widths(19)) > 1.0
+    assert bb_widening_intensity(_widening_widths(19)) > 1.0
 
 
 def test_bb_squeeze_intensity_near_the_boundary_is_close_to_one():
-    widths = [0.0] * 10 + [0.10] * 9 + [0.024]
-    assert bb_squeeze_intensity(widths) == pytest.approx(_BB_EXTREME_BAND / 0.24)
+    assert bb_squeeze_intensity(_narrowing_widths(14)) == pytest.approx((14 / 19) / 0.7)
 
 
 # --------------------------------------------------------------------- VWAP divergence / gap-fill (pure)
 
-def test_detect_price_vwap_divergence_true_for_a_new_extreme_past_threshold():
-    gaps = [0.001] * 9 + [0.004]
+def _widening_gaps(agreeing_steps):
+    return [0.001 * v for v in _widening_widths(agreeing_steps)]
+
+
+def _narrowing_gaps(agreeing_steps):
+    return [0.001 * v for v in _narrowing_widths(agreeing_steps)]
+
+
+def test_detect_price_vwap_divergence_true_when_enough_steps_widen():
+    gaps = _widening_gaps(14)
     assert detect_price_vwap_divergence(gaps) is True
-
-
-def test_detect_price_vwap_divergence_false_below_threshold():
-    assert detect_price_vwap_divergence([0.0005] * 10) is False
-
-
-def test_detect_price_vwap_divergence_false_before_full_lookback():
-    assert detect_price_vwap_divergence([0.01] * 9) is False
-
-
-def test_detect_vwap_gap_fill_true_after_a_big_reversion():
-    gaps = [0.001] * 8 + [0.006, 0.002]
-    assert detect_vwap_gap_fill(gaps) is True
-
-
-def test_detect_vwap_gap_fill_false_when_gap_never_exceeded_threshold():
-    assert detect_vwap_gap_fill([0.001] * 10) is False
-
-
-def test_detect_vwap_gap_fill_false_when_still_extended():
-    gaps = [0.001] * 8 + [0.006, 0.005]  # barely shrunk, still mostly extended
     assert detect_vwap_gap_fill(gaps) is False
 
 
+def test_detect_price_vwap_divergence_false_when_not_enough_steps_widen():
+    assert detect_price_vwap_divergence(_widening_gaps(13)) is False
+
+
+def test_detect_price_vwap_divergence_false_before_full_lookback():
+    assert detect_price_vwap_divergence(_widening_gaps(14)[:19]) is False
+
+
+def test_detect_vwap_gap_fill_true_when_enough_steps_narrow():
+    gaps = _narrowing_gaps(14)
+    assert detect_vwap_gap_fill(gaps) is True
+    assert detect_price_vwap_divergence(gaps) is False
+
+
+def test_detect_vwap_gap_fill_false_when_not_enough_steps_narrow():
+    assert detect_vwap_gap_fill(_narrowing_gaps(13)) is False
+
+
 def test_vwap_divergence_and_gap_fill_intensity():
-    assert vwap_divergence_intensity([0.001] * 9 + [0.006]) == pytest.approx(0.006 / 0.003)
-    assert vwap_gap_fill_intensity([0.001] * 8 + [0.006, 0.002]) == pytest.approx(0.006 / 0.002)
+    assert vwap_divergence_intensity(_widening_gaps(19)) > 1.0
+    assert vwap_gap_fill_intensity(_narrowing_gaps(19)) > 1.0
 
 
 # --------------------------------------------------------------------- engine persistence
@@ -574,10 +578,12 @@ def test_engine_detects_vwap_divergence_and_gap_fill_through_on_candle_closed(se
         session.commit()
 
     engine = ActivityEngine(session_factory)
-    # Flat, then a steady climb that pulls price further and further ahead
-    # of the (slower-moving) cumulative vwap, then one candle back near
-    # vwap's own level to close most of that gap back up.
-    closes = [100.0, 100.0, 100.0, 100.0, 100.0, 103.0, 106.0, 110.0, 115.0, 121.0, 105.5]
+    # A steady climb pulls price further and further ahead of the
+    # (slower-moving) cumulative vwap — widening — then a gentler decline
+    # (staying above vwap throughout, no overshoot to the other side) closes
+    # most of that gap back up — narrowing.
+    closes = [100.0 + 2 * i for i in range(1, 26)]
+    closes += [150.0 - 0.8 * i for i in range(1, 26)]
     for i, close in enumerate(closes, start=1):
         engine.on_candle_closed(SYMBOL, SEG, _pc(i, close))
     engine.flush()

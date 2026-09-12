@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from brokers.models import Candle
 from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
 from db.session import session_scope
+from indicators import TREND_LOOKBACK, classify_trend, trend_intensity
 
 logger = logging.getLogger(__name__)
 
@@ -37,22 +38,11 @@ _LOOKBACK = 3
 # and across a stock's own price drifting over time.
 _BB_PERIOD = 20
 _BB_STDDEV_MULT = 2.0
-# How many recent width readings a squeeze/widening call compares the
-# current one against. Needs a full window before either can fire.
-_BB_WIDTH_LOOKBACK = 20
-# Squeeze/widening fire when the current width sits within this fraction of
-# the lookback window's own (max - min) range from its low/high — i.e. in
-# the bottom or top quartile of its own recent range, not necessarily the
-# single most extreme reading.
-_BB_EXTREME_BAND = 0.25
-
-# VWAP resets every trading day (cumulative from session open). "Divergence"
-# and "gap fill" are read off (close - vwap)/vwap over this many recent
-# candles. These starting thresholds, like the candle-pattern ones, are
-# pending calibration against real backtested outcomes, not a final answer.
-_VWAP_GAP_LOOKBACK = 10
-_VWAP_DIVERGENCE_THRESHOLD = 0.003  # 0.3% away from vwap
-_VWAP_GAP_FILL_RATIO = 0.5  # current gap has shrunk to <= half of the recent peak
+# BB width and VWAP distance are both classified "widening"/"narrowing" over
+# the same TREND_LOOKBACK-candle window via the shared trend-consistency
+# helper in indicators.py (see its docstring — a majority-of-steps check,
+# not a two-point comparison).
+_VWAP_GAP_LOOKBACK = TREND_LOOKBACK
 
 InstrumentKey = Tuple[str, str, str]  # (symbol, exchange_segment, timeframe)
 
@@ -371,96 +361,61 @@ def compute_bollinger(closes: Sequence[float], stddev_mult: float = _BB_STDDEV_M
 
 
 def detect_bb_squeeze(widths: Sequence[float]) -> bool:
-    """True when the current (last) width sits within the bottom
-    _BB_EXTREME_BAND fraction of the lookback window's own (max - min)
-    range — near the floor of its recent range, not necessarily the single
-    lowest reading. Volatility compression, the classic setup ahead of a
-    breakout."""
-    if len(widths) < _BB_WIDTH_LOOKBACK:
+    """True when the last TREND_LOOKBACK width readings are consistently
+    narrowing (a strong majority of consecutive steps decrease) — volatility
+    compression, the classic setup ahead of a breakout. Uses the same
+    trend-consistency check as VWAP distance, see indicators.classify_trend."""
+    if len(widths) < TREND_LOOKBACK:
         return False
-    current = widths[-1]
-    lo, hi = min(widths), max(widths)
-    span = hi - lo
-    if span <= 0:
-        return False
-    return (current - lo) <= _BB_EXTREME_BAND * span
+    return classify_trend(widths).direction == "narrowing"
 
 
 def detect_bb_widening(widths: Sequence[float]) -> bool:
-    """Squeeze's mirror: current width sits within the top _BB_EXTREME_BAND
-    fraction of the window's range — near the ceiling of its recent range.
-    Volatility expansion, typically during a strong directional move."""
-    if len(widths) < _BB_WIDTH_LOOKBACK:
+    """Squeeze's mirror: the last TREND_LOOKBACK width readings are
+    consistently widening."""
+    if len(widths) < TREND_LOOKBACK:
         return False
-    current = widths[-1]
-    lo, hi = min(widths), max(widths)
-    span = hi - lo
-    if span <= 0:
-        return False
-    return (hi - current) <= _BB_EXTREME_BAND * span
+    return classify_trend(widths).direction == "widening"
 
 
 def bb_squeeze_intensity(widths: Sequence[float]) -> float:
-    """_BB_EXTREME_BAND divided by how far (as a fraction of the window's
-    range) the current width sits above the floor — 1.0 right at the
-    qualifying edge, growing toward infinity as the width approaches the
-    exact floor of its recent range."""
-    current = widths[-1]
-    lo, hi = min(widths), max(widths)
-    span = hi - lo
-    if span <= 0:
-        return float("inf")
-    frac = (current - lo) / span
-    return _BB_EXTREME_BAND / frac if frac > 0 else float("inf")
+    """How consistently the window narrowed, relative to the qualifying
+    agreement ratio — 1.0 right at the ratio, growing toward 1/TREND_RATIO
+    as every single step in the window narrows."""
+    return trend_intensity(classify_trend(widths))
 
 
 def bb_widening_intensity(widths: Sequence[float]) -> float:
-    """Squeeze intensity's mirror — distance below the window's ceiling."""
-    current = widths[-1]
-    lo, hi = min(widths), max(widths)
-    span = hi - lo
-    if span <= 0:
-        return float("inf")
-    frac = (hi - current) / span
-    return _BB_EXTREME_BAND / frac if frac > 0 else float("inf")
+    """Squeeze intensity's mirror."""
+    return trend_intensity(classify_trend(widths))
 
 
 def detect_price_vwap_divergence(gaps: Sequence[float]) -> bool:
     """gaps are signed (close - vwap) / vwap readings, most recent last.
-    Fires when the current absolute gap clears the minimum threshold and is
-    a new extreme across the lookback window — flags the moment price is
-    stretching away from vwap, not every candle that merely sits off it."""
-    if len(gaps) < _VWAP_GAP_LOOKBACK:
+    Fires when the last TREND_LOOKBACK gap readings are consistently
+    widening (price stretching further from vwap), via the same
+    trend-consistency check used for BB width."""
+    if len(gaps) < TREND_LOOKBACK:
         return False
-    current = abs(gaps[-1])
-    prior_max = max((abs(g) for g in list(gaps)[:-1]), default=0.0)
-    return current >= _VWAP_DIVERGENCE_THRESHOLD and current > prior_max
+    return classify_trend(gaps).direction == "widening"
 
 
 def detect_vwap_gap_fill(gaps: Sequence[float]) -> bool:
-    """Fires when price has closed most of the distance back toward vwap
-    after having stretched away from it: the peak absolute gap across the
-    lookback window cleared the divergence threshold, and the current gap
-    has shrunk to <= _VWAP_GAP_FILL_RATIO of that peak."""
-    if len(gaps) < _VWAP_GAP_LOOKBACK:
+    """Divergence's mirror: the last TREND_LOOKBACK gap readings are
+    consistently narrowing — price reverting back toward vwap."""
+    if len(gaps) < TREND_LOOKBACK:
         return False
-    current = abs(gaps[-1])
-    peak = max(abs(g) for g in gaps)
-    return peak >= _VWAP_DIVERGENCE_THRESHOLD and current <= _VWAP_GAP_FILL_RATIO * peak
+    return classify_trend(gaps).direction == "narrowing"
 
 
 def vwap_divergence_intensity(gaps: Sequence[float]) -> float:
-    """Current gap as a multiple of the qualifying threshold — 1.0 is the
-    qualifying floor, higher means a more extended move away from vwap."""
-    return abs(gaps[-1]) / _VWAP_DIVERGENCE_THRESHOLD
+    """How consistently the gap widened, relative to the qualifying ratio."""
+    return trend_intensity(classify_trend(gaps))
 
 
 def vwap_gap_fill_intensity(gaps: Sequence[float]) -> float:
-    """How much of the peak gap has been closed — higher means more of the
-    move back toward vwap has completed."""
-    peak = max(abs(g) for g in gaps)
-    current = abs(gaps[-1])
-    return peak / current if current > 0 else float("inf")
+    """Divergence intensity's mirror."""
+    return trend_intensity(classify_trend(gaps))
 
 
 PRICE_ACTION_INTENSITY: Dict[str, Callable[[Sequence[float]], float]] = {
@@ -495,10 +450,10 @@ PATTERN_CATALOG = [
     ("tweezer_top", "multi_candle", "A bullish then a bearish candle with matching highs"),
     ("three_white_soldiers", "multi_candle", "Three consecutive bullish candles, each closing higher, opening within the prior body"),
     ("three_black_crows", "multi_candle", "Three consecutive bearish candles, each closing lower, opening within the prior body"),
-    ("bb_squeeze", "price_action", "Bollinger Band width sits within 25% of its lookback window's low — volatility compression, often precedes a breakout"),
-    ("bb_widening", "price_action", "Bollinger Band width sits within 25% of its lookback window's high — volatility expansion, typically during a strong directional move"),
-    ("price_vwap_divergence", "price_action", "Price stretches to a new extreme distance from VWAP across the lookback window, past a minimum threshold"),
-    ("vwap_gap_fill", "price_action", "Price reverts back toward VWAP after stretching away from it, closing most of the prior gap"),
+    ("bb_squeeze", "price_action", "Bollinger Band width has been consistently narrowing over the last 20 candles — volatility compression, often precedes a breakout"),
+    ("bb_widening", "price_action", "Bollinger Band width has been consistently widening over the last 20 candles — volatility expansion, typically during a strong directional move"),
+    ("price_vwap_divergence", "price_action", "Price's distance from VWAP has been consistently widening over the last 20 candles — stretching away from vwap"),
+    ("vwap_gap_fill", "price_action", "Price's distance from VWAP has been consistently narrowing over the last 20 candles — reverting back toward vwap"),
 ]
 
 
@@ -548,7 +503,7 @@ class ActivityEngine:
         self._buffer: List[dict] = []
         # price-action state, one series per (symbol, exchange_segment, timeframe)
         self._closes: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_BB_PERIOD))
-        self._bb_widths: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_BB_WIDTH_LOOKBACK))
+        self._bb_widths: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=TREND_LOOKBACK))
         self._vwap_state: Dict[InstrumentKey, _VwapState] = {}
         self._vwap_gaps: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_VWAP_GAP_LOOKBACK))
 
