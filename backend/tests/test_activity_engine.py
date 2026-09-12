@@ -19,6 +19,8 @@ from activity_engine import (
     detect_hammer,
     detect_morning_star,
     detect_piercing_line,
+    detect_bearish_structure_shift,
+    detect_bullish_structure_shift,
     detect_double_bottom,
     detect_double_top,
     detect_price_vwap_divergence,
@@ -30,6 +32,8 @@ from activity_engine import (
     detect_tweezer_bottom,
     detect_tweezer_top,
     detect_vwap_gap_fill,
+    bearish_structure_shift_intensity,
+    bullish_structure_shift_intensity,
     doji_intensity,
     double_bottom_intensity,
     double_top_intensity,
@@ -437,6 +441,55 @@ def test_double_top_and_bottom_intensity_exceed_one():
     bottom_points = [_sp("low", 100.0), _sp("high", 105.0), _sp("low", 99.7)]
     assert double_top_intensity(top_points) > 1.0
     assert double_bottom_intensity(bottom_points) > 1.0
+
+
+# --------------------------------------------------------------------- structure shift (pure)
+
+def _sp_at(kind, price, minute):
+    return SwingPoint(kind=kind, price=price, candle=_candle(minute, open=price, high=price, low=price, close=price))
+
+
+def test_detect_bullish_structure_shift_true_for_a_genuine_ll_hh_hl():
+    lows = [_sp_at("low", 100.0, 0), _sp_at("low", 95.0, 2), _sp_at("low", 97.0, 4)]
+    highs = [_sp_at("high", 102.0, 1), _sp_at("high", 106.0, 3)]
+    assert detect_bullish_structure_shift(lows, highs) is True
+    assert detect_bearish_structure_shift(highs, lows) is False
+
+
+def test_detect_bullish_structure_shift_false_when_hh_is_not_higher():
+    lows = [_sp_at("low", 100.0, 0), _sp_at("low", 95.0, 2), _sp_at("low", 97.0, 4)]
+    highs = [_sp_at("high", 102.0, 1), _sp_at("high", 101.0, 3)]  # not a real HH
+    assert detect_bullish_structure_shift(lows, highs) is False
+
+
+def test_detect_bullish_structure_shift_false_when_order_is_wrong():
+    # HH happens BEFORE the LL, not after — not a valid reversal sequence
+    lows = [_sp_at("low", 100.0, 3), _sp_at("low", 95.0, 4), _sp_at("low", 97.0, 5)]
+    highs = [_sp_at("high", 102.0, 0), _sp_at("high", 106.0, 1)]
+    assert detect_bullish_structure_shift(lows, highs) is False
+
+
+def test_detect_bullish_structure_shift_false_before_enough_points():
+    lows = [_sp_at("low", 100.0, 0), _sp_at("low", 95.0, 2)]
+    highs = [_sp_at("high", 102.0, 1), _sp_at("high", 106.0, 3)]
+    assert detect_bullish_structure_shift(lows, highs) is False
+
+
+def test_detect_bearish_structure_shift_true_for_a_genuine_hh_ll_lh():
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 105.0, 2), _sp_at("high", 102.0, 4)]
+    lows = [_sp_at("low", 98.0, 1), _sp_at("low", 93.0, 3)]
+    assert detect_bearish_structure_shift(highs, lows) is True
+    assert detect_bullish_structure_shift(lows, highs) is False
+
+
+def test_structure_shift_intensity_exceeds_one():
+    lows = [_sp_at("low", 100.0, 0), _sp_at("low", 95.0, 2), _sp_at("low", 97.0, 4)]
+    highs = [_sp_at("high", 102.0, 1), _sp_at("high", 106.0, 3)]
+    assert bullish_structure_shift_intensity(lows, highs) > 1.0
+
+    highs2 = [_sp_at("high", 100.0, 0), _sp_at("high", 105.0, 2), _sp_at("high", 102.0, 4)]
+    lows2 = [_sp_at("low", 98.0, 1), _sp_at("low", 93.0, 3)]
+    assert bearish_structure_shift_intensity(highs2, lows2) > 1.0
 
 
 # --------------------------------------------------------------------- Bollinger Bands (pure)
@@ -908,6 +961,39 @@ def test_engine_detects_double_top_through_on_candle_closed(session_factory):
     assert "swing_high" in activities
     assert "swing_low" in activities
     assert "double_top" in activities
+
+
+def test_engine_detects_bullish_structure_shift_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # start_high -> L_prev(90) -> H_prev(95) -> L_ll(85, a real Lower Low)
+    # -> H_hh(100, a real Higher High) -> L_hl(91, a real Higher Low,
+    # confirming the reversal) -> a final rise to confirm L_hl itself.
+    # Checkpoints 12 candles apart (>= 2*swing_lookback+1=11 either side of
+    # each extreme) — verified by direct simulation.
+    # indices run past 59, so build timestamps via timedelta (like _pc)
+    # rather than _candle's fixed-hour ts_minute (capped at 59)
+    closes = _zigzag_highs([(0, 100.0), (12, 90.0), (24, 95.0), (36, 85.0), (48, 100.0), (60, 91.0), (72, 96.0)])
+    candles = [
+        Candle(
+            symbol=SYMBOL, timeframe="1min", timestamp=_BASE_TS + timedelta(minutes=i),
+            open=c, high=c, low=c, close=c, volume=100,
+        )
+        for i, c in enumerate(closes)
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "bullish_structure_shift" in activities
 
 
 def test_engine_detects_bb_squeeze_through_on_candle_closed(session_factory):

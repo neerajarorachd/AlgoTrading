@@ -97,6 +97,15 @@ _SWING_LOOKBACK = 5
 _DOUBLE_SIMILARITY = 0.005  # the two tops/bottoms must be within 0.5% of each other
 _DOUBLE_MIN_DEPTH = 0.003  # the valley/peak between them must be >= 0.3% deep
 
+# Bullish/bearish structure shift — a Lower-Low-then-Higher-High-then-
+# Higher-Low sequence (mirror for bearish) confirming a trend reversal.
+# Each of the three legs (the LL's own drop, the HH's rise, the HL's rise)
+# must individually clear this floor, so the shift is built from three
+# genuinely meaningful moves, not just three points that happen to be
+# directionally correct by a fraction of a percent — the same lesson real
+# data taught for swing detection itself.
+_STRUCTURE_MIN_MOVE = 0.003
+
 InstrumentKey = Tuple[str, str, str]  # (symbol, exchange_segment, timeframe)
 
 
@@ -571,6 +580,74 @@ def double_bottom_intensity(points: List[SwingPoint]) -> float:
     return depth / _DOUBLE_MIN_DEPTH if _DOUBLE_MIN_DEPTH else float("inf")
 
 
+# --------------------------------------------------------------------- structure shift (HH-HL / LH-LL)
+
+def _pct_move(from_price: float, to_price: float) -> float:
+    return (to_price - from_price) / from_price if from_price else float("inf")
+
+
+def detect_bullish_structure_shift(lows: List[SwingPoint], highs: List[SwingPoint]) -> bool:
+    """lows: last 3 confirmed swing lows chronological, highs: last 2
+    confirmed swing highs chronological (tracked as separate type-only
+    sequences, not one interleaved list — makes each leg's comparison a
+    plain "is the newer one bigger" check). True for a genuine Lower-Low,
+    then Higher-High, then Higher-Low sequence — a bearish-to-bullish
+    trend structure shift — where each leg clears _STRUCTURE_MIN_MOVE and
+    the three points occur in that chronological order."""
+    if len(lows) < 3 or len(highs) < 2:
+        return False
+    l_prev, l_ll, l_hl = lows[-3], lows[-2], lows[-1]
+    h_prev, h_hh = highs[-2], highs[-1]
+    if _pct_move(l_prev.price, l_ll.price) > -_STRUCTURE_MIN_MOVE:  # LL: a real drop
+        return False
+    if _pct_move(h_prev.price, h_hh.price) < _STRUCTURE_MIN_MOVE:  # HH: a real rise
+        return False
+    if _pct_move(l_ll.price, l_hl.price) < _STRUCTURE_MIN_MOVE:  # HL: a real recovery
+        return False
+    return l_ll.candle.timestamp < h_hh.candle.timestamp < l_hl.candle.timestamp
+
+
+def detect_bearish_structure_shift(highs: List[SwingPoint], lows: List[SwingPoint]) -> bool:
+    """Bullish shift's mirror: Higher-High, then Lower-Low, then Lower-High."""
+    if len(highs) < 3 or len(lows) < 2:
+        return False
+    h_prev, h_hh, h_lh = highs[-3], highs[-2], highs[-1]
+    l_prev, l_ll = lows[-2], lows[-1]
+    if _pct_move(h_prev.price, h_hh.price) < _STRUCTURE_MIN_MOVE:  # HH: still part of the uptrend
+        return False
+    if _pct_move(l_prev.price, l_ll.price) > -_STRUCTURE_MIN_MOVE:  # LL: the break
+        return False
+    if _pct_move(h_hh.price, h_lh.price) > -_STRUCTURE_MIN_MOVE:  # LH: confirms it
+        return False
+    return h_hh.candle.timestamp < l_ll.candle.timestamp < h_lh.candle.timestamp
+
+
+def bullish_structure_shift_intensity(lows: List[SwingPoint], highs: List[SwingPoint]) -> float:
+    """Average of the three legs' move sizes, as a multiple of the
+    qualifying floor — 1.0 right at the floor, higher for a more decisive
+    reversal (each leg moving well past the minimum)."""
+    l_prev, l_ll, l_hl = lows[-3], lows[-2], lows[-1]
+    h_prev, h_hh = highs[-2], highs[-1]
+    avg_move = (
+        abs(_pct_move(l_prev.price, l_ll.price))
+        + _pct_move(h_prev.price, h_hh.price)
+        + _pct_move(l_ll.price, l_hl.price)
+    ) / 3
+    return avg_move / _STRUCTURE_MIN_MOVE if _STRUCTURE_MIN_MOVE else float("inf")
+
+
+def bearish_structure_shift_intensity(highs: List[SwingPoint], lows: List[SwingPoint]) -> float:
+    """Bullish shift intensity's mirror."""
+    h_prev, h_hh, h_lh = highs[-3], highs[-2], highs[-1]
+    l_prev, l_ll = lows[-2], lows[-1]
+    avg_move = (
+        _pct_move(h_prev.price, h_hh.price)
+        + abs(_pct_move(l_prev.price, l_ll.price))
+        + abs(_pct_move(h_hh.price, h_lh.price))
+    ) / 3
+    return avg_move / _STRUCTURE_MIN_MOVE if _STRUCTURE_MIN_MOVE else float("inf")
+
+
 # --------------------------------------------------------------------- price action (BB / VWAP)
 
 class BollingerBands:
@@ -703,6 +780,8 @@ PATTERN_CATALOG = [
     ("swing_low", "structure", "A confirmed local price trough — the lowest low across a window of candles on both sides of it"),
     ("double_top", "graph_formation", "Two comparable swing highs with a meaningfully lower swing low between them — a classic bearish reversal shape"),
     ("double_bottom", "graph_formation", "Two comparable swing lows with a meaningfully higher swing high between them — a classic bullish reversal shape"),
+    ("bullish_structure_shift", "structure", "Lower Low, then Higher High, then Higher Low — trend structure shifting from bearish to bullish"),
+    ("bearish_structure_shift", "structure", "Higher High, then Lower Low, then Lower High — trend structure shifting from bullish to bearish"),
 ]
 
 
@@ -799,6 +878,12 @@ class ActivityEngine:
         # last 3 confirmed swing points, chronological — graph formations
         # (double top/bottom so far) read off this
         self._swing_points: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
+        # confirmed swing highs/lows tracked as separate type-only sequences
+        # (not interleaved) — trend structure shift reads off these instead,
+        # since it only ever compares a point against the prior one of its
+        # own type (is this high bigger than the last high? etc.)
+        self._recent_highs: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
+        self._recent_lows: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
 
     def buffered_count(self) -> int:
         return len(self._buffer)
@@ -984,7 +1069,8 @@ class ActivityEngine:
                         points = self._swing_points[key]
                         kind = "high" if activity == "swing_high" else "low"
                         price = swing_candle.high if kind == "high" else swing_candle.low
-                        points.append(SwingPoint(kind=kind, price=price, candle=swing_candle))
+                        swing_point = SwingPoint(kind=kind, price=price, candle=swing_candle)
+                        points.append(swing_point)
                         points_list = list(points)
 
                         formation = None
@@ -1001,6 +1087,35 @@ class ActivityEngine:
                                 "ts": swing_candle.timestamp,
                                 "activity_type": "graph_formation", "activity": formation_name,
                                 "intensity": formation_intensity,
+                                "open_price": swing_candle.open, "high_price": swing_candle.high,
+                                "low_price": swing_candle.low, "close_price": swing_candle.close,
+                            })
+
+                        # separate type-only sequences for structure-shift
+                        # detection (LL-HH-HL / HH-LL-LH) — see detect_
+                        # bullish_structure_shift's docstring for why this
+                        # isn't just read off `points` above
+                        if kind == "high":
+                            self._recent_highs[key].append(swing_point)
+                        else:
+                            self._recent_lows[key].append(swing_point)
+                        recent_highs = list(self._recent_highs[key])
+                        recent_lows = list(self._recent_lows[key])
+
+                        shift = None
+                        if kind == "low" and detect_bullish_structure_shift(recent_lows, recent_highs):
+                            shift = ("bullish_structure_shift", bullish_structure_shift_intensity(recent_lows, recent_highs))
+                        elif kind == "high" and detect_bearish_structure_shift(recent_highs, recent_lows):
+                            shift = ("bearish_structure_shift", bearish_structure_shift_intensity(recent_highs, recent_lows))
+                        if shift is not None:
+                            shift_name, shift_intensity = shift
+                            if shift_intensity == float("inf"):
+                                shift_intensity = None
+                            self._buffer.append({
+                                "instrument_id": instrument_id, "timeframe": candle.timeframe,
+                                "ts": swing_candle.timestamp,
+                                "activity_type": "structure", "activity": shift_name,
+                                "intensity": shift_intensity,
                                 "open_price": swing_candle.open, "high_price": swing_candle.high,
                                 "low_price": swing_candle.low, "close_price": swing_candle.close,
                             })
