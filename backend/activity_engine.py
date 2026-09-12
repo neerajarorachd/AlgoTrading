@@ -96,6 +96,13 @@ _SWING_LOOKBACK = 5
 # every other threshold in this module.
 _DOUBLE_SIMILARITY = 0.005  # the two tops/bottoms must be within 0.5% of each other
 _DOUBLE_MIN_DEPTH = 0.003  # the valley/peak between them must be >= 0.3% deep
+# Trade-planning levels for a confirmed double top/bottom — a small buffer
+# above/below the pattern's own extreme for the stop, and the classic
+# "measured move" target (the pattern's own height projected from the
+# neckline). These are derived, not detected — no new instrument_activity
+# columns, just pure functions callable wherever the same points list used
+# for detection/intensity is already in hand.
+_STOP_LOSS_BUFFER = 0.002
 
 # Bullish/bearish structure shift — a Lower-Low-then-Higher-High-then-
 # Higher-Low sequence (mirror for bearish) confirming a trend reversal.
@@ -578,6 +585,48 @@ def double_bottom_intensity(points: List[SwingPoint]) -> float:
     avg_bottoms = (a.price + c.price) / 2
     depth = (b.price - avg_bottoms) / avg_bottoms if avg_bottoms else float("inf")
     return depth / _DOUBLE_MIN_DEPTH if _DOUBLE_MIN_DEPTH else float("inf")
+
+
+def double_top_neckline(points: List[SwingPoint]) -> float:
+    """The valley between the two tops — the level price needs to close
+    below for a breakout to actually confirm this pattern (that
+    confirmation itself isn't checked here, see the module docstring's
+    note on break-of-structure being separate, deferred work)."""
+    return points[-2].price
+
+
+def double_top_stop_loss(points: List[SwingPoint]) -> float:
+    """A small buffer above the higher of the two tops."""
+    a, c = points[-3], points[-1]
+    return max(a.price, c.price) * (1 + _STOP_LOSS_BUFFER)
+
+
+def double_top_target(points: List[SwingPoint]) -> float:
+    """Classic measured-move target: the pattern's own height (average top
+    to neckline) projected downward from the neckline."""
+    a, b, c = points[-3], points[-2], points[-1]
+    height = (a.price + c.price) / 2 - b.price
+    return b.price - height
+
+
+def double_bottom_neckline(points: List[SwingPoint]) -> float:
+    """Double top neckline's mirror — the peak between the two bottoms."""
+    return points[-2].price
+
+
+def double_bottom_stop_loss(points: List[SwingPoint]) -> float:
+    """Double top stop-loss's mirror — a small buffer below the lower of
+    the two bottoms."""
+    a, c = points[-3], points[-1]
+    return min(a.price, c.price) * (1 - _STOP_LOSS_BUFFER)
+
+
+def double_bottom_target(points: List[SwingPoint]) -> float:
+    """Double top target's mirror — the pattern's own height projected
+    upward from the neckline."""
+    a, b, c = points[-3], points[-2], points[-1]
+    height = b.price - (a.price + c.price) / 2
+    return b.price + height
 
 
 # --------------------------------------------------------------------- structure shift (HH-HL / LH-LL)
@@ -1090,6 +1139,27 @@ class ActivityEngine:
                                 "open_price": swing_candle.open, "high_price": swing_candle.high,
                                 "low_price": swing_candle.low, "close_price": swing_candle.close,
                             })
+                            # trade-planning levels — derived, not stored
+                            # (see _STOP_LOSS_BUFFER's comment); logged here
+                            # since this is the only point in the whole
+                            # pipeline that still has the raw points list in
+                            # hand, not just the persisted single-candle row
+                            if formation_name == "double_top":
+                                neckline, stop, target = (
+                                    double_top_neckline(points_list),
+                                    double_top_stop_loss(points_list),
+                                    double_top_target(points_list),
+                                )
+                            else:
+                                neckline, stop, target = (
+                                    double_bottom_neckline(points_list),
+                                    double_bottom_stop_loss(points_list),
+                                    double_bottom_target(points_list),
+                                )
+                            logger.info(
+                                "%s %s %s: neckline=%.2f stop_loss=%.2f target=%.2f",
+                                symbol, candle.timeframe, formation_name, neckline, stop, target,
+                            )
 
                         # separate type-only sequences for structure-shift
                         # detection (LL-HH-HL / HH-LL-LH) — see detect_

@@ -36,7 +36,13 @@ from activity_engine import (
     bullish_structure_shift_intensity,
     doji_intensity,
     double_bottom_intensity,
+    double_bottom_neckline,
+    double_bottom_stop_loss,
+    double_bottom_target,
     double_top_intensity,
+    double_top_neckline,
+    double_top_stop_loss,
+    double_top_target,
     engulfing_intensity,
     evening_star_intensity,
     hammer_intensity,
@@ -441,6 +447,23 @@ def test_double_top_and_bottom_intensity_exceed_one():
     bottom_points = [_sp("low", 100.0), _sp("high", 105.0), _sp("low", 99.7)]
     assert double_top_intensity(top_points) > 1.0
     assert double_bottom_intensity(bottom_points) > 1.0
+
+
+def test_double_top_neckline_stop_loss_and_target():
+    # matches the classic reference: tops at 150, neckline (valley) at 130
+    points = [_sp("high", 150.0), _sp("low", 130.0), _sp("high", 150.0)]
+    assert double_top_neckline(points) == pytest.approx(130.0)
+    assert double_top_stop_loss(points) == pytest.approx(150.0 * 1.002)
+    # height = 150 - 130 = 20, target = 130 - 20 = 110
+    assert double_top_target(points) == pytest.approx(110.0)
+
+
+def test_double_bottom_neckline_stop_loss_and_target():
+    points = [_sp("low", 130.0), _sp("high", 150.0), _sp("low", 130.0)]
+    assert double_bottom_neckline(points) == pytest.approx(150.0)
+    assert double_bottom_stop_loss(points) == pytest.approx(130.0 * 0.998)
+    # height = 150 - 130 = 20, target = 150 + 20 = 170
+    assert double_bottom_target(points) == pytest.approx(170.0)
 
 
 # --------------------------------------------------------------------- structure shift (pure)
