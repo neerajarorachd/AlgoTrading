@@ -1,19 +1,19 @@
 """Detects candlestick patterns, price-action signals, indicator crossovers,
-and swing structure as each 1-/3-/5-min candle closes, and persists them to
-instrument_activity. Covers, so far: single-candle shape patterns (doji,
-hammer, shooting star), two-candle patterns (bullish/bearish engulfing,
-piercing line, dark cloud cover, tweezer top/bottom), three-candle patterns
-(three white soldiers / three black crows, morning star / evening star),
-price-action signals (Bollinger Band squeeze/widening, price stretching
-away from VWAP, price reverting back to fill a VWAP gap), indicator
-crossovers (RSI crossing 60/40, MACD crossing its signal line, Stochastic
-%K crossing %D, MA21 crossing MA50), and swing-high/swing-low (fractal)
-detection — confirmed _SWING_LOOKBACK candles after they happen, since a
-swing point needs to see what came after it to be identified. Swing points
-are the foundation the actual multi-bar chart formations (double top/
-bottom, head and shoulders, flags, triangles, HH-HL trend structure, etc.)
-get built on top of next — those aren't built yet, just their foundation.
-Outcome tracking (what happened N candles after an activity) is
+swing structure, and graph formations as each 1-/3-/5-min candle closes,
+and persists them to instrument_activity. Covers, so far: single-candle
+shape patterns (doji, hammer, shooting star), two-candle patterns
+(bullish/bearish engulfing, piercing line, dark cloud cover, tweezer
+top/bottom), three-candle patterns (three white soldiers / three black
+crows, morning star / evening star), price-action signals (Bollinger Band
+squeeze/widening, price stretching away from VWAP, price reverting back to
+fill a VWAP gap), indicator crossovers (RSI crossing 60/40, MACD crossing
+its signal line, Stochastic %K crossing %D, MA21 crossing MA50),
+swing-high/swing-low (fractal) detection — confirmed _SWING_LOOKBACK
+candles after they happen, since a swing point needs to see what came
+after it to be identified — and, built on top of those swing points, the
+first graph formation: double top / double bottom. Larger formations (head
+and shoulders, flags, triangles, HH-HL trend structure, etc.) aren't built
+yet. Outcome tracking (what happened N candles after an activity) is
 deliberately not built yet either.
 """
 from __future__ import annotations
@@ -82,6 +82,16 @@ _MA_LONG_PERIOD = 50
 # short/noisy for a first pass, pending real calibration once the
 # backtesting engine can check this against 2 years of data.
 _SWING_LOOKBACK = 3
+
+# Double top/bottom — the first actual graph formation, built on swing
+# points. Fires as soon as the pattern's shape completes (two comparable
+# tops/bottoms with a meaningfully deeper valley/peak between them), not
+# waiting for a neckline break — that's its own separate signal (break of
+# structure, not built yet) rather than part of this shape's definition.
+# Both thresholds are starting points pending real calibration, same as
+# every other threshold in this module.
+_DOUBLE_SIMILARITY = 0.005  # the two tops/bottoms must be within 0.5% of each other
+_DOUBLE_MIN_DEPTH = 0.003  # the valley/peak between them must be >= 0.3% deep
 
 InstrumentKey = Tuple[str, str, str]  # (symbol, exchange_segment, timeframe)
 
@@ -487,6 +497,74 @@ def swing_low_intensity(candles: List[Candle]) -> float:
     return (avg_others - mid.low) / avg_others if avg_others else float("inf")
 
 
+# --------------------------------------------------------------------- graph formations (double top/bottom)
+
+class SwingPoint:
+    """One confirmed swing point, in the chronological sequence formation
+    detectors read from — kind is "high" or "low", price is the swing
+    candle's own high/low (matching kind), candle is that same swing
+    candle (for the formation activity's own ts/OHLC when it fires)."""
+
+    __slots__ = ("kind", "price", "candle")
+
+    def __init__(self, kind: str, price: float, candle: Candle):
+        self.kind = kind
+        self.price = price
+        self.candle = candle
+
+
+def detect_double_top(points: List[SwingPoint]) -> bool:
+    """points: the last 3 confirmed swing points, chronological, most
+    recent last. True when they form high -> low -> high, the two highs
+    are within _DOUBLE_SIMILARITY of each other, and the low between them
+    sits at least _DOUBLE_MIN_DEPTH below their average — a real "M" shape,
+    not just three nearly-flat points."""
+    if len(points) < 3:
+        return False
+    a, b, c = points[-3], points[-2], points[-1]
+    if not (a.kind == "high" and b.kind == "low" and c.kind == "high"):
+        return False
+    avg_tops = (a.price + c.price) / 2
+    if avg_tops <= 0:
+        return False
+    if abs(a.price - c.price) / avg_tops > _DOUBLE_SIMILARITY:
+        return False
+    return (avg_tops - b.price) / avg_tops >= _DOUBLE_MIN_DEPTH
+
+
+def detect_double_bottom(points: List[SwingPoint]) -> bool:
+    """Double top's mirror: low -> high -> low, a "W" shape."""
+    if len(points) < 3:
+        return False
+    a, b, c = points[-3], points[-2], points[-1]
+    if not (a.kind == "low" and b.kind == "high" and c.kind == "low"):
+        return False
+    avg_bottoms = (a.price + c.price) / 2
+    if avg_bottoms <= 0:
+        return False
+    if abs(a.price - c.price) / avg_bottoms > _DOUBLE_SIMILARITY:
+        return False
+    return (b.price - avg_bottoms) / avg_bottoms >= _DOUBLE_MIN_DEPTH
+
+
+def double_top_intensity(points: List[SwingPoint]) -> float:
+    """The valley's depth relative to the two tops, as a multiple of the
+    qualifying floor (_DOUBLE_MIN_DEPTH) — 1.0 right at the floor, higher
+    for a deeper, more pronounced "M"."""
+    a, b, c = points[-3], points[-2], points[-1]
+    avg_tops = (a.price + c.price) / 2
+    depth = (avg_tops - b.price) / avg_tops if avg_tops else float("inf")
+    return depth / _DOUBLE_MIN_DEPTH if _DOUBLE_MIN_DEPTH else float("inf")
+
+
+def double_bottom_intensity(points: List[SwingPoint]) -> float:
+    """Double top intensity's mirror."""
+    a, b, c = points[-3], points[-2], points[-1]
+    avg_bottoms = (a.price + c.price) / 2
+    depth = (b.price - avg_bottoms) / avg_bottoms if avg_bottoms else float("inf")
+    return depth / _DOUBLE_MIN_DEPTH if _DOUBLE_MIN_DEPTH else float("inf")
+
+
 # --------------------------------------------------------------------- price action (BB / VWAP)
 
 class BollingerBands:
@@ -617,6 +695,8 @@ PATTERN_CATALOG = [
     ("stoch_bearish_cross", "indicator", "Stochastic %K crosses below %D — short-term momentum turning bearish"),
     ("swing_high", "structure", "A confirmed local price peak — the highest high across a window of candles on both sides of it"),
     ("swing_low", "structure", "A confirmed local price trough — the lowest low across a window of candles on both sides of it"),
+    ("double_top", "graph_formation", "Two comparable swing highs with a meaningfully lower swing low between them — a classic bearish reversal shape"),
+    ("double_bottom", "graph_formation", "Two comparable swing lows with a meaningfully higher swing high between them — a classic bullish reversal shape"),
 ]
 
 
@@ -681,6 +761,9 @@ class ActivityEngine:
         self._prev_ma: Dict[InstrumentKey, Tuple[float, float]] = {}
         # swing-high/swing-low (structure) — rolling 2*_SWING_LOOKBACK+1 window
         self._swing_window: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=2 * _SWING_LOOKBACK + 1))
+        # last 3 confirmed swing points, chronological — graph formations
+        # (double top/bottom so far) read off this
+        self._swing_points: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
 
     def buffered_count(self) -> int:
         return len(self._buffer)
@@ -862,6 +945,30 @@ class ActivityEngine:
                             "open_price": swing_candle.open, "high_price": swing_candle.high,
                             "low_price": swing_candle.low, "close_price": swing_candle.close,
                         })
+
+                        points = self._swing_points[key]
+                        kind = "high" if activity == "swing_high" else "low"
+                        price = swing_candle.high if kind == "high" else swing_candle.low
+                        points.append(SwingPoint(kind=kind, price=price, candle=swing_candle))
+                        points_list = list(points)
+
+                        formation = None
+                        if kind == "high" and detect_double_top(points_list):
+                            formation = ("double_top", double_top_intensity(points_list))
+                        elif kind == "low" and detect_double_bottom(points_list):
+                            formation = ("double_bottom", double_bottom_intensity(points_list))
+                        if formation is not None:
+                            formation_name, formation_intensity = formation
+                            if formation_intensity == float("inf"):
+                                formation_intensity = None
+                            self._buffer.append({
+                                "instrument_id": instrument_id, "timeframe": candle.timeframe,
+                                "ts": swing_candle.timestamp,
+                                "activity_type": "graph_formation", "activity": formation_name,
+                                "intensity": formation_intensity,
+                                "open_price": swing_candle.open, "high_price": swing_candle.high,
+                                "low_price": swing_candle.low, "close_price": swing_candle.close,
+                            })
         except Exception:
             logger.exception("Activity engine: swing detection failed for %s (%s)", symbol, exchange_segment)
 

@@ -17,6 +17,8 @@ from activity_engine import (
     detect_hammer,
     detect_morning_star,
     detect_piercing_line,
+    detect_double_bottom,
+    detect_double_top,
     detect_price_vwap_divergence,
     detect_shooting_star,
     detect_swing_high,
@@ -27,6 +29,8 @@ from activity_engine import (
     detect_tweezer_top,
     detect_vwap_gap_fill,
     doji_intensity,
+    double_bottom_intensity,
+    double_top_intensity,
     engulfing_intensity,
     evening_star_intensity,
     hammer_intensity,
@@ -36,6 +40,7 @@ from activity_engine import (
     shooting_star_intensity,
     swing_high_intensity,
     swing_low_intensity,
+    SwingPoint,
     tweezer_bottom_intensity,
     tweezer_top_intensity,
     vwap_divergence_intensity,
@@ -385,6 +390,50 @@ def test_swing_low_intensity_grows_with_a_sharper_trough():
     sharp = _swing_candles(lows=[100.0, 99.0, 98.0, 90.0, 98.0, 99.0, 100.0])
     assert swing_low_intensity(mild) > 0
     assert swing_low_intensity(sharp) > swing_low_intensity(mild)
+
+
+# --------------------------------------------------------------------- double top/bottom (pure)
+
+def _sp(kind, price):
+    return SwingPoint(kind=kind, price=price, candle=_candle(0, open=price, high=price, low=price, close=price))
+
+
+def test_detect_double_top_true_for_comparable_peaks_with_a_deep_valley():
+    points = [_sp("high", 100.0), _sp("low", 98.0), _sp("high", 100.3)]
+    assert detect_double_top(points) is True
+    assert detect_double_bottom(points) is False
+
+
+def test_detect_double_top_false_when_peaks_dont_match():
+    points = [_sp("high", 100.0), _sp("low", 98.0), _sp("high", 103.0)]
+    assert detect_double_top(points) is False
+
+
+def test_detect_double_top_false_when_valley_is_too_shallow():
+    points = [_sp("high", 100.0), _sp("low", 99.9), _sp("high", 100.05)]
+    assert detect_double_top(points) is False
+
+
+def test_detect_double_top_false_when_sequence_is_wrong():
+    points = [_sp("high", 100.0), _sp("high", 100.3), _sp("low", 98.0)]
+    assert detect_double_top(points) is False
+
+
+def test_detect_double_top_false_before_three_points():
+    assert detect_double_top([_sp("high", 100.0), _sp("low", 98.0)]) is False
+
+
+def test_detect_double_bottom_true_for_comparable_troughs_with_a_tall_peak():
+    points = [_sp("low", 100.0), _sp("high", 102.0), _sp("low", 99.7)]
+    assert detect_double_bottom(points) is True
+    assert detect_double_top(points) is False
+
+
+def test_double_top_and_bottom_intensity_exceed_one():
+    top_points = [_sp("high", 100.0), _sp("low", 95.0), _sp("high", 100.3)]
+    bottom_points = [_sp("low", 100.0), _sp("high", 105.0), _sp("low", 99.7)]
+    assert double_top_intensity(top_points) > 1.0
+    assert double_bottom_intensity(bottom_points) > 1.0
 
 
 # --------------------------------------------------------------------- Bollinger Bands (pure)
@@ -816,6 +865,44 @@ def test_engine_detects_swing_high_with_the_confirmed_candles_own_timestamp(sess
     # (DateTime columns come back naive, so compare against a naive value)
     assert rows[0].ts == candles[3].timestamp.replace(tzinfo=None)
     assert float(rows[0].high_price) == 105.0
+
+
+def _zigzag_highs(checkpoints):
+    """checkpoints: [(index, high), ...] — linearly interpolates highs
+    between them. Verified by direct simulation (not just hoped to work)
+    to actually produce two comparable swing highs with a deep valley
+    between them under the real swing/double-top detectors."""
+    highs = []
+    for (i0, h0), (i1, h1) in zip(checkpoints, checkpoints[1:]):
+        for j in range(i0, i1):
+            highs.append(h0 + (h1 - h0) * (j - i0) / (i1 - i0))
+    highs.append(checkpoints[-1][1])
+    return highs
+
+
+def test_engine_detects_double_top_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # rise to a first peak (100.3), fall to a valley (95.0), rise to a
+    # second comparable peak (100.2), fall off — two swing highs within
+    # 0.5% of each other with a >0.3%-deep valley between them
+    highs = _zigzag_highs([(0, 90.0), (6, 100.3), (12, 95.0), (18, 100.2), (24, 92.0)])
+    candles = [_candle(i, open=h - 0.5, high=h, low=h - 1.0, close=h - 0.5) for i, h in enumerate(highs)]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "swing_high" in activities
+    assert "swing_low" in activities
+    assert "double_top" in activities
 
 
 def test_engine_detects_bb_squeeze_through_on_candle_closed(session_factory):
