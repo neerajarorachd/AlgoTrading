@@ -25,6 +25,8 @@ from activity_engine import (
     detect_bullish_break_of_structure,
     detect_double_bottom,
     detect_double_top,
+    detect_triple_bottom,
+    detect_triple_top,
     detect_price_vwap_divergence,
     detect_shooting_star,
     detect_swing_high,
@@ -47,6 +49,14 @@ from activity_engine import (
     double_top_neckline,
     double_top_stop_loss,
     double_top_target,
+    triple_bottom_intensity,
+    triple_bottom_neckline,
+    triple_bottom_stop_loss,
+    triple_bottom_target,
+    triple_top_intensity,
+    triple_top_neckline,
+    triple_top_stop_loss,
+    triple_top_target,
     engulfing_intensity,
     evening_star_intensity,
     hammer_intensity,
@@ -470,6 +480,64 @@ def test_double_bottom_neckline_stop_loss_and_target():
     assert double_bottom_stop_loss(points) == pytest.approx(130.0 * 0.998)
     # height = 150 - 130 = 20, target = 150 + 20 = 170
     assert double_bottom_target(points) == pytest.approx(170.0)
+
+
+# --------------------------------------------------------------------- triple top/bottom (pure)
+
+def test_detect_triple_top_true_for_three_comparable_peaks_with_two_deep_valleys():
+    points = [_sp("high", 150.0), _sp("low", 130.0), _sp("high", 150.0), _sp("low", 135.0), _sp("high", 150.0)]
+    assert detect_triple_top(points) is True
+    assert detect_triple_bottom(points) is False
+
+
+def test_detect_triple_top_false_when_a_top_doesnt_match():
+    points = [_sp("high", 150.0), _sp("low", 130.0), _sp("high", 150.0), _sp("low", 135.0), _sp("high", 160.0)]
+    assert detect_triple_top(points) is False
+
+
+def test_detect_triple_top_false_when_valleys_are_too_shallow_on_average():
+    points = [_sp("high", 150.0), _sp("low", 149.9), _sp("high", 150.0), _sp("low", 149.8), _sp("high", 150.0)]
+    assert detect_triple_top(points) is False
+
+
+def test_detect_triple_top_false_when_a_valley_has_the_wrong_sign():
+    # d sits ABOVE the tops around it — not a real pullback at all
+    points = [_sp("high", 150.0), _sp("low", 130.0), _sp("high", 150.0), _sp("low", 155.0), _sp("high", 150.0)]
+    assert detect_triple_top(points) is False
+
+
+def test_detect_triple_top_false_before_five_points():
+    points = [_sp("high", 150.0), _sp("low", 130.0), _sp("high", 150.0)]
+    assert detect_triple_top(points) is False
+
+
+def test_detect_triple_bottom_true_for_three_comparable_troughs_with_two_tall_peaks():
+    points = [_sp("low", 100.0), _sp("high", 120.0), _sp("low", 100.0), _sp("high", 115.0), _sp("low", 100.0)]
+    assert detect_triple_bottom(points) is True
+    assert detect_triple_top(points) is False
+
+
+def test_triple_top_and_bottom_intensity_exceed_one():
+    top_points = [_sp("high", 150.0), _sp("low", 130.0), _sp("high", 150.0), _sp("low", 135.0), _sp("high", 150.0)]
+    bottom_points = [_sp("low", 100.0), _sp("high", 120.0), _sp("low", 100.0), _sp("high", 115.0), _sp("low", 100.0)]
+    assert triple_top_intensity(top_points) > 1.0
+    assert triple_bottom_intensity(bottom_points) > 1.0
+
+
+def test_triple_top_neckline_stop_loss_and_target():
+    points = [_sp("high", 150.0), _sp("low", 130.0), _sp("high", 150.0), _sp("low", 135.0), _sp("high", 150.0)]
+    assert triple_top_neckline(points) == pytest.approx(132.5)
+    assert triple_top_stop_loss(points) == pytest.approx(150.0 * 1.002)
+    # avg_top = 150, height = 150 - 132.5 = 17.5, target = 132.5 - 17.5 = 115.0
+    assert triple_top_target(points) == pytest.approx(115.0)
+
+
+def test_triple_bottom_neckline_stop_loss_and_target():
+    points = [_sp("low", 100.0), _sp("high", 120.0), _sp("low", 100.0), _sp("high", 115.0), _sp("low", 100.0)]
+    assert triple_bottom_neckline(points) == pytest.approx(117.5)
+    assert triple_bottom_stop_loss(points) == pytest.approx(100.0 * 0.998)
+    # avg_bottom = 100, height = 117.5 - 100 = 17.5, target = 117.5 + 17.5 = 135.0
+    assert triple_bottom_target(points) == pytest.approx(135.0)
 
 
 # --------------------------------------------------------------------- structure shift (pure)
@@ -1080,6 +1148,72 @@ def test_engine_detects_double_top_through_on_candle_closed(session_factory):
     assert "swing_high" in activities
     assert "swing_low" in activities
     assert "double_top" in activities
+
+
+def test_engine_detects_triple_top_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # three comparable peaks (150, 150.3, 149.8) with two deep valleys
+    # (130, 135) between them — a genuine triple top also satisfies
+    # double_top's own looser 3-point check on its last two peaks, so both
+    # fire. Checkpoints 12 apart (>= 2*swing_lookback+1=11 either side of
+    # each extreme) — verified by direct simulation.
+    closes = _zigzag_highs([
+        (0, 90.0), (12, 150.0), (24, 130.0), (36, 150.3), (48, 135.0), (60, 149.8), (72, 140.0),
+    ])
+    candles = [
+        Candle(
+            symbol=SYMBOL, timeframe="1min", timestamp=_BASE_TS + timedelta(minutes=i),
+            open=c, high=c, low=c, close=c, volume=100,
+        )
+        for i, c in enumerate(closes)
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "double_top" in activities
+    assert "triple_top" in activities
+
+
+def test_engine_detects_triple_bottom_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # mirror of the triple top case: three comparable troughs (all 100.0)
+    # with two tall peaks (120, 115) between them. Verified by direct
+    # simulation.
+    closes = _zigzag_highs([
+        (0, 160.0), (12, 100.0), (24, 120.0), (36, 100.0), (48, 115.0), (60, 100.0), (72, 110.0),
+    ])
+    candles = [
+        Candle(
+            symbol=SYMBOL, timeframe="1min", timestamp=_BASE_TS + timedelta(minutes=i),
+            open=c, high=c, low=c, close=c, volume=100,
+        )
+        for i, c in enumerate(closes)
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "double_bottom" in activities
+    assert "triple_bottom" in activities
 
 
 def test_engine_detects_bullish_structure_shift_through_on_candle_closed(session_factory):

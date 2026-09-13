@@ -27,13 +27,14 @@ Two moving parts:
     timeframe against the candle's own high/low.
 
 Stop-loss/target sourcing:
-  - double_top/double_bottom reuse activity_engine's own neckline-based
-    measured-move formulas (double_top_target etc.), read via
-    engine.get_swing_points() — the same points list the detector itself
-    used, not re-derived here.
+  - double/triple top/bottom reuse activity_engine's own neckline-based
+    measured-move formulas (activity_engine.FORMATION_LEVEL_FUNCS), read
+    via engine.get_swing_points() — the same points list the detector
+    itself used, not re-derived here.
   - every crossover pattern (RSI/MACD/Stochastic/MA, plus the structure-
-    shift patterns, which have no natural measured-move target of their
-    own) uses an ATR-based stop with a fixed risk:reward target — the
+    shift/break-of-structure patterns, which have no natural measured-move
+    target of their own) uses an ATR-based stop with a fixed risk:reward
+    target — the
     industry-standard starting point for momentum/crossover entries
     (researched 2026-09-14: a 1.5-2x ATR stop with a fixed R:R target,
     e.g. TradersPost's ATR trading guide and similar sources converge on
@@ -56,15 +57,7 @@ import logging
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
-from activity_engine import (
-    ActivityEngine,
-    double_bottom_neckline,
-    double_bottom_stop_loss,
-    double_bottom_target,
-    double_top_neckline,
-    double_top_stop_loss,
-    double_top_target,
-)
+from activity_engine import ActivityEngine, FORMATION_LEVEL_FUNCS
 from brokers.models import Candle
 from sqlalchemy.exc import IntegrityError
 
@@ -93,17 +86,18 @@ PREDICTION_SETTING_DEFAULTS: Dict[str, float] = {
 # removing a tracked pattern never touches detection code.
 _BULLISH_PATTERNS = {
     "rsi_cross_above_60", "macd_bullish_cross", "ma_golden_cross",
-    "stoch_bullish_cross", "double_bottom", "bullish_structure_shift",
-    "bullish_break_of_structure",
+    "stoch_bullish_cross", "double_bottom", "triple_bottom",
+    "bullish_structure_shift", "bullish_break_of_structure",
 }
 _BEARISH_PATTERNS = {
     "rsi_cross_below_40", "macd_bearish_cross", "ma_death_cross",
-    "stoch_bearish_cross", "double_top", "bearish_structure_shift",
-    "bearish_break_of_structure",
+    "stoch_bearish_cross", "double_top", "triple_top",
+    "bearish_structure_shift", "bearish_break_of_structure",
 }
-# These two have their own neckline-derived measured-move levels instead
-# of the generic ATR-based formula every other tracked pattern uses.
-_GRAPH_FORMATIONS = {"double_top", "double_bottom"}
+# These have their own neckline-derived measured-move levels (see
+# activity_engine.FORMATION_LEVEL_FUNCS) instead of the generic ATR-based
+# formula every other tracked pattern uses.
+_GRAPH_FORMATIONS = set(FORMATION_LEVEL_FUNCS.keys())
 
 
 def load_prediction_settings(session_factory) -> Dict[str, float]:
@@ -161,16 +155,15 @@ class PredictionTracker:
 
             if pattern in _GRAPH_FORMATIONS:
                 points = self.engine.get_swing_points(symbol, exchange_segment, timeframe)
-                if len(points) < 3:
-                    continue  # defensive — the activity shouldn't fire without 3 points in hand
-                if pattern == "double_top":
-                    neckline = double_top_neckline(points)
-                    stop_loss = double_top_stop_loss(points)
-                    target = double_top_target(points)
-                else:
-                    neckline = double_bottom_neckline(points)
-                    stop_loss = double_bottom_stop_loss(points)
-                    target = double_bottom_target(points)
+                neckline_fn, stop_fn, target_fn = FORMATION_LEVEL_FUNCS[pattern]
+                # double top/bottom need the tail 3 points, triple top/bottom
+                # need 5 — defensive: the activity shouldn't have fired
+                # without enough points already in hand, but skip rather
+                # than guess if get_swing_points somehow comes back short
+                needed = 5 if pattern.startswith("triple_") else 3
+                if len(points) < needed:
+                    continue
+                neckline, stop_loss, target = neckline_fn(points), stop_fn(points), target_fn(points)
             else:
                 atr = self.engine.get_atr(symbol, exchange_segment, timeframe)
                 if atr is None:

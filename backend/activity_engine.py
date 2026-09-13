@@ -635,6 +635,142 @@ def double_bottom_target(points: List[SwingPoint]) -> float:
     return b.price + height
 
 
+# --------------------------------------------------------------------- graph formations (triple top/bottom)
+
+def detect_triple_top(points: List[SwingPoint]) -> bool:
+    """points: the last 5 confirmed swing points, chronological, most
+    recent last. True when they form high -> low -> high -> low -> high,
+    all three tops sit within _DOUBLE_SIMILARITY of their own average (not
+    just pairwise — the whole top-to-top spread has to be tight), and the
+    *average* of the two valleys' depths (each measured against the pair
+    of tops either side of it) clears _DOUBLE_MIN_DEPTH.
+
+    Reuses double top/bottom's own similarity/depth thresholds rather than
+    introducing new ones. The two valleys' depths are averaged rather than
+    each required to independently clear the floor — same reasoning as
+    bullish/bearish_structure_shift's own average-of-legs gate (real
+    reversal shapes routinely have one shallower pullback and one deeper
+    one; requiring both to independently qualify rejects genuine triple
+    tops for no good reason), applied here up front rather than
+    discovered the hard way via a live-data investigation."""
+    if len(points) < 5:
+        return False
+    a, b, c, d, e = points[-5:]
+    if not (a.kind == "high" and b.kind == "low" and c.kind == "high" and d.kind == "low" and e.kind == "high"):
+        return False
+    avg_top = (a.price + c.price + e.price) / 3
+    if avg_top <= 0:
+        return False
+    if max(a.price, c.price, e.price) - min(a.price, c.price, e.price) > avg_top * _DOUBLE_SIMILARITY:
+        return False
+    avg_ac, avg_ce = (a.price + c.price) / 2, (c.price + e.price) / 2
+    if avg_ac <= 0 or avg_ce <= 0:
+        return False
+    depth1 = (avg_ac - b.price) / avg_ac
+    depth2 = (avg_ce - d.price) / avg_ce
+    if depth1 <= 0 or depth2 <= 0:  # each valley must at least be a real pullback, not a flat tie
+        return False
+    return (depth1 + depth2) / 2 >= _DOUBLE_MIN_DEPTH
+
+
+def detect_triple_bottom(points: List[SwingPoint]) -> bool:
+    """Triple top's mirror: low -> high -> low -> high -> low."""
+    if len(points) < 5:
+        return False
+    a, b, c, d, e = points[-5:]
+    if not (a.kind == "low" and b.kind == "high" and c.kind == "low" and d.kind == "high" and e.kind == "low"):
+        return False
+    avg_bottom = (a.price + c.price + e.price) / 3
+    if avg_bottom <= 0:
+        return False
+    if max(a.price, c.price, e.price) - min(a.price, c.price, e.price) > avg_bottom * _DOUBLE_SIMILARITY:
+        return False
+    avg_ac, avg_ce = (a.price + c.price) / 2, (c.price + e.price) / 2
+    if avg_ac <= 0 or avg_ce <= 0:
+        return False
+    height1 = (b.price - avg_ac) / avg_ac
+    height2 = (d.price - avg_ce) / avg_ce
+    if height1 <= 0 or height2 <= 0:
+        return False
+    return (height1 + height2) / 2 >= _DOUBLE_MIN_DEPTH
+
+
+def triple_top_intensity(points: List[SwingPoint]) -> float:
+    """Average of the two valleys' depths, as a multiple of the qualifying
+    floor — same style as double_top_intensity."""
+    a, b, c, d, e = points[-5:]
+    avg_ac, avg_ce = (a.price + c.price) / 2, (c.price + e.price) / 2
+    depth1 = (avg_ac - b.price) / avg_ac if avg_ac else float("inf")
+    depth2 = (avg_ce - d.price) / avg_ce if avg_ce else float("inf")
+    avg_depth = (depth1 + depth2) / 2
+    return avg_depth / _DOUBLE_MIN_DEPTH if _DOUBLE_MIN_DEPTH else float("inf")
+
+
+def triple_bottom_intensity(points: List[SwingPoint]) -> float:
+    """Triple top intensity's mirror."""
+    a, b, c, d, e = points[-5:]
+    avg_ac, avg_ce = (a.price + c.price) / 2, (c.price + e.price) / 2
+    height1 = (b.price - avg_ac) / avg_ac if avg_ac else float("inf")
+    height2 = (d.price - avg_ce) / avg_ce if avg_ce else float("inf")
+    avg_height = (height1 + height2) / 2
+    return avg_height / _DOUBLE_MIN_DEPTH if _DOUBLE_MIN_DEPTH else float("inf")
+
+
+def triple_top_neckline(points: List[SwingPoint]) -> float:
+    """The support line drawn through the two valleys — their average."""
+    a, b, c, d, e = points[-5:]
+    return (b.price + d.price) / 2
+
+
+def triple_top_stop_loss(points: List[SwingPoint]) -> float:
+    """A small buffer above the highest of the three tops."""
+    a, b, c, d, e = points[-5:]
+    return max(a.price, c.price, e.price) * (1 + _STOP_LOSS_BUFFER)
+
+
+def triple_top_target(points: List[SwingPoint]) -> float:
+    """Measured-move target: the pattern's own height (average top to
+    neckline) projected downward from the neckline."""
+    a, b, c, d, e = points[-5:]
+    neckline = (b.price + d.price) / 2
+    avg_top = (a.price + c.price + e.price) / 3
+    return neckline - (avg_top - neckline)
+
+
+def triple_bottom_neckline(points: List[SwingPoint]) -> float:
+    """Triple top neckline's mirror — the resistance line through the two peaks."""
+    a, b, c, d, e = points[-5:]
+    return (b.price + d.price) / 2
+
+
+def triple_bottom_stop_loss(points: List[SwingPoint]) -> float:
+    """A small buffer below the lowest of the three bottoms."""
+    a, b, c, d, e = points[-5:]
+    return min(a.price, c.price, e.price) * (1 - _STOP_LOSS_BUFFER)
+
+
+def triple_bottom_target(points: List[SwingPoint]) -> float:
+    """Triple top target's mirror — the pattern's own height projected
+    upward from the neckline."""
+    a, b, c, d, e = points[-5:]
+    neckline = (b.price + d.price) / 2
+    avg_bottom = (a.price + c.price + e.price) / 3
+    return neckline + (neckline - avg_bottom)
+
+
+# Derived trade-planning levels for every graph formation, keyed by the
+# formation's own activity name — a plain lookup so on_candle_closed can
+# resolve the right (neckline, stop_loss, target) functions for whichever
+# formation just fired without an if/elif chain that grows with every new
+# formation added.
+FORMATION_LEVEL_FUNCS: Dict[str, Tuple[Callable, Callable, Callable]] = {
+    "double_top": (double_top_neckline, double_top_stop_loss, double_top_target),
+    "double_bottom": (double_bottom_neckline, double_bottom_stop_loss, double_bottom_target),
+    "triple_top": (triple_top_neckline, triple_top_stop_loss, triple_top_target),
+    "triple_bottom": (triple_bottom_neckline, triple_bottom_stop_loss, triple_bottom_target),
+}
+
+
 # --------------------------------------------------------------------- structure shift (HH-HL / LH-LL)
 
 def _pct_move(from_price: float, to_price: float) -> float:
@@ -920,6 +1056,8 @@ PATTERN_CATALOG = [
     ("swing_low", "structure", "A confirmed local price trough — the lowest low across a window of candles on both sides of it"),
     ("double_top", "graph_formation", "Two comparable swing highs with a meaningfully lower swing low between them — a classic bearish reversal shape"),
     ("double_bottom", "graph_formation", "Two comparable swing lows with a meaningfully higher swing high between them — a classic bullish reversal shape"),
+    ("triple_top", "graph_formation", "Three comparable swing highs with two meaningfully lower swing lows between them — a stronger bearish reversal shape than a double top"),
+    ("triple_bottom", "graph_formation", "Three comparable swing lows with two meaningfully higher swing highs between them — a stronger bullish reversal shape than a double bottom"),
     ("bullish_structure_shift", "structure", "Lower Low, then Higher High, then Higher Low — trend structure shifting from bearish to bullish (CHoCH)"),
     ("bearish_structure_shift", "structure", "Higher High, then Lower Low, then Lower High — trend structure shifting from bullish to bearish (CHoCH)"),
     ("bullish_break_of_structure", "structure", "A fresh Higher-High arriving after an already-confirmed Higher-Low — an uptrend continuing to make new highs (BOS)"),
@@ -1017,9 +1155,12 @@ class ActivityEngine:
         self._prev_ma: Dict[InstrumentKey, Tuple[float, float]] = {}
         # swing-high/swing-low (structure) — rolling 2*swing_lookback+1 window
         self._swing_window: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=2 * self.swing_lookback + 1))
-        # last 3 confirmed swing points, chronological — graph formations
-        # (double top/bottom so far) read off this
-        self._swing_points: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
+        # last 5 confirmed swing points, chronological — graph formations
+        # read off this (double/triple top/bottom need 3/5 respectively;
+        # keeping 5 means points_list always has enough for whichever
+        # formation's check needs the most, double top/bottom just read
+        # the tail 3 of it)
+        self._swing_points: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=5))
         # confirmed swing highs/lows tracked as separate type-only sequences
         # (not interleaved) — trend structure shift reads off these instead,
         # since it only ever compares a point against the prior one of its
@@ -1237,13 +1378,25 @@ class ActivityEngine:
                         points.append(swing_point)
                         points_list = list(points)
 
-                        formation = None
-                        if kind == "high" and detect_double_top(points_list):
-                            formation = ("double_top", double_top_intensity(points_list))
-                        elif kind == "low" and detect_double_bottom(points_list):
-                            formation = ("double_bottom", double_bottom_intensity(points_list))
-                        if formation is not None:
-                            formation_name, formation_intensity = formation
+                        # both a double_top and a triple_top (etc.) can
+                        # legitimately fire on the same trigger point — a
+                        # genuine triple top's last two peaks usually also
+                        # satisfy double_top's own looser 3-point check, and
+                        # both are real, differently-scoped observations of
+                        # the same shape, not a contradiction
+                        formation_events = []
+                        if kind == "high":
+                            if detect_double_top(points_list):
+                                formation_events.append(("double_top", double_top_intensity(points_list)))
+                            if detect_triple_top(points_list):
+                                formation_events.append(("triple_top", triple_top_intensity(points_list)))
+                        else:  # kind == "low"
+                            if detect_double_bottom(points_list):
+                                formation_events.append(("double_bottom", double_bottom_intensity(points_list)))
+                            if detect_triple_bottom(points_list):
+                                formation_events.append(("triple_bottom", triple_bottom_intensity(points_list)))
+
+                        for formation_name, formation_intensity in formation_events:
                             if formation_intensity == float("inf"):
                                 formation_intensity = None
                             self._buffer.append({
@@ -1259,18 +1412,8 @@ class ActivityEngine:
                             # since this is the only point in the whole
                             # pipeline that still has the raw points list in
                             # hand, not just the persisted single-candle row
-                            if formation_name == "double_top":
-                                neckline, stop, target = (
-                                    double_top_neckline(points_list),
-                                    double_top_stop_loss(points_list),
-                                    double_top_target(points_list),
-                                )
-                            else:
-                                neckline, stop, target = (
-                                    double_bottom_neckline(points_list),
-                                    double_bottom_stop_loss(points_list),
-                                    double_bottom_target(points_list),
-                                )
+                            neckline_fn, stop_fn, target_fn = FORMATION_LEVEL_FUNCS[formation_name]
+                            neckline, stop, target = neckline_fn(points_list), stop_fn(points_list), target_fn(points_list)
                             logger.info(
                                 "%s %s %s: neckline=%.2f stop_loss=%.2f target=%.2f",
                                 symbol, candle.timeframe, formation_name, neckline, stop, target,
@@ -1353,11 +1496,11 @@ class ActivityEngine:
         return self._latest_atr.get((symbol, exchange_segment, timeframe))
 
     def get_swing_points(self, symbol: str, exchange_segment: str, timeframe: str) -> List["SwingPoint"]:
-        """Read-only accessor for the last (up to 3) confirmed swing points —
-        used by PredictionTracker to recompute a just-fired double_top/
-        double_bottom's neckline/stop/target via this module's own
-        double_top_*/double_bottom_* formulas, without this module needing
-        to know PredictionTracker exists. Safe to call only right after
+        """Read-only accessor for the last (up to 5) confirmed swing points —
+        used by PredictionTracker to recompute a just-fired double/triple
+        top/bottom's neckline/stop/target via this module's own formulas
+        (FORMATION_LEVEL_FUNCS), without this module needing to know
+        PredictionTracker exists. Safe to call only right after
         on_candle_closed returns an activity naming that pattern — nothing
         else mutates this deque in between."""
         return list(self._swing_points[(symbol, exchange_segment, timeframe)])
