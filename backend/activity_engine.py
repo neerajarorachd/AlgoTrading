@@ -987,7 +987,15 @@ class ActivityEngine:
         self._persist_bulk(rows)
         return len(rows)
 
-    def on_candle_closed(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
+    def on_candle_closed(self, symbol: str, exchange_segment: str, candle: Candle) -> List[dict]:
+        """Returns every activity dict newly appended to the buffer during
+        this call (empty list if none fired) — lets a caller (e.g. a
+        prediction tracker) react to just this candle's detections without
+        being woven into the detection logic itself. Deliberately a plain
+        return value, not a callback/event system — see the "keep
+        prediction tracking loosely coupled" note in activity_engine's own
+        history for why this stays minimal."""
+        buffer_start = len(self._buffer)
         key: InstrumentKey = (symbol, exchange_segment, candle.timeframe)
         buffer = self._recent[key]
         buffer.append(candle)
@@ -1208,11 +1216,11 @@ class ActivityEngine:
             logger.exception("Activity engine: swing detection failed for %s (%s)", symbol, exchange_segment)
 
         if not found:
-            return
+            return self._buffer[buffer_start:]
 
         instrument_id = self._lookup_instrument_id(symbol, exchange_segment)
         if instrument_id is None:
-            return
+            return self._buffer[buffer_start:]
 
         for activity_type, activity, intensity in found:
             self._buffer.append({
@@ -1221,6 +1229,8 @@ class ActivityEngine:
                 "open_price": candle.open, "high_price": candle.high,
                 "low_price": candle.low, "close_price": candle.close,
             })
+
+        return self._buffer[buffer_start:]
 
     def _update_vwap(self, key: InstrumentKey, candle: Candle) -> Optional[float]:
         """Cumulative volume-weighted average price since the day's first
