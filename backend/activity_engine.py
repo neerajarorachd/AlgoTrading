@@ -641,19 +641,32 @@ def detect_bullish_structure_shift(lows: List[SwingPoint], highs: List[SwingPoin
     sequences, not one interleaved list — makes each leg's comparison a
     plain "is the newer one bigger" check). True for a genuine Lower-Low,
     then Higher-High, then Higher-Low sequence — a bearish-to-bullish
-    trend structure shift — where each leg clears _STRUCTURE_MIN_MOVE and
-    the three points occur in that chronological order."""
+    trend structure shift — where the three points occur in that
+    chronological order, each leg moves in the right direction (a real LL/
+    HH/HL, not a flat tie), and the *average* of the three legs' move
+    sizes clears _STRUCTURE_MIN_MOVE.
+
+    Deliberately an average, not "every leg individually clears the
+    floor" — real data showed genuine reversals routinely have one
+    dominant leg and two smaller confirming ones (e.g. a decisive HH with
+    a barely-there LL), and requiring each leg to independently be
+    significant rejected those outright. The average still keeps pure
+    noise out (a reversal where every leg is tiny won't average above the
+    floor either), just doesn't let one weak leg veto an otherwise real
+    move."""
     if len(lows) < 3 or len(highs) < 2:
         return False
     l_prev, l_ll, l_hl = lows[-3], lows[-2], lows[-1]
     h_prev, h_hh = highs[-2], highs[-1]
-    if _pct_move(l_prev.price, l_ll.price) > -_STRUCTURE_MIN_MOVE:  # LL: a real drop
+    ll_move = _pct_move(l_prev.price, l_ll.price)
+    hh_move = _pct_move(h_prev.price, h_hh.price)
+    hl_move = _pct_move(l_ll.price, l_hl.price)
+    if ll_move >= 0 or hh_move <= 0 or hl_move <= 0:  # each leg must at least point the right way
         return False
-    if _pct_move(h_prev.price, h_hh.price) < _STRUCTURE_MIN_MOVE:  # HH: a real rise
+    if not (l_ll.candle.timestamp < h_hh.candle.timestamp < l_hl.candle.timestamp):
         return False
-    if _pct_move(l_ll.price, l_hl.price) < _STRUCTURE_MIN_MOVE:  # HL: a real recovery
-        return False
-    return l_ll.candle.timestamp < h_hh.candle.timestamp < l_hl.candle.timestamp
+    avg_move = (abs(ll_move) + hh_move + hl_move) / 3
+    return avg_move >= _STRUCTURE_MIN_MOVE
 
 
 def detect_bearish_structure_shift(highs: List[SwingPoint], lows: List[SwingPoint]) -> bool:
@@ -662,13 +675,15 @@ def detect_bearish_structure_shift(highs: List[SwingPoint], lows: List[SwingPoin
         return False
     h_prev, h_hh, h_lh = highs[-3], highs[-2], highs[-1]
     l_prev, l_ll = lows[-2], lows[-1]
-    if _pct_move(h_prev.price, h_hh.price) < _STRUCTURE_MIN_MOVE:  # HH: still part of the uptrend
+    hh_move = _pct_move(h_prev.price, h_hh.price)
+    ll_move = _pct_move(l_prev.price, l_ll.price)
+    lh_move = _pct_move(h_hh.price, h_lh.price)
+    if hh_move <= 0 or ll_move >= 0 or lh_move >= 0:
         return False
-    if _pct_move(l_prev.price, l_ll.price) > -_STRUCTURE_MIN_MOVE:  # LL: the break
+    if not (h_hh.candle.timestamp < l_ll.candle.timestamp < h_lh.candle.timestamp):
         return False
-    if _pct_move(h_hh.price, h_lh.price) > -_STRUCTURE_MIN_MOVE:  # LH: confirms it
-        return False
-    return h_hh.candle.timestamp < l_ll.candle.timestamp < h_lh.candle.timestamp
+    avg_move = (hh_move + abs(ll_move) + abs(lh_move)) / 3
+    return avg_move >= _STRUCTURE_MIN_MOVE
 
 
 def bullish_structure_shift_intensity(lows: List[SwingPoint], highs: List[SwingPoint]) -> float:

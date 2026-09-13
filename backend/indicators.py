@@ -127,6 +127,52 @@ def update_rsi(state: RsiState, close: float, period: int = RSI_PERIOD) -> Optio
     return 100 - 100 / (1 + rs)
 
 
+# --------------------------------------------------------------------- ATR (Wilder's)
+
+ATR_PERIOD = 14
+
+
+class AtrState:
+    __slots__ = ("prev_close", "avg_tr", "_seed_trs")
+
+    def __init__(self):
+        self.prev_close: Optional[float] = None
+        self.avg_tr: Optional[float] = None
+        self._seed_trs: list = []
+
+
+def update_atr(state: AtrState, high: float, low: float, close: float, period: int = ATR_PERIOD) -> Optional[float]:
+    """Wilder's ATR (Average True Range), updated one candle at a time.
+    True Range is the largest of: this candle's own high-low, the gap up
+    from the prior close, or the gap down from the prior close — captures
+    overnight/inter-candle gaps a plain high-low range would miss (on the
+    very first candle, with no prior close yet, it's just high-low). None
+    until `period` true ranges have been observed; seeded the same way as
+    update_rsi (a simple average of the first `period`, then each later
+    step folds the new one in at weight 1/period).
+
+    The natural next use for this: normalize the swing/structure-shift and
+    double-top/bottom thresholds in activity_engine.py (currently fixed
+    percentages) against ATR instead, so a volatile stock and a quiet one
+    aren't held to the same absolute bar — flagged as a real gap after
+    real data showed those fixed-percentage thresholds behaving very
+    differently across stocks (see the project's own notes on this)."""
+    if state.prev_close is None:
+        tr = high - low
+    else:
+        tr = max(high - low, abs(high - state.prev_close), abs(low - state.prev_close))
+    state.prev_close = close
+
+    if state.avg_tr is None:
+        state._seed_trs.append(tr)
+        if len(state._seed_trs) < period:
+            return None
+        state.avg_tr = statistics.fmean(state._seed_trs)
+    else:
+        state.avg_tr = (state.avg_tr * (period - 1) + tr) / period
+    return state.avg_tr
+
+
 # --------------------------------------------------------------------- MACD (EMA-based)
 
 MACD_FAST = 12

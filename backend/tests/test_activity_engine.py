@@ -61,12 +61,14 @@ from activity_engine import (
 from brokers.models import Candle
 from db.models import EngineSetting, InstrumentActivity, PatternDefinition, SubscribedSymbol
 from indicators import (
+    AtrState,
     MacdState,
     RsiState,
     StochasticState,
     cross_intensity,
     crossed_above,
     crossed_below,
+    update_atr,
     update_macd,
     update_rsi,
     update_stochastic,
@@ -485,6 +487,23 @@ def test_detect_bullish_structure_shift_false_when_hh_is_not_higher():
     assert detect_bullish_structure_shift(lows, highs) is False
 
 
+def test_detect_bullish_structure_shift_true_when_one_leg_is_weak_but_average_clears():
+    # a real HINDCOPPER near-miss: LL only -0.06%, but HH +0.46% and
+    # HL +0.55% are both decisive — average clears the floor even though
+    # the LL leg alone wouldn't. This is exactly the fix: no single leg
+    # gets to veto an otherwise genuine reversal.
+    lows = [_sp_at("low", 100.0, 0), _sp_at("low", 99.94, 2), _sp_at("low", 100.49, 4)]
+    highs = [_sp_at("high", 100.0, 1), _sp_at("high", 100.46, 3)]
+    assert detect_bullish_structure_shift(lows, highs) is True
+
+
+def test_detect_bullish_structure_shift_false_when_a_leg_has_the_wrong_sign():
+    # LL leg is exactly flat (0%), not a real drop at all
+    lows = [_sp_at("low", 100.0, 0), _sp_at("low", 100.0, 2), _sp_at("low", 105.0, 4)]
+    highs = [_sp_at("high", 100.0, 1), _sp_at("high", 110.0, 3)]
+    assert detect_bullish_structure_shift(lows, highs) is False
+
+
 def test_detect_bullish_structure_shift_false_when_order_is_wrong():
     # HH happens BEFORE the LL, not after — not a valid reversal sequence
     lows = [_sp_at("low", 100.0, 3), _sp_at("low", 95.0, 4), _sp_at("low", 97.0, 5)]
@@ -650,6 +669,35 @@ def test_update_rsi_0_for_a_monotonic_fall():
     for close in [100.0 - i for i in range(20)]:
         rsi = update_rsi(state, close)
     assert rsi == pytest.approx(0.0)
+
+
+def test_update_atr_none_before_seed_window_fills():
+    state = AtrState()
+    atr = None
+    for _ in range(13):  # < ATR_PERIOD (14)
+        atr = update_atr(state, high=101.0, low=99.0, close=100.0)
+    assert atr is None
+
+
+def test_update_atr_converges_to_the_true_range_for_a_constant_range():
+    state = AtrState()
+    atr = None
+    for _ in range(20):
+        atr = update_atr(state, high=101.0, low=99.0, close=100.0)
+    assert atr == pytest.approx(2.0)
+
+
+def test_update_atr_captures_a_gap_larger_than_the_candles_own_range():
+    state = AtrState()
+    for _ in range(14):
+        update_atr(state, high=101.0, low=99.0, close=100.0)  # avg_tr seeds to 2.0
+    # a gap-up candle: its own high-low is only 1.0, but it gapped up 10
+    # points from the prior close (100.0) - true range must catch that,
+    # not just the candle's own small range
+    atr = update_atr(state, high=111.0, low=110.0, close=110.5)
+    # TR = max(111-110=1, |111-100|=11, |110-100|=10) = 11
+    # avg_tr = (2.0*13 + 11) / 14
+    assert atr == pytest.approx((2.0 * 13 + 11) / 14)
 
 
 def test_update_macd_none_before_slow_ema_matures():
