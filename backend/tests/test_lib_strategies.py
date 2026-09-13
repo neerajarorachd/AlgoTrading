@@ -42,10 +42,18 @@ NESTED_TREE = {
 }
 
 
-def _create_strategy(session_factory, **overrides):
+def _create_strategy(session_factory, tree=NESTED_TREE, **overrides):
+    """create() takes an already-open session (its primary caller is the
+    Flask routes, via g.db_session — see LibStrategies.create's own
+    docstring for why it doesn't own a session_factory-based transaction
+    itself), so tests open one and commit it explicitly, same as any
+    other caller outside a request would."""
     fields = dict(name="Test Strategy", strategy_type="entry", description=None, family=None, parent_id=None)
     fields.update(overrides)
-    return LibStrategies.create(session_factory, fields, NESTED_TREE)
+    with session_factory() as session:
+        strategy_id = LibStrategies.create(session, fields, tree)
+        session.commit()
+    return strategy_id
 
 
 # --------------------------------------------------------------------- LibStrategyElements
@@ -79,9 +87,7 @@ def test_create_and_get_tree_round_trips_a_nested_structure(session_factory):
 
 
 def test_get_tree_returns_none_for_a_strategy_with_no_conditions(session_factory):
-    strategy_id = LibStrategies.create(
-        session_factory, dict(name="Empty", strategy_type="entry"), None,
-    )
+    strategy_id = _create_strategy(session_factory, tree=None, name="Empty")
     with session_factory() as session:
         assert LibStrategies.get_tree(session, strategy_id) is None
 
@@ -100,7 +106,9 @@ def test_replace_tree_swaps_out_the_old_tree_entirely(session_factory):
     strategy_id = _create_strategy(session_factory)
     new_tree = {"operator": "AND", "conditions": [_condition("double_top")], "groups": []}
 
-    LibStrategies.replace_tree(session_factory, strategy_id, new_tree)
+    with session_factory() as session:
+        LibStrategies.replace_tree(session, strategy_id, new_tree)
+        session.commit()
 
     with session_factory() as session:
         tree = LibStrategies.get_tree(session, strategy_id)
@@ -109,7 +117,10 @@ def test_replace_tree_swaps_out_the_old_tree_entirely(session_factory):
 
 def test_update_fields_changes_metadata_without_touching_the_tree(session_factory):
     strategy_id = _create_strategy(session_factory, name="Original")
-    LibStrategies.update_fields(session_factory, strategy_id, {"name": "Renamed", "description": "updated"})
+
+    with session_factory() as session:
+        LibStrategies.update_fields(session, strategy_id, {"name": "Renamed", "description": "updated"})
+        session.commit()
 
     with session_factory() as session:
         row = LibStrategies.get_by_id(session, strategy_id)
@@ -122,7 +133,9 @@ def test_update_fields_changes_metadata_without_touching_the_tree(session_factor
 def test_delete_cascades_groups_and_conditions(session_factory):
     strategy_id = _create_strategy(session_factory)
 
-    LibStrategies.delete(session_factory, strategy_id)
+    with session_factory() as session:
+        LibStrategies.delete(session, strategy_id)
+        session.commit()
 
     with session_factory() as session:
         assert LibStrategies.get_by_id(session, strategy_id) is None

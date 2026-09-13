@@ -26,7 +26,6 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 
 from db.models import Strategy, StrategyCondition, StrategyConditionGroup
-from db.session import session_scope
 
 
 def get_all(session) -> List[Strategy]:
@@ -88,39 +87,54 @@ def _condition_to_dict(c: StrategyCondition) -> dict:
     }
 
 
-def create(session_factory, strategy_fields: dict, tree: Optional[dict]) -> int:
-    """Creates a new Strategy row plus its full condition tree (if given)
-    in one transaction. Returns the new strategy's id."""
-    with session_scope(session_factory) as session:
-        strategy = Strategy(**strategy_fields)
-        session.add(strategy)
-        session.flush()  # assigns strategy.id, read while still attached
-        strategy_id = strategy.id
-        if tree is not None:
-            _insert_group(session, strategy_id, None, tree)
-        return strategy_id
+def create(session, strategy_fields: dict, tree: Optional[dict]) -> int:
+    """Creates a new Strategy row plus its full condition tree (if given).
+    Takes an already-open `session` rather than owning its own transaction
+    — its primary caller is the Flask API routes, which commit once at
+    the end of the request via g.db_session's own teardown hook; a
+    session_factory-owning variant here would open a SECOND, concurrent
+    transaction on the same tables and deadlock SQLite (found the hard
+    way — see this function's own test coverage). A standalone caller
+    (a script, not a route) can just wrap this in its own
+    `with session_factory() as session: ...; session.commit()`.
+    Returns the new strategy's id."""
+    strategy = Strategy(**strategy_fields)
+    session.add(strategy)
+    session.flush()  # assigns strategy.id
+    strategy_id = strategy.id
+    if tree is not None:
+        _insert_group(session, strategy_id, None, tree)
+        # Final flush: _insert_group's own intermediate flushes (needed to
+        # get each group's id before inserting its children) only push
+        # whatever happens to be pending AT THAT POINT — the deepest
+        # leaf conditions, added last with no flush after them, would
+        # otherwise sit unflushed. With this session's autoflush=False, a
+        # fresh query (e.g. get_tree, likely called right after this by
+        # the same request) would then silently miss them. Found this the
+        # hard way via the API round-trip test, not by inspection.
+        session.flush()
+    return strategy_id
 
 
-def replace_tree(session_factory, strategy_id: int, tree: Optional[dict]) -> None:
+def replace_tree(session, strategy_id: int, tree: Optional[dict]) -> None:
     """Deletes every existing group/condition for this strategy, then
     inserts the new tree — simplest robust "update": a strategy is edited
     as a whole via the UI, not partially patched, so there's no real tree-
     diffing to do."""
-    with session_scope(session_factory) as session:
-        _delete_tree(session, strategy_id)
-        if tree is not None:
-            _insert_group(session, strategy_id, None, tree)
+    _delete_tree(session, strategy_id)
+    if tree is not None:
+        _insert_group(session, strategy_id, None, tree)
+        session.flush()  # see create()'s own comment on why this is needed
 
 
-def update_fields(session_factory, strategy_id: int, fields: dict) -> None:
-    with session_scope(session_factory) as session:
+def update_fields(session, strategy_id: int, fields: dict) -> None:
+    if fields:
         session.query(Strategy).filter_by(id=strategy_id).update(fields)
 
 
-def delete(session_factory, strategy_id: int) -> None:
-    with session_scope(session_factory) as session:
-        _delete_tree(session, strategy_id)
-        session.query(Strategy).filter_by(id=strategy_id).delete(synchronize_session=False)
+def delete(session, strategy_id: int) -> None:
+    _delete_tree(session, strategy_id)
+    session.query(Strategy).filter_by(id=strategy_id).delete(synchronize_session=False)
 
 
 def _insert_group(session, strategy_id: int, parent_group_id: Optional[int], node: dict) -> None:

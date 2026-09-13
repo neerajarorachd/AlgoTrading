@@ -7,10 +7,11 @@ from typing import Optional
 from flask import Flask, g
 from flask_cors import CORS
 
-from activity_engine import ActivityEngine, seed_pattern_definitions
+from activity_engine import PATTERN_CATALOG, ActivityEngine, seed_pattern_definitions
 from config import DHAN_TOKEN_TYPE_FEED, DHAN_TOKEN_TYPE_REST, cors_origins, load_dhan_tokens
 from db.models import Base
 from db.ops.LibCandles import persist_one as persist_candle
+from db.ops.LibStrategyElements import seed_strategy_elements
 from db.session import build_engine, build_session_factory
 from feed.candle_aggregator import CandleAggregator
 from instrument_master import InstrumentMaster
@@ -38,6 +39,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     instrument_master = instrument_master or InstrumentMaster()
 
     seed_pattern_definitions(session_factory)
+    seed_strategy_elements(session_factory, PATTERN_CATALOG)
     activity_engine = ActivityEngine(session_factory)
     aggregator = CandleAggregator(on_candle_closed=_make_on_candle_closed(session_factory, activity_engine))
     market_feed = MarketFeed(
@@ -59,9 +61,11 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     _register_db_session_hooks(app, session_factory)
 
     from api.routes_candles import candles_bp
+    from api.routes_strategies import strategies_bp
     from api.routes_symbols import symbols_bp
     app.register_blueprint(symbols_bp)
     app.register_blueprint(candles_bp)
+    app.register_blueprint(strategies_bp)
 
     app.extensions["socketio"] = ws_live.init_app(app)
 
