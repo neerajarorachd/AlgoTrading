@@ -174,6 +174,52 @@ class EngineSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
+class PatternPrediction(Base):
+    """One open (or resolved) forward-looking call from a graph formation or
+    indicator crossover — a deliberately simple, temporary stand-in for the
+    real Strategy/Entry-monitor system (not built yet, see
+    backend/prediction_tracker.py's own module docstring). Each qualifying
+    pattern is treated as its own standalone "strategy" for now (2026-09-14
+    instruction: "each complicated formation we can treat as a standalone
+    strategy so that we should keep on getting predictions") — no combining
+    signals yet, one row per fired pattern.
+
+    Opened the moment a tracked pattern fires (immediately, not through
+    ActivityEngine's buffer/flush — these fire only a handful of times a day
+    per instrument, unlike candle patterns firing hundreds of times, so the
+    DB-round-trip-minimization concern that motivated buffer/flush doesn't
+    apply here). Resolved candle-by-candle afterward by PredictionTracker
+    against its own stop_loss/target.
+
+    neckline is only meaningful for double_top/double_bottom (measured-move
+    patterns, whose stop/target derive from their own swing-point geometry)
+    — NULL for crossover-based predictions (ATR-based stop/target instead,
+    no neckline concept).
+    """
+
+    __tablename__ = "pattern_predictions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    pattern: Mapped[str] = mapped_column(String(64), nullable=False)
+    direction: Mapped[str] = mapped_column(String(4), nullable=False)  # "bull" | "bear"
+    detected_ts: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    entry_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    neckline: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    stop_loss: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    target: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    # nullable = pending; "target_hit" | "stop_hit" | "sideways" once resolved
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    outcome_ts: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    candles_checked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_pattern_predictions_pending", "instrument_id", "timeframe", "outcome"),
+    )
+
+
 class BrokerAccount(Base):
     """Mirror of the Trading project's own BrokerAccount table (SQLite, on the VM).
 

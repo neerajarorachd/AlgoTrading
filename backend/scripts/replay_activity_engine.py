@@ -21,8 +21,9 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 from activity_engine import ActivityEngine, seed_pattern_definitions
 from brokers.models import Candle
-from db.models import Base, CandleToday, InstrumentActivity, SubscribedSymbol
+from db.models import Base, CandleToday, InstrumentActivity, PatternPrediction, SubscribedSymbol
 from db.session import build_engine, build_session_factory
+from prediction_tracker import PredictionTracker
 
 TIMEFRAMES = ["1min", "3min", "5min"]
 
@@ -50,6 +51,7 @@ def main() -> None:
         return
 
     activity_engine = ActivityEngine(session_factory)
+    prediction_tracker = PredictionTracker(session_factory, activity_engine)
 
     for symbol, exchange_segment in targets:
         for timeframe in TIMEFRAMES:
@@ -70,7 +72,9 @@ def main() -> None:
                 ]
 
             for candle in candles:
-                activity_engine.on_candle_closed(symbol, exchange_segment, candle)
+                prediction_tracker.check_pending(symbol, exchange_segment, candle)
+                new_activities = activity_engine.on_candle_closed(symbol, exchange_segment, candle)
+                prediction_tracker.on_activities(symbol, exchange_segment, new_activities)
 
             print(f"{symbol} {timeframe}: replayed {len(candles)} candles ({activity_engine.buffered_count()} buffered so far)")
 
@@ -88,6 +92,25 @@ def main() -> None:
         print(f"\n{len(rows)} total activities detected:")
         for row in rows:
             print(f"  {row.ts} [{row.timeframe}] instrument={row.instrument_id} {row.activity_type}/{row.activity}")
+
+    with session_factory() as session:
+        instrument_ids = [
+            row.id for row in session.query(SubscribedSymbol).filter(SubscribedSymbol.symbol.in_([s for s, _ in targets]))
+        ]
+        predictions = (
+            session.query(PatternPrediction)
+            .filter(PatternPrediction.instrument_id.in_(instrument_ids))
+            .order_by(PatternPrediction.detected_ts.asc())
+            .all()
+        )
+        print(f"\n{len(predictions)} predictions tracked:")
+        for p in predictions:
+            outcome = p.outcome or "pending"
+            print(
+                f"  {p.detected_ts} [{p.timeframe}] {p.pattern} ({p.direction}) "
+                f"entry={p.entry_price} sl={p.stop_loss} target={p.target} -> {outcome} "
+                f"({p.candles_checked} candles checked)"
+            )
 
 
 if __name__ == "__main__":

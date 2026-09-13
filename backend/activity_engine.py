@@ -31,6 +31,7 @@ from db.models import EngineSetting, InstrumentActivity, PatternDefinition, Subs
 from db.session import session_scope
 from indicators import (
     TREND_LOOKBACK,
+    AtrState,
     MacdState,
     RsiState,
     StochasticState,
@@ -39,6 +40,7 @@ from indicators import (
     crossed_above,
     crossed_below,
     trend_intensity,
+    update_atr,
     update_macd,
     update_rsi,
     update_stochastic,
@@ -948,6 +950,13 @@ class ActivityEngine:
         # own type (is this high bigger than the last high? etc.)
         self._recent_highs: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
         self._recent_lows: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
+        # ATR — not used by any detector's threshold yet (see ATR_PERIOD's
+        # own docstring in indicators.py), but tracked here per instrument/
+        # timeframe so PredictionTracker can read the latest value via
+        # get_atr() for its own crossover stop/target sizing, without this
+        # module needing to know PredictionTracker exists
+        self._atr_state: Dict[InstrumentKey, AtrState] = defaultdict(AtrState)
+        self._latest_atr: Dict[InstrumentKey, float] = {}
 
     def buffered_count(self) -> int:
         return len(self._buffer)
@@ -1100,6 +1109,13 @@ class ActivityEngine:
         except Exception:
             logger.exception("Activity engine: stochastic crossover failed for %s (%s)", symbol, exchange_segment)
 
+        try:
+            atr = update_atr(self._atr_state[key], candle.high, candle.low, candle.close)
+            if atr is not None:
+                self._latest_atr[key] = atr
+        except Exception:
+            logger.exception("Activity engine: ATR update failed for %s (%s)", symbol, exchange_segment)
+
         if len(closes) >= _MA_LONG_PERIOD:
             ma21 = statistics.fmean(list(closes)[-_MA_SHORT_PERIOD:])
             ma50 = statistics.fmean(closes)
@@ -1231,6 +1247,22 @@ class ActivityEngine:
             })
 
         return self._buffer[buffer_start:]
+
+    def get_atr(self, symbol: str, exchange_segment: str, timeframe: str) -> Optional[float]:
+        """Read-only accessor for the latest ATR(14) value — used by
+        PredictionTracker to size a crossover prediction's stop/target.
+        None until _ATR_PERIOD candles have been seen for this key."""
+        return self._latest_atr.get((symbol, exchange_segment, timeframe))
+
+    def get_swing_points(self, symbol: str, exchange_segment: str, timeframe: str) -> List["SwingPoint"]:
+        """Read-only accessor for the last (up to 3) confirmed swing points —
+        used by PredictionTracker to recompute a just-fired double_top/
+        double_bottom's neckline/stop/target via this module's own
+        double_top_*/double_bottom_* formulas, without this module needing
+        to know PredictionTracker exists. Safe to call only right after
+        on_candle_closed returns an activity naming that pattern — nothing
+        else mutates this deque in between."""
+        return list(self._swing_points[(symbol, exchange_segment, timeframe)])
 
     def _update_vwap(self, key: InstrumentKey, candle: Candle) -> Optional[float]:
         """Cumulative volume-weighted average price since the day's first
