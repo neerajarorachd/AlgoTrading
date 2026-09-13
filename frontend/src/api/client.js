@@ -29,3 +29,17 @@ export const getCandles = (symbol, exchangeSegment, timeframe, from, to) => {
   if (to) params.set('to', to)
   return request(`/api/candles?${params.toString()}`)
 }
+
+export const listStrategyElements = () => request('/api/strategy-elements')
+
+export const listStrategies = () => request('/api/strategies')
+
+export const getStrategy = (id) => request(`/api/strategies/${id}`)
+
+export const createStrategy = (strategy) =>
+  request('/api/strategies', { method: 'POST', body: JSON.stringify(strategy) })
+
+export const updateStrategy = (id, strategy) =>
+  request(`/api/strategies/${id}`, { method: 'PUT', body: JSON.stringify(strategy) })
+
+export const deleteStrategy = (id) => request(`/api/strategies/${id}`, { method: 'DELETE' })
