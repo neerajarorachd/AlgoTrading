@@ -195,6 +195,11 @@ class PatternPrediction(Base):
     patterns, whose stop/target derive from their own swing-point geometry)
     — NULL for crossover-based predictions (ATR-based stop/target instead,
     no neckline concept).
+
+    Unique on (instrument_id, timeframe, pattern, detected_ts) — same
+    idempotency reasoning as InstrumentActivity's own unique constraint:
+    re-processing the same candle (a replay re-run, a backfill re-run)
+    must never duplicate the same prediction.
     """
 
     __tablename__ = "pattern_predictions"
@@ -217,6 +222,9 @@ class PatternPrediction(Base):
 
     __table_args__ = (
         Index("ix_pattern_predictions_pending", "instrument_id", "timeframe", "outcome"),
+        UniqueConstraint(
+            "instrument_id", "timeframe", "pattern", "detected_ts", name="uq_pattern_prediction",
+        ),
     )
 
 

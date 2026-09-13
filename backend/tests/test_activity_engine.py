@@ -21,6 +21,8 @@ from activity_engine import (
     detect_piercing_line,
     detect_bearish_structure_shift,
     detect_bullish_structure_shift,
+    detect_bearish_break_of_structure,
+    detect_bullish_break_of_structure,
     detect_double_bottom,
     detect_double_top,
     detect_price_vwap_divergence,
@@ -34,6 +36,8 @@ from activity_engine import (
     detect_vwap_gap_fill,
     bearish_structure_shift_intensity,
     bullish_structure_shift_intensity,
+    bearish_break_of_structure_intensity,
+    bullish_break_of_structure_intensity,
     doji_intensity,
     double_bottom_intensity,
     double_bottom_neckline,
@@ -532,6 +536,50 @@ def test_structure_shift_intensity_exceeds_one():
     highs2 = [_sp_at("high", 100.0, 0), _sp_at("high", 105.0, 2), _sp_at("high", 102.0, 4)]
     lows2 = [_sp_at("low", 98.0, 1), _sp_at("low", 93.0, 3)]
     assert bearish_structure_shift_intensity(highs2, lows2) > 1.0
+
+
+def test_detect_bullish_break_of_structure_true_for_a_fresh_hh_after_a_confirmed_hl():
+    lows = [_sp_at("low", 95.0, 0), _sp_at("low", 97.0, 4)]  # HL: 97 > 95
+    highs = [_sp_at("high", 100.0, 2), _sp_at("high", 105.0, 6)]  # HH: 105 > 100, arrives after the HL
+    assert detect_bullish_break_of_structure(lows, highs) is True
+    assert detect_bearish_break_of_structure(highs, lows) is False
+
+
+def test_detect_bullish_break_of_structure_false_when_new_high_is_not_higher():
+    lows = [_sp_at("low", 95.0, 0), _sp_at("low", 97.0, 4)]
+    highs = [_sp_at("high", 100.0, 2), _sp_at("high", 99.0, 6)]  # not a real HH
+    assert detect_bullish_break_of_structure(lows, highs) is False
+
+
+def test_detect_bullish_break_of_structure_false_when_hl_comes_after_the_new_high():
+    # the "HL" is actually confirmed after the new high — not a valid
+    # "already in an uptrend, now making a fresh high" sequence
+    lows = [_sp_at("low", 95.0, 0), _sp_at("low", 97.0, 8)]
+    highs = [_sp_at("high", 100.0, 2), _sp_at("high", 105.0, 6)]
+    assert detect_bullish_break_of_structure(lows, highs) is False
+
+
+def test_detect_bullish_break_of_structure_false_when_move_too_small():
+    lows = [_sp_at("low", 100.0, 0), _sp_at("low", 100.05, 4)]  # +0.05%
+    highs = [_sp_at("high", 101.0, 2), _sp_at("high", 101.05, 6)]  # +0.05%
+    assert detect_bullish_break_of_structure(lows, highs) is False
+
+
+def test_detect_bearish_break_of_structure_true_for_a_fresh_ll_after_a_confirmed_lh():
+    highs = [_sp_at("high", 105.0, 0), _sp_at("high", 103.0, 4)]  # LH: 103 < 105
+    lows = [_sp_at("low", 100.0, 2), _sp_at("low", 95.0, 6)]  # LL: 95 < 100, arrives after the LH
+    assert detect_bearish_break_of_structure(highs, lows) is True
+    assert detect_bullish_break_of_structure(lows, highs) is False
+
+
+def test_break_of_structure_intensity_exceeds_one():
+    lows = [_sp_at("low", 95.0, 0), _sp_at("low", 97.0, 4)]
+    highs = [_sp_at("high", 100.0, 2), _sp_at("high", 105.0, 6)]
+    assert bullish_break_of_structure_intensity(lows, highs) > 1.0
+
+    highs2 = [_sp_at("high", 105.0, 0), _sp_at("high", 103.0, 4)]
+    lows2 = [_sp_at("low", 100.0, 2), _sp_at("low", 95.0, 6)]
+    assert bearish_break_of_structure_intensity(highs2, lows2) > 1.0
 
 
 # --------------------------------------------------------------------- Bollinger Bands (pure)
@@ -1065,6 +1113,74 @@ def test_engine_detects_bullish_structure_shift_through_on_candle_closed(session
     with session_factory() as session:
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "bullish_structure_shift" in activities
+
+
+def test_engine_detects_bullish_break_of_structure_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # Same LL-HH-HL reversal as the structure-shift test above, extended
+    # with one more leg: after the HL(91) confirms the reversal, price
+    # pushes on to a fresh high (108) beyond the prior HH(100) — a BOS
+    # confirming the new uptrend is continuing, not just starting.
+    # Verified by direct simulation.
+    closes = _zigzag_highs([
+        (0, 100.0), (12, 90.0), (24, 95.0), (36, 85.0), (48, 100.0),
+        (60, 91.0), (72, 108.0), (84, 94.0),
+    ])
+    candles = [
+        Candle(
+            symbol=SYMBOL, timeframe="1min", timestamp=_BASE_TS + timedelta(minutes=i),
+            open=c, high=c, low=c, close=c, volume=100,
+        )
+        for i, c in enumerate(closes)
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "bullish_structure_shift" in activities
+    assert "bullish_break_of_structure" in activities
+
+
+def test_engine_detects_bearish_break_of_structure_through_on_candle_closed(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # Mirror of the bullish case above: HH-LL-LH reversal, then a fresh
+    # low (92) beyond the prior LL(100) — a bearish BOS confirming the new
+    # downtrend is continuing. Verified by direct simulation.
+    closes = _zigzag_highs([
+        (0, 100.0), (12, 110.0), (24, 105.0), (36, 115.0), (48, 100.0),
+        (60, 109.0), (72, 92.0), (84, 106.0),
+    ])
+    candles = [
+        Candle(
+            symbol=SYMBOL, timeframe="1min", timestamp=_BASE_TS + timedelta(minutes=i),
+            open=c, high=c, low=c, close=c, volume=100,
+        )
+        for i, c in enumerate(closes)
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        activities = {row.activity for row in session.query(InstrumentActivity).all()}
+    assert "bearish_structure_shift" in activities
+    assert "bearish_break_of_structure" in activities
 
 
 def test_engine_detects_bb_squeeze_through_on_candle_closed(session_factory):

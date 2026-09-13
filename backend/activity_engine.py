@@ -11,10 +11,14 @@ its signal line, Stochastic %K crossing %D, MA21 crossing MA50),
 swing-high/swing-low (fractal) detection — confirmed _SWING_LOOKBACK
 candles after they happen, since a swing point needs to see what came
 after it to be identified — and, built on top of those swing points, the
-first graph formation: double top / double bottom. Larger formations (head
-and shoulders, flags, triangles, HH-HL trend structure, etc.) aren't built
-yet. Outcome tracking (what happened N candles after an activity) is
-deliberately not built yet either.
+first graph formation (double top / double bottom) plus two trend-
+structure signals: bullish/bearish structure shift (industry term: CHoCH,
+Change of Character — the first break signaling a reversal) and bullish/
+bearish break of structure (BOS — a fresh high/low confirming the
+resulting trend is continuing, not just starting). Larger formations
+(head and shoulders, flags, triangles, triple top/bottom, etc.) aren't
+built yet. Outcome tracking now lives in a separate, deliberately
+decoupled module (prediction_tracker.py), not here.
 """
 from __future__ import annotations
 
@@ -714,6 +718,76 @@ def bearish_structure_shift_intensity(highs: List[SwingPoint], lows: List[SwingP
     return avg_move / _STRUCTURE_MIN_MOVE if _STRUCTURE_MIN_MOVE else float("inf")
 
 
+# Break of Structure (BOS) — the wider industry's name for trend
+# *continuation*, distinct from bullish/bearish_structure_shift above
+# (which is what the industry calls CHoCH, Change of Character: the
+# *first* break signaling a reversal). Where a CHoCH completes on
+# LL-HH-HL (bullish) — the reversal into an uptrend — a BOS completes one
+# step later: a fresh Higher-High arriving *after* an already-confirmed
+# Higher-Low, i.e. the structure was already HL going into this new HH,
+# confirming the (established or just-reversed-into) uptrend is
+# continuing rather than marking its start. Same average-of-legs gate as
+# structure shift, same reasoning (see detect_bullish_structure_shift's
+# own docstring) — just two legs instead of three, since BOS has no
+# "initial LL" leg of its own to include.
+_BOS_MIN_MOVE = 0.003
+
+
+def detect_bullish_break_of_structure(lows: List[SwingPoint], highs: List[SwingPoint]) -> bool:
+    """lows/highs: the same last-3-confirmed, type-only sequences bullish/
+    bearish_structure_shift already read from. True when the latest
+    confirmed swing high is a genuine Higher-High arriving after the
+    latest confirmed swing low was itself a genuine Higher-Low (in that
+    chronological order) — i.e. an uptrend making a fresh new high, not
+    the initial reversal into one."""
+    if len(highs) < 2 or len(lows) < 2:
+        return False
+    h_prev, h_hh = highs[-2], highs[-1]
+    l_prev, l_hl = lows[-2], lows[-1]
+    hh_move = _pct_move(h_prev.price, h_hh.price)
+    hl_move = _pct_move(l_prev.price, l_hl.price)
+    if hh_move <= 0 or hl_move <= 0:  # each leg must at least point the right way
+        return False
+    if not (l_hl.candle.timestamp < h_hh.candle.timestamp):
+        return False
+    avg_move = (hh_move + hl_move) / 2
+    return avg_move >= _BOS_MIN_MOVE
+
+
+def detect_bearish_break_of_structure(highs: List[SwingPoint], lows: List[SwingPoint]) -> bool:
+    """Bullish BOS's mirror: a fresh Lower-Low arriving after the latest
+    confirmed swing high was itself a genuine Lower-High."""
+    if len(lows) < 2 or len(highs) < 2:
+        return False
+    l_prev, l_ll = lows[-2], lows[-1]
+    h_prev, h_lh = highs[-2], highs[-1]
+    ll_move = _pct_move(l_prev.price, l_ll.price)
+    lh_move = _pct_move(h_prev.price, h_lh.price)
+    if ll_move >= 0 or lh_move >= 0:
+        return False
+    if not (h_lh.candle.timestamp < l_ll.candle.timestamp):
+        return False
+    avg_move = (abs(ll_move) + abs(lh_move)) / 2
+    return avg_move >= _BOS_MIN_MOVE
+
+
+def bullish_break_of_structure_intensity(lows: List[SwingPoint], highs: List[SwingPoint]) -> float:
+    """Average of the two legs' move sizes, as a multiple of the
+    qualifying floor — same style as bullish_structure_shift_intensity."""
+    h_prev, h_hh = highs[-2], highs[-1]
+    l_prev, l_hl = lows[-2], lows[-1]
+    avg_move = (_pct_move(h_prev.price, h_hh.price) + _pct_move(l_prev.price, l_hl.price)) / 2
+    return avg_move / _BOS_MIN_MOVE if _BOS_MIN_MOVE else float("inf")
+
+
+def bearish_break_of_structure_intensity(highs: List[SwingPoint], lows: List[SwingPoint]) -> float:
+    """Bullish BOS intensity's mirror."""
+    l_prev, l_ll = lows[-2], lows[-1]
+    h_prev, h_lh = highs[-2], highs[-1]
+    avg_move = (abs(_pct_move(l_prev.price, l_ll.price)) + abs(_pct_move(h_prev.price, h_lh.price))) / 2
+    return avg_move / _BOS_MIN_MOVE if _BOS_MIN_MOVE else float("inf")
+
+
 # --------------------------------------------------------------------- price action (BB / VWAP)
 
 class BollingerBands:
@@ -846,8 +920,10 @@ PATTERN_CATALOG = [
     ("swing_low", "structure", "A confirmed local price trough — the lowest low across a window of candles on both sides of it"),
     ("double_top", "graph_formation", "Two comparable swing highs with a meaningfully lower swing low between them — a classic bearish reversal shape"),
     ("double_bottom", "graph_formation", "Two comparable swing lows with a meaningfully higher swing high between them — a classic bullish reversal shape"),
-    ("bullish_structure_shift", "structure", "Lower Low, then Higher High, then Higher Low — trend structure shifting from bearish to bullish"),
-    ("bearish_structure_shift", "structure", "Higher High, then Lower Low, then Lower High — trend structure shifting from bullish to bearish"),
+    ("bullish_structure_shift", "structure", "Lower Low, then Higher High, then Higher Low — trend structure shifting from bearish to bullish (CHoCH)"),
+    ("bearish_structure_shift", "structure", "Higher High, then Lower Low, then Lower High — trend structure shifting from bullish to bearish (CHoCH)"),
+    ("bullish_break_of_structure", "structure", "A fresh Higher-High arriving after an already-confirmed Higher-Low — an uptrend continuing to make new highs (BOS)"),
+    ("bearish_break_of_structure", "structure", "A fresh Lower-Low arriving after an already-confirmed Lower-High — a downtrend continuing to make new lows (BOS)"),
 ]
 
 
@@ -1211,20 +1287,42 @@ class ActivityEngine:
                         recent_highs = list(self._recent_highs[key])
                         recent_lows = list(self._recent_lows[key])
 
-                        shift = None
-                        if kind == "low" and detect_bullish_structure_shift(recent_lows, recent_highs):
-                            shift = ("bullish_structure_shift", bullish_structure_shift_intensity(recent_lows, recent_highs))
-                        elif kind == "high" and detect_bearish_structure_shift(recent_highs, recent_lows):
-                            shift = ("bearish_structure_shift", bearish_structure_shift_intensity(recent_highs, recent_lows))
-                        if shift is not None:
-                            shift_name, shift_intensity = shift
-                            if shift_intensity == float("inf"):
-                                shift_intensity = None
+                        # at most one of these ever fires per call — a new
+                        # low's own "is it higher or lower than the last
+                        # low" comparison can't satisfy both the CHoCH and
+                        # the BOS check's opposite-signed requirement on
+                        # that same leg, and likewise for a new high
+                        structure_events = []
+                        if kind == "low":
+                            if detect_bullish_structure_shift(recent_lows, recent_highs):
+                                structure_events.append((
+                                    "bullish_structure_shift",
+                                    bullish_structure_shift_intensity(recent_lows, recent_highs),
+                                ))
+                            if detect_bearish_break_of_structure(recent_highs, recent_lows):
+                                structure_events.append((
+                                    "bearish_break_of_structure",
+                                    bearish_break_of_structure_intensity(recent_highs, recent_lows),
+                                ))
+                        else:  # kind == "high"
+                            if detect_bearish_structure_shift(recent_highs, recent_lows):
+                                structure_events.append((
+                                    "bearish_structure_shift",
+                                    bearish_structure_shift_intensity(recent_highs, recent_lows),
+                                ))
+                            if detect_bullish_break_of_structure(recent_lows, recent_highs):
+                                structure_events.append((
+                                    "bullish_break_of_structure",
+                                    bullish_break_of_structure_intensity(recent_lows, recent_highs),
+                                ))
+                        for event_name, event_intensity in structure_events:
+                            if event_intensity == float("inf"):
+                                event_intensity = None
                             self._buffer.append({
                                 "instrument_id": instrument_id, "timeframe": candle.timeframe,
                                 "ts": swing_candle.timestamp,
-                                "activity_type": "structure", "activity": shift_name,
-                                "intensity": shift_intensity,
+                                "activity_type": "structure", "activity": event_name,
+                                "intensity": event_intensity,
                                 "open_price": swing_candle.open, "high_price": swing_candle.high,
                                 "low_price": swing_candle.low, "close_price": swing_candle.close,
                             })

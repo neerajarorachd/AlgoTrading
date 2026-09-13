@@ -66,6 +66,8 @@ from activity_engine import (
     double_top_target,
 )
 from brokers.models import Candle
+from sqlalchemy.exc import IntegrityError
+
 from db.models import CandleToday, EngineSetting, PatternPrediction, SubscribedSymbol
 from db.session import session_scope
 
@@ -92,10 +94,12 @@ PREDICTION_SETTING_DEFAULTS: Dict[str, float] = {
 _BULLISH_PATTERNS = {
     "rsi_cross_above_60", "macd_bullish_cross", "ma_golden_cross",
     "stoch_bullish_cross", "double_bottom", "bullish_structure_shift",
+    "bullish_break_of_structure",
 }
 _BEARISH_PATTERNS = {
     "rsi_cross_below_40", "macd_bearish_cross", "ma_death_cross",
     "stoch_bearish_cross", "double_top", "bearish_structure_shift",
+    "bearish_break_of_structure",
 }
 # These two have their own neckline-derived measured-move levels instead
 # of the generic ATR-based formula every other tracked pattern uses.
@@ -285,12 +289,18 @@ class PredictionTracker:
         self, instrument_id: int, timeframe: str, pattern: str, direction: str,
         detected_ts, entry: float, neckline: Optional[float], stop_loss: float, target: float,
     ) -> None:
-        with session_scope(self.session_factory) as session:
-            session.add(PatternPrediction(
-                instrument_id=instrument_id, timeframe=timeframe, pattern=pattern, direction=direction,
-                detected_ts=detected_ts, entry_price=entry, neckline=neckline,
-                stop_loss=stop_loss, target=target,
-            ))
+        """Idempotent on (instrument_id, timeframe, pattern, detected_ts) —
+        re-processing the same candle (a replay re-run) must never open a
+        duplicate prediction for a pattern that already fired on it."""
+        try:
+            with session_scope(self.session_factory) as session:
+                session.add(PatternPrediction(
+                    instrument_id=instrument_id, timeframe=timeframe, pattern=pattern, direction=direction,
+                    detected_ts=detected_ts, entry_price=entry, neckline=neckline,
+                    stop_loss=stop_loss, target=target,
+                ))
+        except IntegrityError:
+            pass  # already recorded — a concurrent writer or a replay re-run
 
     def _lookup_instrument_id(self, symbol: str, exchange_segment: str) -> Optional[int]:
         cache_key = (symbol, exchange_segment)
