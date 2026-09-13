@@ -39,20 +39,27 @@ def get_by_id(session, strategy_id: int) -> Optional[Strategy]:
 def get_tree(session, strategy_id: int) -> Optional[dict]:
     """Recursively reconstructs a strategy's condition tree. Returns None
     if the strategy has no root group yet (e.g. a newly created strategy
-    with an empty tree)."""
-    root = (
-        session.query(StrategyConditionGroup)
-        .filter_by(strategy_id=strategy_id, parent_group_id=None)
-        .one_or_none()
-    )
+    with an empty tree).
+
+    Two queries, not three: the root group used to be fetched on its own
+    before also fetching "every group for this strategy" — but that
+    second query already includes the root, so the first one was a fully
+    redundant round trip (found live: every DB call here pays real SSH-
+    tunnel-to-VM latency, and GET /api/strategies/:id was visibly slow —
+    ~1s — for what should be a small read). Conditions are now fetched by
+    a plain `group_id IN (...)` filter against the group ids already in
+    hand, instead of re-joining StrategyConditionGroup a second time."""
+    all_groups = session.query(StrategyConditionGroup).filter_by(strategy_id=strategy_id).all()
+    if not all_groups:
+        return None
+    root = next((g for g in all_groups if g.parent_group_id is None), None)
     if root is None:
         return None
 
-    all_groups = session.query(StrategyConditionGroup).filter_by(strategy_id=strategy_id).all()
+    group_ids = [g.id for g in all_groups]
     all_conditions = (
         session.query(StrategyCondition)
-        .join(StrategyConditionGroup, StrategyCondition.group_id == StrategyConditionGroup.id)
-        .filter(StrategyConditionGroup.strategy_id == strategy_id)
+        .filter(StrategyCondition.group_id.in_(group_ids))
         .all()
     )
 
