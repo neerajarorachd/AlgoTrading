@@ -19,10 +19,12 @@ session, never how to obtain one.
 """
 from . import (
     LibActivities, LibBrokerTokens, LibCandleIndicators, LibCandles,
-    LibPatternOutcomes, LibPredictions, LibSettings, LibSymbols,
+    LibPatternOutcomes, LibPredictions, LibSettings, LibStrategies,
+    LibStrategyElements, LibSymbols,
 )
 
 __all__ = [
     "LibActivities", "LibBrokerTokens", "LibCandleIndicators", "LibCandles",
-    "LibPatternOutcomes", "LibPredictions", "LibSettings", "LibSymbols",
+    "LibPatternOutcomes", "LibPredictions", "LibSettings", "LibStrategies",
+    "LibStrategyElements", "LibSymbols",
 ]
