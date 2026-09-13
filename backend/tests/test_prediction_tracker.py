@@ -113,6 +113,40 @@ def test_on_activities_opens_an_atr_based_prediction_for_a_tracked_crossover(ses
     assert float(pred.target) == pytest.approx(crossover_target(100.0, atr, "bull", tracker.atr_multiplier, tracker.risk_reward_ratio))
 
 
+def test_on_activities_tracks_the_four_directional_channel_patterns(session_factory):
+    """ascending_triangle/falling_wedge are bullish, descending_triangle/
+    rising_wedge are bearish — symmetrical_triangle/rectangle are
+    deliberately NOT in this set (no directional bias without a
+    confirmed breakout), so only these four should open a prediction."""
+    _register_symbol(session_factory)
+    engine = ActivityEngine(session_factory)
+    for i in range(15):
+        engine.on_candle_closed(SYMBOL, SEG, _candle(i, 100.0, 101.0, 99.0, 100.0, timeframe="3min"))
+    tracker = PredictionTracker(session_factory, engine)
+
+    def _activity(pattern):
+        return {
+            "instrument_id": 1, "timeframe": "3min", "ts": _BASE_TS,
+            "activity_type": "graph_formation", "activity": pattern, "intensity": 1.0,
+            "open_price": 100.0, "high_price": 101.0, "low_price": 99.0, "close_price": 100.0,
+        }
+
+    assert tracker.on_activities(SYMBOL, SEG, [_activity("ascending_triangle")]) == 1
+    assert tracker.on_activities(SYMBOL, SEG, [_activity("falling_wedge")]) == 1
+    assert tracker.on_activities(SYMBOL, SEG, [_activity("descending_triangle")]) == 1
+    assert tracker.on_activities(SYMBOL, SEG, [_activity("rising_wedge")]) == 1
+    assert tracker.on_activities(SYMBOL, SEG, [_activity("symmetrical_triangle")]) == 0
+    assert tracker.on_activities(SYMBOL, SEG, [_activity("rectangle")]) == 0
+
+    tracker.flush()
+    with session_factory() as session:
+        by_pattern = {p.pattern: p.direction for p in session.query(PatternPrediction).all()}
+    assert by_pattern["ascending_triangle"] == "bull"
+    assert by_pattern["falling_wedge"] == "bull"
+    assert by_pattern["descending_triangle"] == "bear"
+    assert by_pattern["rising_wedge"] == "bear"
+
+
 def test_on_activities_skips_a_crossover_when_atr_is_not_ready_yet(session_factory):
     _register_symbol(session_factory)
     engine = ActivityEngine(session_factory)  # no candles fed at all — ATR is None

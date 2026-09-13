@@ -924,6 +924,90 @@ def bearish_break_of_structure_intensity(highs: List[SwingPoint], lows: List[Swi
     return avg_move / _BOS_MIN_MOVE if _BOS_MIN_MOVE else float("inf")
 
 
+# --------------------------------------------------------------------- graph formations (triangles/wedges/rectangle)
+
+# The "medium" tier of graph formations — unlike double/triple top/bottom
+# and structure shift/BOS (which all read a short, fixed-length sequence
+# of alternating swing points), these are trendline-pair patterns: fit a
+# straight line through the last 2 confirmed swing highs (the resistance/
+# upper line) and another through the last 2 confirmed swing lows (the
+# support/lower line), classify by each line's own direction, and whether
+# they converge, run parallel, or diverge. Two points is the minimum a
+# straight line needs at all — the standard smallest unit an algorithmic
+# pattern scanner checks (researched 2026-09-14: TradingView/Trendoscope's
+# own published approach to this pattern family is exactly "trendline
+# pairs" fit through pivot points and classified by slope/convergence,
+# though their exact thresholds are proprietary) — a 3-point average
+# (matching structure shift's own average-of-legs robustness) is a
+# natural future upgrade once real data suggests 2 points alone is noisy.
+#
+# A straight line's direction here is just the plain percentage move
+# between its 2 points (_pct_move, the same primitive every other
+# threshold in this module already uses) — "flat" below
+# _CHANNEL_FLAT_THRESHOLD, otherwise rising or falling.
+_CHANNEL_FLAT_THRESHOLD = 0.003
+
+# Standard textbook directional bias for the four patterns with a real
+# one (used by prediction_tracker.py to decide which ones to track) —
+# symmetrical_triangle and rectangle are deliberately left untracked
+# there since neither has a directional bias until an actual breakout,
+# which this module doesn't confirm (same "detect the shape, don't wait
+# for a breakout" stance as double_top/bottom).
+CHANNEL_PATTERN_DIRECTION: Dict[str, str] = {
+    "ascending_triangle": "bull",
+    "descending_triangle": "bear",
+    "rising_wedge": "bear",   # bearish reversal despite both lines rising
+    "falling_wedge": "bull",  # bullish reversal despite both lines falling
+}
+
+
+def classify_channel(highs: List[SwingPoint], lows: List[SwingPoint]) -> Optional[str]:
+    """highs/lows: the last 2+ confirmed swing highs/lows, chronological
+    (the same recent_highs/recent_lows sequences structure shift/BOS
+    already track) — classifies the shape traced by the last 2 of each
+    into one of six patterns, or None if it doesn't match any of them
+    (e.g. an actual diverging/expanding channel, or fewer than 2 of
+    either type confirmed yet):
+
+        resistance flat, support rising      -> ascending_triangle
+        support flat, resistance falling     -> descending_triangle
+        resistance falling, support rising   -> symmetrical_triangle (converging both sides)
+        resistance flat, support flat        -> rectangle (parallel, non-converging)
+        both rising, support the steeper one -> rising_wedge (narrowing while still trending up)
+        both falling, resistance the steeper -> falling_wedge (narrowing while still trending down)
+    """
+    if len(highs) < 2 or len(lows) < 2:
+        return None
+    high_move = _pct_move(highs[-2].price, highs[-1].price)
+    low_move = _pct_move(lows[-2].price, lows[-1].price)
+    high_flat = abs(high_move) < _CHANNEL_FLAT_THRESHOLD
+    low_flat = abs(low_move) < _CHANNEL_FLAT_THRESHOLD
+
+    if high_flat and low_flat:
+        return "rectangle"
+    if high_flat and low_move > 0:
+        return "ascending_triangle"
+    if low_flat and high_move < 0:
+        return "descending_triangle"
+    if high_move < 0 and low_move > 0:
+        return "symmetrical_triangle"
+    if high_move > 0 and low_move > 0 and low_move > high_move:
+        return "rising_wedge"
+    if high_move < 0 and low_move < 0 and high_move < low_move:
+        return "falling_wedge"
+    return None
+
+
+def channel_pattern_intensity(highs: List[SwingPoint], lows: List[SwingPoint]) -> float:
+    """How pronounced the two trendlines' moves are on average, as a
+    multiple of the qualifying floor — same style as every other
+    intensity function in this module."""
+    high_move = _pct_move(highs[-2].price, highs[-1].price)
+    low_move = _pct_move(lows[-2].price, lows[-1].price)
+    avg_magnitude = (abs(high_move) + abs(low_move)) / 2
+    return avg_magnitude / _CHANNEL_FLAT_THRESHOLD if _CHANNEL_FLAT_THRESHOLD else float("inf")
+
+
 # --------------------------------------------------------------------- price action (BB / VWAP)
 
 class BollingerBands:
@@ -1062,6 +1146,12 @@ PATTERN_CATALOG = [
     ("bearish_structure_shift", "structure", "Higher High, then Lower Low, then Lower High — trend structure shifting from bullish to bearish (CHoCH)"),
     ("bullish_break_of_structure", "structure", "A fresh Higher-High arriving after an already-confirmed Higher-Low — an uptrend continuing to make new highs (BOS)"),
     ("bearish_break_of_structure", "structure", "A fresh Lower-Low arriving after an already-confirmed Lower-High — a downtrend continuing to make new lows (BOS)"),
+    ("ascending_triangle", "graph_formation", "Flat resistance with a rising support line — bullish continuation/accumulation shape"),
+    ("descending_triangle", "graph_formation", "Flat support with a falling resistance line — bearish continuation/distribution shape"),
+    ("symmetrical_triangle", "graph_formation", "Falling resistance and rising support converging toward each other — neutral, breaks either way"),
+    ("rectangle", "graph_formation", "Flat resistance and flat support — a parallel consolidation range, neutral until broken"),
+    ("rising_wedge", "graph_formation", "Both trendlines rising but support rising faster (narrowing) — bearish reversal despite the upward drift"),
+    ("falling_wedge", "graph_formation", "Both trendlines falling but resistance falling faster (narrowing) — bullish reversal despite the downward drift"),
 ]
 
 
@@ -1466,6 +1556,25 @@ class ActivityEngine:
                                 "ts": swing_candle.timestamp,
                                 "activity_type": "structure", "activity": event_name,
                                 "intensity": event_intensity,
+                                "open_price": swing_candle.open, "high_price": swing_candle.high,
+                                "low_price": swing_candle.low, "close_price": swing_candle.close,
+                            })
+
+                        # trendline-pair patterns (triangle/wedge/
+                        # rectangle) — re-classified from scratch off
+                        # whichever 2 highs/2 lows are current every time
+                        # either one changes, unlike structure_events
+                        # above which is direction-restricted to kind
+                        channel_pattern = classify_channel(recent_highs, recent_lows)
+                        if channel_pattern is not None:
+                            channel_intensity = channel_pattern_intensity(recent_highs, recent_lows)
+                            if channel_intensity == float("inf"):
+                                channel_intensity = None
+                            self._buffer.append({
+                                "instrument_id": instrument_id, "timeframe": candle.timeframe,
+                                "ts": swing_candle.timestamp,
+                                "activity_type": "graph_formation", "activity": channel_pattern,
+                                "intensity": channel_intensity,
                                 "open_price": swing_candle.open, "high_price": swing_candle.high,
                                 "low_price": swing_candle.low, "close_price": swing_candle.close,
                             })

@@ -137,12 +137,18 @@ _BULLISH_PATTERNS = {
     "rsi_cross_above_60", "macd_bullish_cross", "ma_golden_cross",
     "stoch_bullish_cross", "double_bottom", "triple_bottom",
     "bullish_structure_shift", "bullish_break_of_structure",
+    "ascending_triangle", "falling_wedge",
 }
 _BEARISH_PATTERNS = {
     "rsi_cross_below_40", "macd_bearish_cross", "ma_death_cross",
     "stoch_bearish_cross", "double_top", "triple_top",
     "bearish_structure_shift", "bearish_break_of_structure",
+    "descending_triangle", "rising_wedge",
 }
+# symmetrical_triangle and rectangle are deliberately NOT tracked — neither
+# has a directional bias until an actual breakout, which activity_engine.py
+# doesn't confirm (same "detect the shape, don't wait for a breakout"
+# stance as double_top/bottom); see activity_engine.CHANNEL_PATTERN_DIRECTION.
 # These have their own neckline-derived measured-move levels (see
 # activity_engine.FORMATION_LEVEL_FUNCS) instead of the generic ATR-based
 # formula every other tracked pattern uses.

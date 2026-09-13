@@ -23,6 +23,7 @@ from activity_engine import (
     detect_bullish_structure_shift,
     detect_bearish_break_of_structure,
     detect_bullish_break_of_structure,
+    classify_channel,
     detect_double_bottom,
     detect_double_top,
     detect_triple_bottom,
@@ -40,6 +41,7 @@ from activity_engine import (
     bullish_structure_shift_intensity,
     bearish_break_of_structure_intensity,
     bullish_break_of_structure_intensity,
+    channel_pattern_intensity,
     doji_intensity,
     double_bottom_intensity,
     double_bottom_neckline,
@@ -648,6 +650,62 @@ def test_break_of_structure_intensity_exceeds_one():
     highs2 = [_sp_at("high", 105.0, 0), _sp_at("high", 103.0, 4)]
     lows2 = [_sp_at("low", 100.0, 2), _sp_at("low", 95.0, 6)]
     assert bearish_break_of_structure_intensity(highs2, lows2) > 1.0
+
+
+# --------------------------------------------------------------------- triangles/wedges/rectangle (pure)
+
+def test_classify_channel_ascending_triangle_for_flat_resistance_rising_support():
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 100.05, 4)]
+    lows = [_sp_at("low", 90.0, 1), _sp_at("low", 95.0, 3)]
+    assert classify_channel(highs, lows) == "ascending_triangle"
+
+
+def test_classify_channel_descending_triangle_for_flat_support_falling_resistance():
+    highs = [_sp_at("high", 100.0, 1), _sp_at("high", 95.0, 3)]
+    lows = [_sp_at("low", 90.0, 0), _sp_at("low", 90.05, 4)]
+    assert classify_channel(highs, lows) == "descending_triangle"
+
+
+def test_classify_channel_symmetrical_triangle_for_converging_from_both_sides():
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 95.0, 2)]
+    lows = [_sp_at("low", 85.0, 1), _sp_at("low", 90.0, 3)]
+    assert classify_channel(highs, lows) == "symmetrical_triangle"
+
+
+def test_classify_channel_rectangle_for_flat_resistance_and_flat_support():
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 100.02, 2)]
+    lows = [_sp_at("low", 90.0, 1), _sp_at("low", 90.02, 3)]
+    assert classify_channel(highs, lows) == "rectangle"
+
+
+def test_classify_channel_rising_wedge_when_support_rises_faster_than_resistance():
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 102.0, 2)]  # +2%
+    lows = [_sp_at("low", 90.0, 1), _sp_at("low", 95.0, 3)]  # +5.6%
+    assert classify_channel(highs, lows) == "rising_wedge"
+
+
+def test_classify_channel_falling_wedge_when_resistance_falls_faster_than_support():
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 94.0, 2)]  # -6%
+    lows = [_sp_at("low", 90.0, 1), _sp_at("low", 88.0, 3)]  # -2.2%
+    assert classify_channel(highs, lows) == "falling_wedge"
+
+
+def test_classify_channel_none_for_a_genuinely_diverging_channel():
+    # both rising, but resistance is the STEEPER one — an expanding
+    # channel, not a converging wedge
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 105.0, 2)]  # +5%
+    lows = [_sp_at("low", 90.0, 1), _sp_at("low", 92.0, 3)]  # +2.2%
+    assert classify_channel(highs, lows) is None
+
+
+def test_classify_channel_none_before_two_points_of_each():
+    assert classify_channel([_sp_at("high", 100.0, 0)], [_sp_at("low", 90.0, 1), _sp_at("low", 92.0, 3)]) is None
+
+
+def test_channel_pattern_intensity_exceeds_one():
+    highs = [_sp_at("high", 100.0, 0), _sp_at("high", 100.05, 4)]
+    lows = [_sp_at("low", 90.0, 1), _sp_at("low", 95.0, 3)]
+    assert channel_pattern_intensity(highs, lows) > 1.0
 
 
 # --------------------------------------------------------------------- Bollinger Bands (pure)
@@ -1315,6 +1373,85 @@ def test_engine_detects_bearish_break_of_structure_through_on_candle_closed(sess
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "bearish_structure_shift" in activities
     assert "bearish_break_of_structure" in activities
+
+
+def _run_channel_zigzag(session_factory, checkpoints):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    closes = _zigzag_highs(checkpoints)
+    candles = [
+        Candle(
+            symbol=SYMBOL, timeframe="1min", timestamp=_BASE_TS + timedelta(minutes=i),
+            open=c, high=c, low=c, close=c, volume=100,
+        )
+        for i, c in enumerate(closes)
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        return {row.activity for row in session.query(InstrumentActivity).all()}
+
+
+def test_engine_detects_ascending_triangle_through_on_candle_closed(session_factory):
+    # flat resistance (~100), rising support (92 -> 96). Verified by
+    # direct simulation.
+    activities = _run_channel_zigzag(session_factory, [
+        (0, 90.0), (12, 100.0), (24, 92.0), (36, 100.1), (48, 96.0), (60, 100.0),
+    ])
+    assert "ascending_triangle" in activities
+
+
+def test_engine_detects_descending_triangle_through_on_candle_closed(session_factory):
+    # flat support (~90), falling resistance (100 -> 95). Verified by
+    # direct simulation.
+    activities = _run_channel_zigzag(session_factory, [
+        (0, 110.0), (12, 90.0), (24, 100.0), (36, 90.1), (48, 95.0), (60, 90.0),
+    ])
+    assert "descending_triangle" in activities
+
+
+def test_engine_detects_symmetrical_triangle_through_on_candle_closed(session_factory):
+    # falling resistance (100 -> 95), rising support (85 -> 90). Verified
+    # by direct simulation.
+    activities = _run_channel_zigzag(session_factory, [
+        (0, 80.0), (12, 100.0), (24, 85.0), (36, 95.0), (48, 90.0), (60, 93.0),
+    ])
+    assert "symmetrical_triangle" in activities
+
+
+def test_engine_detects_rectangle_through_on_candle_closed(session_factory):
+    # flat resistance (~100), flat support (~90). Verified by direct
+    # simulation.
+    activities = _run_channel_zigzag(session_factory, [
+        (0, 80.0), (12, 100.0), (24, 90.0), (36, 100.05), (48, 90.05), (60, 100.0),
+    ])
+    assert "rectangle" in activities
+
+
+def test_engine_detects_rising_wedge_through_on_candle_closed(session_factory):
+    # both rising, support (90 -> 96) rising faster than resistance
+    # (100 -> 102). Verified by direct simulation.
+    activities = _run_channel_zigzag(session_factory, [
+        (0, 80.0), (12, 100.0), (24, 90.0), (36, 102.0), (48, 96.0), (60, 103.0),
+    ])
+    assert "rising_wedge" in activities
+
+
+def test_engine_detects_falling_wedge_through_on_candle_closed(session_factory):
+    # both falling, resistance (100 -> 94) falling faster than support
+    # (90 -> 88). Verified by direct simulation.
+    activities = _run_channel_zigzag(session_factory, [
+        (0, 80.0), (12, 100.0), (24, 90.0), (36, 94.0), (48, 88.0), (60, 93.0),
+    ])
+    assert "falling_wedge" in activities
 
 
 def test_engine_detects_bb_squeeze_through_on_candle_closed(session_factory):
