@@ -5,6 +5,7 @@ from datetime import datetime
 from flask import Blueprint, g, jsonify, request
 
 from db.models import CandleToday
+from db.ops import LibCandles as ops_candles
 
 candles_bp = Blueprint("candles", __name__)
 
@@ -22,18 +23,14 @@ def get_candles():
     if timeframe not in _VALID_TIMEFRAMES:
         return jsonify({"error": f"timeframe must be one of {sorted(_VALID_TIMEFRAMES)}"}), 400
 
-    query = g.db_session.query(CandleToday).filter_by(
-        symbol=symbol, exchange_segment=exchange_segment, timeframe=timeframe,
-    )
-
     from_param = request.args.get("from")
     to_param = request.args.get("to")
-    if from_param:
-        query = query.filter(CandleToday.ts >= _parse_ts(from_param))
-    if to_param:
-        query = query.filter(CandleToday.ts <= _parse_ts(to_param))
+    ts_from = _parse_ts(from_param) if from_param else None
+    ts_to = _parse_ts(to_param) if to_param else None
 
-    rows = query.order_by(CandleToday.ts).all()
+    rows = ops_candles.get_range(
+        g.db_session, symbol, exchange_segment, timeframe, ts_from=ts_from, ts_to=ts_to,
+    )
     return jsonify([_serialize(row) for row in rows])
 
 

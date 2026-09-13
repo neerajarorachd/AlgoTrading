@@ -55,8 +55,8 @@ bottlenecks (2026-09-14):
   in memory before it's ever buffered for insert. The unique constraint
   still exists as a backstop for a genuine concurrent-writer race; flush()
   falls back to inserting one row at a time on IntegrityError so one
-  conflict doesn't drop the rest of a batch, matching activity_engine.py's
-  own _persist_bulk/_persist_one pattern.
+  conflict doesn't drop the rest of a batch (db.ops.LibPredictions.insert_bulk,
+  matching db.ops.LibActivities.persist_bulk's own fallback pattern).
 
   A prediction still open when the DB is queried directly (e.g. for
   analysis) may show candles_checked at whatever it was on its last flush,
@@ -100,11 +100,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy.exc import IntegrityError
-
 from activity_engine import ActivityEngine, FORMATION_LEVEL_FUNCS
 from brokers.models import Candle
-from db.models import CandleToday, EngineSetting, PatternPrediction, SubscribedSymbol
+from db.models import PatternPrediction
+from db.ops import LibCandles, LibPredictions, LibSettings, LibSymbols
 from db.session import session_scope
 
 logger = logging.getLogger(__name__)
@@ -157,12 +156,7 @@ _GRAPH_FORMATIONS = set(FORMATION_LEVEL_FUNCS.keys())
 
 def load_prediction_settings(session_factory) -> Dict[str, float]:
     with session_scope(session_factory) as session:
-        rows = (
-            session.query(EngineSetting)
-            .filter(EngineSetting.key.in_(list(PREDICTION_SETTING_DEFAULTS.keys())))
-            .all()
-        )
-        return {row.key: float(row.value) for row in rows}
+        return LibSettings.load_by_keys(session, PREDICTION_SETTING_DEFAULTS.keys())
 
 
 def crossover_stop_loss(entry: float, atr: float, direction: str, atr_multiplier: float) -> float:
@@ -241,14 +235,11 @@ class PredictionTracker:
         restart) and self._known_keys with every prediction ever recorded
         for idempotency. Not part of the per-candle hot path."""
         with session_scope(self.session_factory) as session:
-            key_rows = session.query(
-                PatternPrediction.instrument_id, PatternPrediction.timeframe,
-                PatternPrediction.pattern, PatternPrediction.detected_ts,
-            ).all()
+            key_rows = LibPredictions.load_all_keys(session)
             for instrument_id, timeframe, pattern, detected_ts in key_rows:
                 self._known_keys.add((instrument_id, timeframe, pattern, _as_utc(detected_ts)))
 
-            pending_rows = session.query(PatternPrediction).filter_by(outcome=None).all()
+            pending_rows = LibPredictions.load_pending(session)
             for row in pending_rows:
                 key = (row.instrument_id, row.timeframe)
                 self._pending[key].append(_Pending(
@@ -376,17 +367,8 @@ class PredictionTracker:
         window_start = window_end - timedelta(minutes=minutes - 1)
 
         with session_scope(self.session_factory) as session:
-            one_min_candles = (
-                session.query(CandleToday)
-                .filter(
-                    CandleToday.symbol == symbol,
-                    CandleToday.exchange_segment == exchange_segment,
-                    CandleToday.timeframe == "1min",
-                    CandleToday.ts >= window_start,
-                    CandleToday.ts <= window_end,
-                )
-                .order_by(CandleToday.ts)
-                .all()
+            one_min_candles = LibCandles.get_range(
+                session, symbol, exchange_segment, "1min", ts_from=window_start, ts_to=window_end,
             )
             for row in one_min_candles:
                 high, low = float(row.high_price), float(row.low_price)
@@ -454,44 +436,24 @@ class PredictionTracker:
         if not self._unpersisted:
             return 0
         recs, self._unpersisted = self._unpersisted, []
-        try:
-            with session_scope(self.session_factory) as session:
-                rows = [self._to_orm_row(rec) for rec in recs]
-                session.add_all(rows)
-                session.flush()  # assigns .id to every row in one round trip
-                for rec, row in zip(recs, rows):
-                    rec.id = row.id
-        except IntegrityError:
-            # a concurrent writer already recorded one of these — fall back
-            # to the slower one-row-at-a-time path so one conflict doesn't
-            # drop the rest of the batch, matching activity_engine.py's own
-            # _persist_bulk/_persist_one fallback
-            for rec in recs:
-                self._insert_one(rec)
+        rows = [self._to_orm_row(rec) for rec in recs]
+        ids = LibPredictions.insert_bulk(self.session_factory, rows)
+        for rec, new_id in zip(recs, ids):
+            if new_id is not None:
+                rec.id = new_id
         return len(recs)
-
-    def _insert_one(self, rec: _Pending) -> None:
-        try:
-            with session_scope(self.session_factory) as session:
-                row = self._to_orm_row(rec)
-                session.add(row)
-                session.flush()
-                rec.id = row.id
-        except IntegrityError:
-            pass  # already recorded — drop this one, keep the rest working
 
     def _flush_updates(self) -> int:
         if not self._resolved_buffer:
             return 0
         recs, self._resolved_buffer = self._resolved_buffer, []
-        with session_scope(self.session_factory) as session:
-            session.bulk_update_mappings(PatternPrediction, [
-                {
-                    "id": rec.id, "outcome": rec.outcome,
-                    "outcome_ts": rec.outcome_ts, "candles_checked": rec.candles_checked,
-                }
-                for rec in recs
-            ])
+        LibPredictions.update_outcomes_bulk(self.session_factory, [
+            {
+                "id": rec.id, "outcome": rec.outcome,
+                "outcome_ts": rec.outcome_ts, "candles_checked": rec.candles_checked,
+            }
+            for rec in recs
+        ])
         return len(recs)
 
     @staticmethod
@@ -508,13 +470,8 @@ class PredictionTracker:
         if cache_key in self._instrument_ids:
             return self._instrument_ids[cache_key]
         with session_scope(self.session_factory) as session:
-            row = (
-                session.query(SubscribedSymbol)
-                .filter_by(symbol=symbol, exchange_segment=exchange_segment)
-                .one_or_none()
-            )
-            if row is None:
-                return None
-            instrument_id = row.id
+            instrument_id = LibSymbols.get_instrument_id(session, symbol, exchange_segment)
+        if instrument_id is None:
+            return None
         self._instrument_ids[cache_key] = instrument_id
         return instrument_id

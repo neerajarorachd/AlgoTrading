@@ -4,9 +4,9 @@ import logging
 import threading
 from datetime import datetime, time, timezone
 
-from db.models import CandleToday, SubscribedSymbol
+from db.ops.LibCandles import get_last_ts, persist_bulk as persist_candles_bulk
+from db.ops.LibSymbols import get_active
 from db.session import session_scope
-from feed.candle_persistence import persist_candles_bulk
 
 import api.ws_live as ws_live
 
@@ -164,15 +164,9 @@ def _last_known_ts(session_factory, symbol, exchange_segment):
     stored and what gets compared — this table is small, one extra row read
     costs nothing."""
     with session_scope(session_factory) as session:
-        latest = (
-            session.query(CandleToday.ts)
-            .filter_by(symbol=symbol, exchange_segment=exchange_segment, timeframe="1min")
-            .order_by(CandleToday.ts.desc())
-            .first()
-        )
-        if latest is None:
+        ts = get_last_ts(session, symbol, exchange_segment, "1min")
+        if ts is None:
             return None
-        ts = latest[0]
         ts = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
         return ts if ts >= _todays_market_open() else None
 
@@ -226,7 +220,7 @@ def scan_for_gaps(rest_broker, session_factory, aggregator, now: datetime | None
     with session_scope(session_factory) as session:
         targets = [
             (row.symbol, row.exchange_segment, row.security_id)
-            for row in session.query(SubscribedSymbol).filter_by(active=True).all()
+            for row in get_active(session)
         ]
 
     logger.info("Gap scanner: checking %d active symbol(s) for gaps", len(targets))

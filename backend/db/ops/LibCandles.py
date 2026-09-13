@@ -1,12 +1,45 @@
+"""CandleToday reads/writes.
+
+persist_bulk/persist_one absorb what used to be feed/candle_persistence.py
+verbatim (moved, not rewritten) — their docstrings explain the specific
+bulk-optimistic-insert-with-per-row-fallback and single-row-SAVEPOINT-
+upsert shapes, which a generic `(session, ...)` helper can't provide since
+each owns its own transaction/retry boundary.
+"""
 from __future__ import annotations
 
-from typing import List, Tuple
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
 from brokers.models import Candle
 from db.models import CandleToday
 from db.session import session_scope
+
+
+def get_range(
+    session, symbol: str, exchange_segment: str, timeframe: str,
+    ts_from: Optional[datetime] = None, ts_to: Optional[datetime] = None,
+) -> List[CandleToday]:
+    query = session.query(CandleToday).filter_by(
+        symbol=symbol, exchange_segment=exchange_segment, timeframe=timeframe,
+    )
+    if ts_from is not None:
+        query = query.filter(CandleToday.ts >= ts_from)
+    if ts_to is not None:
+        query = query.filter(CandleToday.ts <= ts_to)
+    return query.order_by(CandleToday.ts).all()
+
+
+def get_last_ts(session, symbol: str, exchange_segment: str, timeframe: str) -> Optional[datetime]:
+    row = (
+        session.query(CandleToday.ts)
+        .filter_by(symbol=symbol, exchange_segment=exchange_segment, timeframe=timeframe)
+        .order_by(CandleToday.ts.desc())
+        .first()
+    )
+    return row[0] if row is not None else None
 
 
 def _upsert(session, symbol: str, exchange_segment: str, candle: Candle) -> None:
@@ -29,10 +62,10 @@ def _upsert(session, symbol: str, exchange_segment: str, candle: Candle) -> None
     existing.volume = candle.volume
 
 
-def persist_candles_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
+def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
     """Insert many finalized candles in ONE DB round-trip in the common case.
 
-    persist_candle (below) opens a fresh session per candle and does an
+    persist_one (below) opens a fresh session per candle and does an
     existence-check SELECT before every INSERT/UPDATE — fine for the
     live-tick path (one candle closes per minute at most), but a backfill can
     hand this a few hundred historical candles (1-min plus their 3-/5-min
@@ -51,7 +84,7 @@ def persist_candles_bulk(session_factory, candles: List[Tuple[str, str, Candle]]
     already exist (a live tick got there first, or this exact backfill is
     being re-run) — surfaces as an IntegrityError on the whole flush; only
     then does this fall back to the slower, existence-checked upsert path
-    per candle (reusing persist_candle's own race handling), so a real
+    per candle (reusing persist_one's own race handling), so a real
     conflict still can't lose the rest of the batch.
     """
     if not candles:
@@ -70,10 +103,10 @@ def persist_candles_bulk(session_factory, candles: List[Tuple[str, str, Candle]]
             session.flush()
     except IntegrityError:
         for symbol, exchange_segment, candle in candles:
-            persist_candle(session_factory, symbol, exchange_segment, candle)
+            persist_one(session_factory, symbol, exchange_segment, candle)
 
 
-def persist_candle(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
+def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
     """Upsert a finalized candle into candles_today, keyed by its natural key.
 
     session.merge() only dedupes by primary key, and these rows have no PK set

@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from brokers.models import BrokerAPIError, BrokerConnectionError
-from db.models import SubscribedSymbol
+from db.ops.LibSymbols import get_active
 from db.session import session_scope
 from feed.gap_fill import backfill_then_subscribe, start_gap_scanner
 
@@ -102,7 +102,7 @@ def _hydrate(broker, market_feed, session_factory, aggregator=None) -> None:
     """
     targets = []
     with session_scope(session_factory) as session:
-        rows = session.query(SubscribedSymbol).filter_by(active=True).all()
+        rows = get_active(session)
         for row in rows:
             try:
                 quote = broker.get_quote(row.symbol, row.security_id, row.exchange_segment)

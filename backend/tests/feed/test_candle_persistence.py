@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 
-import feed.candle_persistence as candle_persistence
+import db.ops.LibCandles as candle_persistence
 from brokers.models import Candle
 from db.models import CandleToday
+from db.ops.LibCandles import persist_one as persist_candle, persist_bulk as persist_candles_bulk
 from feed.candle_aggregator import CandleAggregator
-from feed.candle_persistence import persist_candle, persist_candles_bulk
 
 SYMBOL = "RELIANCE"
 SEG = "NSE_EQ"

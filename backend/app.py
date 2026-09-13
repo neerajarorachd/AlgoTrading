@@ -10,9 +10,9 @@ from flask_cors import CORS
 from activity_engine import ActivityEngine, seed_pattern_definitions
 from config import DHAN_TOKEN_TYPE_FEED, DHAN_TOKEN_TYPE_REST, cors_origins, load_dhan_tokens
 from db.models import Base
+from db.ops.LibCandles import persist_one as persist_candle
 from db.session import build_engine, build_session_factory
 from feed.candle_aggregator import CandleAggregator
-from feed.candle_persistence import persist_candle
 from instrument_master import InstrumentMaster
 from market_feed import MarketFeed
 

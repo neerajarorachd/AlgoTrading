@@ -6,6 +6,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 
 from brokers.models import BrokerAPIError, BrokerConnectionError
 from db.models import SubscribedSymbol
+from db.ops import LibSymbols as ops_symbols
 from feed.gap_fill import spawn_backfill_then_subscribe
 
 symbols_bp = Blueprint("symbols", __name__)
@@ -37,12 +38,7 @@ def search_instruments():
 
 @symbols_bp.get("/api/symbols")
 def list_symbols():
-    rows = (
-        g.db_session.query(SubscribedSymbol)
-        .filter_by(active=True)
-        .order_by(SubscribedSymbol.symbol)
-        .all()
-    )
+    rows = ops_symbols.get_active(g.db_session)
     return jsonify([_serialize(row) for row in rows])
 
 
@@ -59,11 +55,7 @@ def add_symbol():
     broker = current_app.extensions["broker"]
     market_feed = current_app.extensions["market_feed"]
 
-    row = (
-        g.db_session.query(SubscribedSymbol)
-        .filter_by(symbol=symbol, exchange=exchange, segment=segment)
-        .one_or_none()
-    )
+    row = ops_symbols.get_by_natural_key(g.db_session, symbol, exchange, segment)
 
     if row is not None and row.active:
         # idempotent: already live, no duplicate subscribe
@@ -89,12 +81,12 @@ def add_symbol():
         row.previous_close = quote.close
         status = 200
     else:
-        row = SubscribedSymbol(
+        row = ops_symbols.create(
+            g.db_session,
             symbol=resolved["symbol"], exchange=exchange, segment=segment,
             exchange_segment=resolved["exchange_segment"], security_id=resolved["security_id"],
             previous_close=quote.close,
         )
-        g.db_session.add(row)
         status = 201
 
     g.db_session.flush()  # populate row.id before it's serialized into the response
@@ -124,7 +116,7 @@ def add_symbol():
 
 @symbols_bp.delete("/api/symbols/<int:symbol_id>")
 def remove_symbol(symbol_id):
-    row = g.db_session.get(SubscribedSymbol, symbol_id)
+    row = ops_symbols.get_by_id(g.db_session, symbol_id)
     if row is None:
         return "", 404
     if not row.active:

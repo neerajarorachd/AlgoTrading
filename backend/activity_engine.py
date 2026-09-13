@@ -28,10 +28,8 @@ from collections import defaultdict, deque
 from datetime import date
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy.exc import IntegrityError
-
 from brokers.models import Candle
-from db.models import EngineSetting, InstrumentActivity, PatternDefinition, SubscribedSymbol
+from db.ops import LibActivities, LibSettings, LibSymbols
 from db.session import session_scope
 from indicators import (
     TREND_LOOKBACK,
@@ -1159,17 +1157,8 @@ def seed_pattern_definitions(session_factory) -> None:
     """Idempotent upsert of PATTERN_CATALOG into pattern_definitions — call
     once at app startup. Safe to call every time (existing rows are just
     updated in place, matching the same upsert style used elsewhere in this
-    codebase, e.g. feed/candle_persistence.py)."""
-    with session_scope(session_factory) as session:
-        for code, kind, description in PATTERN_CATALOG:
-            row = session.query(PatternDefinition).filter_by(code=code).one_or_none()
-            if row is None:
-                row = PatternDefinition(code=code, kind=kind, description=description)
-                session.add(row)
-            else:
-                row.kind = kind
-                row.description = description
-                row.active = True
+    codebase, e.g. db/ops/LibCandles.py)."""
+    LibActivities.seed_pattern_definitions(session_factory, PATTERN_CATALOG)
 
 
 # Keys read from engine_settings, alongside the module-constant default
@@ -1192,8 +1181,7 @@ def load_engine_settings(session_factory) -> Dict[str, float]:
     get an actual value, so the table can be completely empty and nothing
     behaves any differently than before this existed."""
     with session_scope(session_factory) as session:
-        rows = session.query(EngineSetting).all()
-        return {row.key: float(row.value) for row in rows}
+        return LibSettings.load_all(session)
 
 
 # --------------------------------------------------------------------- engine
@@ -1300,7 +1288,7 @@ class ActivityEngine:
         if not self._buffer:
             return 0
         rows, self._buffer = self._buffer, []
-        self._persist_bulk(rows)
+        LibActivities.persist_bulk(self.session_factory, rows)
         return len(rows)
 
     def on_candle_closed(self, symbol: str, exchange_segment: str, candle: Candle) -> List[dict]:
@@ -1637,47 +1625,8 @@ class ActivityEngine:
         if cache_key in self._instrument_ids:
             return self._instrument_ids[cache_key]
         with session_scope(self.session_factory) as session:
-            row = (
-                session.query(SubscribedSymbol)
-                .filter_by(symbol=symbol, exchange_segment=exchange_segment)
-                .one_or_none()
-            )
-            if row is None:
-                return None
-            instrument_id = row.id  # read while still attached — session_scope closes on exit
+            instrument_id = LibSymbols.get_instrument_id(session, symbol, exchange_segment)
+        if instrument_id is None:
+            return None
         self._instrument_ids[cache_key] = instrument_id
         return instrument_id
-
-    def _persist_bulk(self, rows: List[dict]) -> None:
-        """Optimistic bulk insert — the common case (a fresh flush of newly
-        detected activities) really is "all new rows," so skip the
-        per-row existence check entirely and add everything in one flush.
-        Same pattern as feed/candle_persistence.py's persist_candles_bulk,
-        for the same reason: hundreds of individual SELECT-then-INSERT
-        round trips was the actual cost there, not the write itself."""
-        try:
-            with session_scope(self.session_factory) as session:
-                session.add_all([InstrumentActivity(**row) for row in rows])
-                session.flush()
-        except IntegrityError:
-            # a concurrent writer (e.g. a backfill re-run touching the same
-            # candles) already recorded one of these exact activities —
-            # fall back to the slower existence-checked path per row so
-            # that one conflict doesn't lose the rest of the flush
-            for row in rows:
-                self._persist_one(row)
-
-    def _persist_one(self, row: dict) -> None:
-        with self.session_factory() as session:
-            try:
-                with session.begin_nested():
-                    exists = session.query(InstrumentActivity).filter_by(
-                        instrument_id=row["instrument_id"], timeframe=row["timeframe"],
-                        ts=row["ts"], activity=row["activity"],
-                    ).one_or_none()
-                    if exists is None:
-                        session.add(InstrumentActivity(**row))
-                    session.flush()
-                session.commit()
-            except IntegrityError:
-                session.rollback()

@@ -19,15 +19,6 @@ def load_dhan_tokens(session) -> Dict[int, str]:
     for whichever of DHAN_TOKEN_TYPE_FEED/_REST are present — callers must handle
     a missing key (e.g. before the first mirror/backfill has run) themselves.
     """
-    from db.models import BrokerToken
+    from db.ops import LibBrokerTokens
 
-    rows = (
-        session.query(BrokerToken)
-        .filter(
-            BrokerToken.AccountID == DHAN_ACCOUNT_ID,
-            BrokerToken.TokenType.in_([DHAN_TOKEN_TYPE_FEED, DHAN_TOKEN_TYPE_REST]),
-            BrokerToken.IsActive == True,  # noqa: E712 - SQLAlchemy filter, not a Python bool check
-        )
-        .all()
-    )
-    return {row.TokenType: row.AccessToken for row in rows}
+    return LibBrokerTokens.load_active_tokens(session, DHAN_ACCOUNT_ID, [DHAN_TOKEN_TYPE_FEED, DHAN_TOKEN_TYPE_REST])
