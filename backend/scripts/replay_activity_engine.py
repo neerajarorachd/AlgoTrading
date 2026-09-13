@@ -81,6 +81,12 @@ def main() -> None:
     flushed = activity_engine.flush()  # one bulk write for the whole run, not one per detection
     print(f"\nflushed {flushed} buffered activities to instrument_activity in one write")
 
+    # PredictionTracker auto-flushes roughly once a minute of wall-clock
+    # time during the loop above — this catches whatever's left buffered
+    # since its last automatic flush.
+    inserted, updated = prediction_tracker.flush()
+    print(f"flushed {inserted} new / {updated} resolved predictions to pattern_predictions")
+
     with session_factory() as session:
         rows = (
             session.query(InstrumentActivity)
