@@ -131,14 +131,18 @@ PREDICTION_SETTING_DEFAULTS: Dict[str, float] = {
 
 # Which fired activities open a prediction, and which direction they imply.
 # A flat lookup table here (not inside activity_engine.py) so adding or
-# removing a tracked pattern never touches detection code.
-_BULLISH_PATTERNS = {
+# removing a tracked pattern never touches detection code. Public (no
+# leading underscore) since pattern_outcome_analysis.py also reads these
+# to label its own (neutral, not-tied-to-a-prediction) outcome rows with a
+# direction — the classification itself belongs here either way, not
+# duplicated a third time.
+BULLISH_PATTERNS = {
     "rsi_cross_above_60", "macd_bullish_cross", "ma_golden_cross",
     "stoch_bullish_cross", "double_bottom", "triple_bottom",
     "bullish_structure_shift", "bullish_break_of_structure",
     "ascending_triangle", "falling_wedge",
 }
-_BEARISH_PATTERNS = {
+BEARISH_PATTERNS = {
     "rsi_cross_below_40", "macd_bearish_cross", "ma_death_cross",
     "stoch_bearish_cross", "double_top", "triple_top",
     "bearish_structure_shift", "bearish_break_of_structure",
@@ -257,9 +261,9 @@ class PredictionTracker:
         opened = 0
         for activity in activities:
             pattern = activity["activity"]
-            if pattern in _BULLISH_PATTERNS:
+            if pattern in BULLISH_PATTERNS:
                 direction = "bull"
-            elif pattern in _BEARISH_PATTERNS:
+            elif pattern in BEARISH_PATTERNS:
                 direction = "bear"
             else:
                 continue  # not a tracked pattern (candle_pattern, price_action, swing_high/low, ...)

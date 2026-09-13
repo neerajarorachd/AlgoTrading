@@ -94,10 +94,11 @@ class InstrumentActivity(Base):
     `ts`. Both exist so a pattern's geometry can be reviewed or re-scored
     later without re-reading candles_today. This is deliberately NOT yet
     the full picture: a second table (not built yet) will link here to
-    record volume/RSI/MACD/stochastic at formation time, and a backtesting
-    pass (not built yet) will record what each pattern's outcome actually
-    was over the following N candles — thresholds here are a starting
-    point pending calibration against that, not a final answer.
+    record volume/RSI/MACD/stochastic at formation time. PatternOutcome
+    (this same file, written by backend/pattern_outcome_analysis.py) now
+    records what each pattern's outcome actually was over the following N
+    candles — thresholds here are a starting point pending calibration
+    against that, not a final answer.
     """
 
     __tablename__ = "instrument_activity"
@@ -224,6 +225,60 @@ class PatternPrediction(Base):
         Index("ix_pattern_predictions_pending", "instrument_id", "timeframe", "outcome"),
         UniqueConstraint(
             "instrument_id", "timeframe", "pattern", "detected_ts", name="uq_pattern_prediction",
+        ),
+    )
+
+
+class PatternOutcome(Base):
+    """Neutral, un-opinionated record of what actually happened to price in
+    the candles after a pattern fired — independent of any predicted stop-
+    loss/target (that's PatternPrediction's job, backend/prediction_tracker.py).
+    Built to answer exactly "what happens after a pattern occurred" — the
+    first deliverable toward the Strategy/backtesting system, per project
+    guidance: "Freehand backtesting"/pattern-outcome analysis comes before
+    Strategies, which come before the full backtesting engine.
+
+    One row per (instrument_id, timeframe, pattern, detected_ts) — same
+    idempotency convention as InstrumentActivity/PatternPrediction, so
+    re-running the analysis over the same historical data never duplicates
+    a row.
+
+    pct_change_N is the % price change from entry_price to the close N
+    candles later; nullable when fewer than N candles remained in the
+    day's data at detection time (e.g. a pattern firing in the last few
+    minutes before close). max_favorable_pct/max_adverse_pct are measured
+    over whichever window was actually available (window_candles records
+    how many candles that was) — the best/worst price seen relative to
+    entry, regardless of the pattern's own assumed direction; a caller
+    that cares about direction reads it off the `direction` column
+    (nullable — not every pattern has one, e.g. rectangle/doji) and
+    interprets favorable/adverse accordingly itself, rather than this
+    table baking in an assumption.
+    """
+
+    __tablename__ = "pattern_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    pattern: Mapped[str] = mapped_column(String(64), nullable=False)
+    activity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    direction: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)  # "bull" | "bear" | None
+    detected_ts: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    entry_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    pct_change_5: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    pct_change_10: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    pct_change_15: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    pct_change_20: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    max_favorable_pct: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    max_adverse_pct: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    window_candles: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_pattern_outcomes_instrument_pattern", "instrument_id", "pattern"),
+        UniqueConstraint(
+            "instrument_id", "timeframe", "pattern", "detected_ts", name="uq_pattern_outcome",
         ),
     )
 

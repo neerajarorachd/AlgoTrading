@@ -9,6 +9,15 @@ from db.models import InstrumentActivity, PatternDefinition
 from db.session import session_scope
 
 
+def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[InstrumentActivity]:
+    return (
+        session.query(InstrumentActivity)
+        .filter_by(instrument_id=instrument_id, timeframe=timeframe)
+        .order_by(InstrumentActivity.ts)
+        .all()
+    )
+
+
 def seed_pattern_definitions(session_factory, catalog: Sequence[Tuple[str, str, str]]) -> None:
     """Idempotent upsert of a (code, kind, description) catalog into
     pattern_definitions — call once at app startup. Safe to call every

@@ -17,9 +17,12 @@ own request-scoped `g.db_session`, everything else opens `session_scope`
 around the call — this module only knows how to read/write once handed a
 session, never how to obtain one.
 """
-from . import LibActivities, LibBrokerTokens, LibCandles, LibPredictions, LibSettings, LibSymbols
+from . import (
+    LibActivities, LibBrokerTokens, LibCandles,
+    LibPatternOutcomes, LibPredictions, LibSettings, LibSymbols,
+)
 
 __all__ = [
     "LibActivities", "LibBrokerTokens", "LibCandles",
-    "LibPredictions", "LibSettings", "LibSymbols",
+    "LibPatternOutcomes", "LibPredictions", "LibSettings", "LibSymbols",
 ]
