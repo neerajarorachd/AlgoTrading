@@ -18,11 +18,11 @@ around the call — this module only knows how to read/write once handed a
 session, never how to obtain one.
 """
 from . import (
-    LibActivities, LibBrokerTokens, LibCandles,
+    LibActivities, LibBrokerTokens, LibCandleIndicators, LibCandles,
     LibPatternOutcomes, LibPredictions, LibSettings, LibSymbols,
 )
 
 __all__ = [
-    "LibActivities", "LibBrokerTokens", "LibCandles",
+    "LibActivities", "LibBrokerTokens", "LibCandleIndicators", "LibCandles",
     "LibPatternOutcomes", "LibPredictions", "LibSettings", "LibSymbols",
 ]

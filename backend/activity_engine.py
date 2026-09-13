@@ -29,7 +29,7 @@ from datetime import date
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from brokers.models import Candle
-from db.ops import LibActivities, LibSettings, LibSymbols
+from db.ops import LibActivities, LibCandleIndicators, LibSettings, LibSymbols
 from db.session import session_scope
 from indicators import (
     TREND_LOOKBACK,
@@ -1216,6 +1216,11 @@ class ActivityEngine:
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
         self._buffer: List[dict] = []
+        # per-candle indicator-value snapshots (RSI/MACD/Stochastic/VWAP/
+        # MA/ATR/Bollinger Bands) — the "walkthrough engine" groundwork,
+        # appended unconditionally every candle (not just on a pattern
+        # fire), flushed to candle_indicators alongside self._buffer
+        self._indicator_buffer: List[dict] = []
         # price-action state, one series per (symbol, exchange_segment, timeframe).
         # _closes holds _MA_LONG_PERIOD candles (the longest window any
         # indicator here needs) — BB(20) reads only the tail slice it needs.
@@ -1282,9 +1287,16 @@ class ActivityEngine:
         return df
 
     def flush(self) -> int:
-        """Write every buffered activity to instrument_activity in as few
-        DB round-trips as possible, then clear the buffer. Returns the
-        number of activities flushed."""
+        """Write every buffered activity to instrument_activity, and every
+        buffered indicator snapshot to candle_indicators, in as few DB
+        round-trips as possible, then clear both buffers. Returns the
+        number of activities flushed (candle_indicators rows flush
+        alongside but aren't counted here — same convention as
+        PredictionTracker.flush() returning only its own primary count)."""
+        if self._indicator_buffer:
+            indicator_rows, self._indicator_buffer = self._indicator_buffer, []
+            LibCandleIndicators.persist_bulk(self.session_factory, indicator_rows)
+
         if not self._buffer:
             return 0
         rows, self._buffer = self._buffer, []
@@ -1363,6 +1375,12 @@ class ActivityEngine:
                 except Exception:
                     logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
 
+        # Every one of these stays None if its own warm-up period hasn't
+        # elapsed yet, or if its try block below raises — guaranteed
+        # defined either way by the time the indicator snapshot is built
+        # further down, right before the `if not found` early return.
+        rsi = macd_line = macd_signal = stoch_k = stoch_d = atr = ma21 = ma50 = None
+
         try:
             rsi = update_rsi(self._rsi_state[key], candle.close)
             if rsi is not None:
@@ -1422,6 +1440,27 @@ class ActivityEngine:
                 if crossed_below(prev_ma21, prev_ma50, ma21, ma50):
                     found.append(("indicator", "ma_death_cross", cross_intensity(prev_ma21, prev_ma50, ma21, ma50)))
             self._prev_ma[key] = (ma21, ma50)
+
+        # Snapshot every one of this candle's indicator values,
+        # unconditionally — not just when a crossover/pattern fires. This
+        # is the "walkthrough engine" groundwork: Strategies need real
+        # numeric values (RSI >= 40, MA21 > VWAP) to evaluate against,
+        # which the detectors above already computed and would otherwise
+        # discard. Buffered the same way self._buffer is, flushed
+        # together in flush() below.
+        try:
+            snapshot_instrument_id = self._lookup_instrument_id(symbol, exchange_segment)
+            if snapshot_instrument_id is not None:
+                self._indicator_buffer.append({
+                    "instrument_id": snapshot_instrument_id, "timeframe": candle.timeframe, "ts": candle.timestamp,
+                    "rsi": rsi, "macd_line": macd_line, "macd_signal": macd_signal,
+                    "stoch_k": stoch_k, "stoch_d": stoch_d, "vwap": vwap, "ma21": ma21, "ma50": ma50, "atr": atr,
+                    "bb_upper": bb.upper if bb else None,
+                    "bb_middle": bb.middle if bb else None,
+                    "bb_lower": bb.lower if bb else None,
+                })
+        except Exception:
+            logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)
 
         try:
             window = self._swing_window[key]

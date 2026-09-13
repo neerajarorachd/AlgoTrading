@@ -75,7 +75,7 @@ from activity_engine import (
     vwap_gap_fill_intensity,
 )
 from brokers.models import Candle
-from db.models import EngineSetting, InstrumentActivity, PatternDefinition, SubscribedSymbol
+from db.models import CandleIndicators, EngineSetting, InstrumentActivity, PatternDefinition, SubscribedSymbol
 from indicators import (
     AtrState,
     MacdState,
@@ -1644,3 +1644,74 @@ def test_engine_uses_a_calibrated_swing_lookback_override(session_factory):
     with session_factory() as session:
         activities = {row.activity for row in session.query(InstrumentActivity).all()}
     assert "swing_high" in activities
+
+
+# --------------------------------------------------------------------- indicator snapshot (candle_indicators)
+
+def test_engine_buffers_an_indicator_snapshot_every_candle_unconditionally(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    candles = [_candle(i, open=100.0, high=100.5, low=99.5, close=100.0) for i in range(5)]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+
+    # buffered every candle, even though none of these plain flat candles
+    # fire a single pattern/crossover
+    assert len(engine._indicator_buffer) == 5
+
+
+def test_engine_skips_the_indicator_snapshot_when_symbol_is_not_registered(session_factory):
+    engine = ActivityEngine(session_factory)
+    engine.on_candle_closed(SYMBOL, SEG, _candle(0, open=100.0, high=100.5, low=99.5, close=100.0))
+    assert engine._indicator_buffer == []
+
+
+def test_engine_flushes_indicator_snapshots_with_values_matching_independent_computation(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # a gentle ramp, long enough for RSI(14)/MACD/ATR to leave their warm-up
+    closes = [100.0 + i * 0.1 for i in range(20)]
+    candles = [
+        _candle(i, open=c - 0.05, high=c + 0.2, low=c - 0.2, close=c)
+        for i, c in enumerate(closes)
+    ]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+    engine.flush()
+
+    with session_factory() as session:
+        instrument_id = session.query(SubscribedSymbol).filter_by(symbol=SYMBOL).one().id
+        rows = (
+            session.query(CandleIndicators)
+            .filter_by(instrument_id=instrument_id, timeframe="1min")
+            .order_by(CandleIndicators.ts)
+            .all()
+        )
+    assert len(rows) == 20
+    last = rows[-1]
+    assert last.rsi is not None
+    assert last.atr is not None
+
+    # independently recompute RSI/ATR over the exact same candle sequence
+    # via indicators.py's own pure functions — the persisted value must
+    # match a fresh computation of the same formula, not just be "a number"
+    rsi_state = RsiState()
+    atr_state = AtrState()
+    expected_rsi = expected_atr = None
+    for c in candles:
+        expected_rsi = update_rsi(rsi_state, c.close)
+        expected_atr = update_atr(atr_state, c.high, c.low, c.close)
+    assert float(last.rsi) == pytest.approx(expected_rsi)
+    assert float(last.atr) == pytest.approx(expected_atr)

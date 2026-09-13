@@ -66,6 +66,59 @@ class CandleToday(Base):
     )
 
 
+class CandleIndicators(Base):
+    """One row of computed indicator VALUES per candle — RSI/MACD/
+    Stochastic/VWAP/MA21/MA50/ATR/Bollinger Bands — the "walkthrough
+    engine" snapshot flagged as prerequisite infrastructure earlier in
+    this project (see memory: walkthrough_configurable_mode). Needed so
+    Strategies (backend/db/ops/LibStrategies.py) can eventually evaluate
+    numeric-value conditions (RSI >= 40, MA21 > VWAP) against real
+    per-candle data, for both backtesting and live trading.
+
+    activity_engine.py's ActivityEngine already computes every one of
+    these values transiently inside on_candle_closed (to check its own
+    crossover detectors) and previously discarded them — this table
+    persists the exact same values instead, so a strategy condition and
+    a pattern detector are guaranteed to agree on what RSI/MACD/etc. was
+    at a given candle, never two independently-recomputed numbers that
+    could drift apart.
+
+    One row per (instrument_id, timeframe, ts) — mirrors CandleToday's
+    own keying, but by instrument_id (matching InstrumentActivity/
+    PatternPrediction/PatternOutcome) rather than by symbol, since this
+    is engine-detection state, not raw market data. Nullable columns are
+    exactly the ones with a warm-up period before they're defined
+    (RSI/MACD/ATR need more closes than their period, Stochastic needs
+    its own lookback, MA50 needs 50 closes) — same "None until ready"
+    convention indicators.py's own update_rsi/update_macd/etc. already
+    use.
+    """
+
+    __tablename__ = "candle_indicators"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    rsi: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    macd_line: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    macd_signal: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    stoch_k: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    stoch_d: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    vwap: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    ma21: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    ma50: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    atr: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    bb_upper: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    bb_middle: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    bb_lower: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "timeframe", "ts", name="uq_candle_indicators"),
+        Index("ix_candle_indicators_instrument_ts", "instrument_id", "ts"),
+    )
+
+
 class InstrumentActivity(Base):
     """One detected candlestick/indicator event for one instrument.
 
@@ -321,3 +374,119 @@ class BrokerToken(Base):
     CreatedAt: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
     UpdatedAt: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
     LastRefreshedAt: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class StrategyElement(Base):
+    """Catalog of everything a Strategy condition can reference — the
+    building-block vocabulary for StrategyCondition below.
+
+    An "event" element is a boolean — did this fire on this candle or
+    not (a candle pattern, indicator crossover, structure signal, or
+    graph formation; `code` matches PatternDefinition.code exactly, this
+    catalog is seeded from the same PATTERN_CATALOG, not a separate
+    list) — a condition referencing one needs no operator/value.
+
+    A "numeric" element reads a value (RSI, MACD line, VWAP, MA21,
+    close, ...) from `source` (candle_indicators or candles_today) and
+    supports comparison operators against either a static value/range or
+    another numeric element.
+    """
+
+    __tablename__ = "strategy_elements"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    element_type: Mapped[str] = mapped_column(String(16), nullable=False)  # "event" | "numeric"
+    source: Mapped[str] = mapped_column(String(32), nullable=False)  # "instrument_activity" | "candle_indicators" | "candle"
+    description: Mapped[str] = mapped_column(String(256), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class Strategy(Base):
+    """Top-level metadata for one strategy. The condition tree itself
+    lives in StrategyConditionGroup/StrategyCondition below, keyed by
+    strategy_id — a strategy's root group is simply the
+    StrategyConditionGroup row for this strategy_id with
+    parent_group_id IS NULL (no root_group_id column here; storing one
+    would need a circular-reference two-step insert for no real benefit).
+
+    parent_id supports duplication/versioning ("strategy Parent id
+    (duplicate)") — a strategy created by copying another points back at
+    it; self-referential, no enforced FK (matches this codebase's existing
+    convention of plain int "FK-like" columns, e.g. InstrumentActivity's
+    own instrument_id).
+
+    This table only stores a strategy's DEFINITION — evaluating one
+    against real data (backtesting or live trading) is a separate,
+    not-yet-built engine; see backend/db/ops/LibStrategies.py's own
+    module docstring.
+    """
+
+    __tablename__ = "strategies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    family: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    parent_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class StrategyConditionGroup(Base):
+    """One node in a strategy's condition tree. `operator` ("AND" | "OR")
+    combines this group's own direct children — both sub-groups (other
+    StrategyConditionGroup rows with parent_group_id pointing here) and
+    leaf conditions (StrategyCondition rows with group_id pointing here).
+    Arbitrary nesting depth. `parent_group_id` is null only for a
+    strategy's root group (see Strategy's own docstring)."""
+
+    __tablename__ = "strategy_condition_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_group_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    operator: Mapped[str] = mapped_column(String(4), nullable=False)  # "AND" | "OR"
+
+    __table_args__ = (
+        Index("ix_strategy_condition_groups_strategy", "strategy_id"),
+        Index("ix_strategy_condition_groups_parent", "parent_group_id"),
+    )
+
+
+class StrategyCondition(Base):
+    """One atomic check (leaf) inside a StrategyConditionGroup.
+
+    Two shapes, distinguished by the referenced StrategyElement's own
+    element_type:
+      - EVENT check: element_code names an "event" element (e.g. "doji",
+        "double_top") — fired or not; operator/compare_type/values are
+        all null.
+      - NUMERIC check: element_code names a "numeric" element (e.g.
+        "rsi", "ma21"). `operator` is one of >, >=, <, <=, ==, !=. The
+        right-hand side is EITHER another element (compare_type=
+        "element", compared_element_code set — e.g. "MA21 > VWAP") OR a
+        static value (compare_type="static", static_value set) OR a
+        static RANGE for backtesting parameter sweeps (compare_type=
+        "static", static_value_min/max/step set instead of static_value
+        — e.g. "RSI (40-60, interval 5)"). Exactly one of static_value or
+        the min/max/step triple is ever set, never both.
+    """
+
+    __tablename__ = "strategy_conditions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    element_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    compare_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # "static" | "element" | None
+    compared_element_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    static_value: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    static_value_min: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    static_value_max: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    static_value_step: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+
+    __table_args__ = (
+        Index("ix_strategy_conditions_group", "group_id"),
+    )
