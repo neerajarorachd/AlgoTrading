@@ -100,6 +100,8 @@ class FakeBroker:
         self.unsubscribed_calls = []
         self.callback = None
         self.quotes = {}  # security_id -> Quote, populate per-test as needed
+        self.historical_candles = []  # populate per-test; returned by every get_historical_data call
+        self.historical_calls = []
 
     def connect(self):
         self.connected = True
@@ -123,6 +125,10 @@ class FakeBroker:
             symbol=symbol, ltp=100.0, open=99.0, high=101.0, low=98.0, close=97.5,
             volume=0, timestamp=datetime.now(timezone.utc),
         )
+
+    def get_historical_data(self, symbol, security_id, exchange_segment, timeframe, from_date, to_date):
+        self.historical_calls.append((symbol, security_id, exchange_segment, timeframe, from_date, to_date))
+        return self.historical_candles
 
 
 class FakeInstrumentMaster:
@@ -171,6 +177,12 @@ def app(db_engine, session_factory, fake_broker, monkeypatch):
     # own g.db_session (which is what actually fixed the original "cannot
     # start a transaction within a transaction" error — not the threading).
     monkeypatch.setattr("api.routes_symbols.spawn_backfill_then_subscribe", backfill_then_subscribe)
+    # Same fix, same reason, for routes_watchlists.py's own separately-imported
+    # reference (added 2026-09-16 for POST /api/watchlists/<id>/subscribe) —
+    # each module's `from feed.gap_fill import spawn_backfill_then_subscribe`
+    # binds its own local name, so patching routes_symbols's alone doesn't
+    # cover this one too.
+    monkeypatch.setattr("api.routes_watchlists.spawn_backfill_then_subscribe", backfill_then_subscribe)
 
     # _hydrate/_backfill_and_subscribe_all never actually run in any test
     # using this fixture (testing=True skips start_feed entirely in

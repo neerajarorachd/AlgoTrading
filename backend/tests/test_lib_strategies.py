@@ -18,6 +18,7 @@ def _condition(element_code, **overrides):
         "element_code": element_code, "operator": None, "compare_type": None,
         "compared_element_code": None, "static_value": None,
         "static_value_min": None, "static_value_max": None, "static_value_step": None,
+        "left_formula": None, "right_formula": None,
     }
     base.update(overrides)
     return base

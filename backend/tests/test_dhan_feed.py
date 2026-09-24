@@ -16,10 +16,12 @@ def test_decode_dhan_binary_ticker_packet():
     # relative to the Python float64 literal above (2854.64990234375 != 2854.65) —
     # this is expected float32 rounding, not a decode bug.
     assert tick["LTP"] == pytest.approx(2854.65, abs=1e-3)
-    # epoch 1789028162 -> 2026-09-10T08:16:02Z (verified via datetime.fromtimestamp);
-    # the original "09:36:02Z" here was a stale hand-computed value that was never
-    # actually exercised, since the LTP assertion above used to fail first every time.
-    assert tick["timestamp"] == "2026-09-10T08:16:02Z"
+    # epoch 1789028162 -> 2026-09-10T08:16:02Z via a plain fromtimestamp, but Dhan's
+    # live WS epoch field turned out to actually be "the true instant, computed as
+    # if IST were UTC" (found 2026-09-17 by cross-checking against the REST
+    # historical endpoint's own, independently-correct timestamp decode — see
+    # _base_tick's docstring) — the real, correct instant is 5:30 earlier.
+    assert tick["timestamp"] == "2026-09-10T02:46:02Z"
 
 
 def test_decode_dhan_json_message_for_existing_feed_tests():

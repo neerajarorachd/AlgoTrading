@@ -37,6 +37,10 @@ from activity_engine import (
     detect_tweezer_bottom,
     detect_tweezer_top,
     detect_vwap_gap_fill,
+    detect_vwap_rejection_bear,
+    detect_vwap_rejection_bull,
+    vwap_rejection_bear_intensity,
+    vwap_rejection_bull_intensity,
     bearish_structure_shift_intensity,
     bullish_structure_shift_intensity,
     bearish_break_of_structure_intensity,
@@ -816,6 +820,103 @@ def test_detect_vwap_gap_fill_false_when_not_enough_steps_narrow():
 
 def test_vwap_divergence_and_gap_fill_intensity():
     assert vwap_divergence_intensity(_widening_gaps(19)) > 1.0
+
+
+# --------------------------------------------------------------------- vwap_rejection_bear/bull
+# 2026-09-15, explicit HINDCOPPER strategy request: "if below vwap, if 2
+# continuous bearish candles, both's high are below vwap, sell ... and
+# mirror for buy."
+
+def test_detect_vwap_rejection_bear_true_when_both_highs_below_vwap():
+    vwap = 100.0
+    candles = [
+        _candle(1, open=99, high=99.5, low=98, close=98.5),  # bearish, high < vwap
+        _candle(2, open=98.4, high=99.0, low=97.5, close=97.8),  # bearish, high < vwap
+    ]
+    assert detect_vwap_rejection_bear(candles, vwap) is True
+    assert detect_vwap_rejection_bull(candles, vwap) is False
+
+
+def test_detect_vwap_rejection_bear_false_if_either_high_touches_vwap():
+    vwap = 100.0
+    candles = [
+        _candle(1, open=99, high=100.5, low=98, close=98.5),  # high >= vwap -> no rejection
+        _candle(2, open=98.4, high=99.0, low=97.5, close=97.8),
+    ]
+    assert detect_vwap_rejection_bear(candles, vwap) is False
+
+
+def test_detect_vwap_rejection_bear_false_if_either_candle_is_bullish():
+    vwap = 100.0
+    candles = [
+        _candle(1, open=98, high=99.5, low=97.5, close=99.2),  # bullish (close > open)
+        _candle(2, open=98.4, high=99.0, low=97.5, close=97.8),  # bearish
+    ]
+    assert detect_vwap_rejection_bear(candles, vwap) is False
+
+
+def test_detect_vwap_rejection_bear_false_with_fewer_than_two_candles():
+    assert detect_vwap_rejection_bear([_candle(1, 99, 99.5, 98, 98.5)], 100.0) is False
+
+
+def test_detect_vwap_rejection_bull_true_when_both_lows_above_vwap_mirror():
+    vwap = 100.0
+    candles = [
+        _candle(1, open=100.5, high=101.5, low=100.2, close=101.2),  # bullish, low > vwap
+        _candle(2, open=101.3, high=102.0, low=101.0, close=101.8),  # bullish, low > vwap
+    ]
+    assert detect_vwap_rejection_bull(candles, vwap) is True
+    assert detect_vwap_rejection_bear(candles, vwap) is False
+
+
+def test_detect_vwap_rejection_bear_min_gap_pct_excludes_marginal_touches():
+    """2026-09-15 fix: the plain (min_gap_pct=0.0) detector fires on ANY
+    nonzero gap, including a candle whose high sits a hair below vwap —
+    "it shows there is some issue in your entry trade... try with
+    completely away candles." min_gap_pct requires a real, meaningful
+    distance instead."""
+    vwap = 100.0
+    marginal_candles = [
+        _candle(1, open=99.99, high=99.98, low=99.5, close=99.7),  # bearish, high just under vwap
+        _candle(2, open=99.6, high=99.95, low=99.3, close=99.4),  # bearish, high just under vwap
+    ]
+    assert detect_vwap_rejection_bear(marginal_candles, vwap) is True  # plain: any gap counts
+    assert detect_vwap_rejection_bear(marginal_candles, vwap, min_gap_pct=0.005) is False  # strong: not far enough
+
+    clearly_away_candles = [
+        _candle(1, open=99, high=99.0, low=97.5, close=97.8),  # gap = 1.0%
+        _candle(2, open=97.7, high=98.5, low=96.5, close=96.8),  # gap = 1.5%
+    ]
+    assert detect_vwap_rejection_bear(clearly_away_candles, vwap, min_gap_pct=0.005) is True
+
+
+def test_detect_vwap_rejection_bull_min_gap_pct_excludes_marginal_touches():
+    vwap = 100.0
+    marginal_candles = [
+        _candle(1, open=100.02, high=100.5, low=100.01, close=100.3),  # bullish, low just above vwap
+        _candle(2, open=100.3, high=100.6, low=100.05, close=100.4),
+    ]
+    assert detect_vwap_rejection_bull(marginal_candles, vwap) is True
+    assert detect_vwap_rejection_bull(marginal_candles, vwap, min_gap_pct=0.005) is False
+
+    clearly_away_candles = [
+        _candle(1, open=101, high=102.0, low=101.0, close=101.8),  # gap = 1.0%
+        _candle(2, open=101.9, high=103.0, low=101.5, close=102.5),  # gap = 1.5%
+    ]
+    assert detect_vwap_rejection_bull(clearly_away_candles, vwap, min_gap_pct=0.005) is True
+
+
+def test_vwap_rejection_intensity_grows_with_distance_from_vwap():
+    vwap = 100.0
+    close_candles = [
+        _candle(1, open=99, high=99.9, low=98, close=98.5),
+        _candle(2, open=98.4, high=99.8, low=97.5, close=97.8),
+    ]
+    far_candles = [
+        _candle(1, open=95, high=96.0, low=94, close=94.5),
+        _candle(2, open=94.4, high=95.0, low=93.5, close=93.8),
+    ]
+    assert vwap_rejection_bear_intensity(far_candles, vwap) > vwap_rejection_bear_intensity(close_candles, vwap)
     assert vwap_gap_fill_intensity(_narrowing_gaps(19)) > 1.0
 
 
@@ -955,6 +1056,21 @@ def test_cross_intensity_is_the_step_change_in_spread():
 
 
 # --------------------------------------------------------------------- engine persistence
+
+def test_recent_rows_expose_todays_candles_and_indicators_before_any_flush(session_factory):
+    """The live recommendation rule gate reads these, because today's
+    indicator rows reach the DB only on the scheduled flush."""
+    engine = ActivityEngine(session_factory)
+    for minute in range(4):
+        engine.on_candle_closed(SYMBOL, SEG, _candle(minute, open=100.0, high=101.0, low=99.0, close=100.5))
+
+    rows = engine.recent_rows(SYMBOL, SEG, "1min", 3)
+    assert len(rows) == 3
+    assert [r["ts"] for r in rows] == sorted(r["ts"] for r in rows)  # oldest first
+    assert rows[-1]["close"] == 100.5 and "vwap" in rows[-1] and "rsi" in rows[-1]
+    assert engine.recent_rows(SYMBOL, SEG, "5min", 3) == []  # other timeframe: nothing
+    assert engine.recent_rows("NOPE", SEG, "1min", 3) == []
+
 
 def test_engine_persists_a_detected_pattern(session_factory):
     with session_factory() as session:
@@ -1206,6 +1322,91 @@ def test_engine_detects_double_top_through_on_candle_closed(session_factory):
     assert "swing_high" in activities
     assert "swing_low" in activities
     assert "double_top" in activities
+
+
+def test_ed_watch_starts_after_first_top_and_neckline_confirm(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # same zigzag shape as test_engine_detects_double_top_through_on_candle_closed,
+    # truncated right after the neckline (valley) swing low confirms -- by
+    # then, the (first top, neckline) pair should already be armed as a
+    # double_top_ed watch, well before the second top is anywhere near
+    # confirmed as its own swing point.
+    highs = _zigzag_highs([(0, 90.0), (10, 100.3), (20, 95.0), (30, 96.0)])
+    candles = [_candle(i, open=h - 0.5, high=h, low=h - 1.0, close=h - 0.5) for i, h in enumerate(highs)]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+
+    key = (SYMBOL, SEG, "1min")
+    watching = engine._ed_watching.get(key)
+    assert watching is not None
+    assert watching["pattern"] == "double_top_ed"
+    assert watching["a"].kind == "high"
+    assert watching["b"].kind == "low"
+    assert watching["fired"] is False
+
+
+def test_ed_watch_fires_double_top_ed_on_a_clean_vwap_rejection(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    key = (SYMBOL, SEG, "1min")
+    # directly arm a watch (unit-testing the fire condition in isolation,
+    # not re-deriving a realistic multi-hour vwap history to get there
+    # organically -- see test_ed_watch_starts_after_first_top_and_neckline_confirm
+    # for that half) -- first top at 100.0, neckline at 95.0.
+    a = SwingPoint(kind="high", price=100.0, candle=_candle(0, 99.5, 100.0, 99.0, 99.5))
+    b = SwingPoint(kind="low", price=95.0, candle=_candle(5, 95.5, 96.0, 95.0, 95.5))
+    engine._ed_watching[key] = {"pattern": "double_top_ed", "a": a, "b": b, "since": 0, "fired": False}
+    # force a high cumulative vwap (comfortably above the rejection candle's
+    # own high) by feeding candles trading well above 100 first -- vwap is a
+    # session-cumulative average, so this is what actually happens in a real
+    # rally that later pulls back to reject near a lower prior top.
+    for i, price in enumerate([115.0] * 10):
+        engine.on_candle_closed(SYMBOL, SEG, _candle(10 + i, price, price + 0.5, price - 0.5, price))
+
+    # two real, bearish candles near the first top's own level (100.0,
+    # within _DOUBLE_SIMILARITY), both highs comfortably below the now-high
+    # vwap by >= _DOUBLE_TOP_ED_MIN_GAP_PCT (0.5%)
+    engine.on_candle_closed(SYMBOL, SEG, _candle(20, open=100.2, high=100.3, low=99.5, close=99.8))
+    engine.flush()
+    activities_before = engine._ed_watching.get(key)
+    result = engine.on_candle_closed(SYMBOL, SEG, _candle(21, open=99.8, high=100.1, low=99.2, close=99.4))
+    engine.flush()
+
+    with session_factory() as session:
+        rows = session.query(InstrumentActivity).filter_by(activity="double_top_ed").all()
+    assert len(rows) == 1
+    assert rows[0].intensity is not None  # the expected-move % projection
+
+
+def test_ed_watch_invalidated_when_the_neckline_breaks(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    key = (SYMBOL, SEG, "1min")
+    highs = _zigzag_highs([(0, 90.0), (10, 100.3), (20, 95.0), (30, 90.0)])  # breaks BELOW the 95.0 neckline
+    candles = [_candle(i, open=h - 0.5, high=h, low=h - 1.0, close=h - 0.5) for i, h in enumerate(highs)]
+    for c in candles:
+        engine.on_candle_closed(SYMBOL, SEG, c)
+
+    assert key not in engine._ed_watching or engine._ed_watching[key]["fired"] is False
 
 
 def test_engine_detects_triple_top_through_on_candle_closed(session_factory):

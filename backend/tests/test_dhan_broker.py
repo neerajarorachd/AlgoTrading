@@ -210,6 +210,53 @@ class TestDhanBrokerRequestThrottle(unittest.TestCase):
         self.assertEqual(session.request.call_count, 3)
 
 
+class TestDhanBrokerChartRequestThrottle(unittest.TestCase):
+    """/charts/* (historical/intraday candles) gets its own, longer minimum
+    interval — confirmed live (2026-09-14) that Dhan's effective rate limit
+    for this endpoint is stricter than the rest of the REST API: a batch of
+    get_historical_data calls spaced 1s apart (the general-call interval)
+    failed 12/13 with a 400 "no data present" error, not a 429, while the
+    same calls spaced 3s apart succeeded every time."""
+
+    def _historical_response(self):
+        return make_response(200, {
+            "open": [100.0], "high": [102.0], "low": [99.0], "close": [101.0],
+            "volume": [10000], "timestamp": [1725600000],
+        })
+
+    def test_back_to_back_chart_calls_are_spaced_by_the_longer_chart_interval(self):
+        session = MagicMock()
+        session.request.return_value = self._historical_response()
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        broker.get_historical_data(symbol="RELIANCE", security_id="1333", exchange_segment="NSE_EQ",
+                                    timeframe="1day", from_date=datetime(2026, 1, 1), to_date=datetime(2026, 9, 5))
+        broker.get_historical_data(symbol="TCS", security_id="11536", exchange_segment="NSE_EQ",
+                                    timeframe="1day", from_date=datetime(2026, 1, 1), to_date=datetime(2026, 9, 5))
+
+        self.assertEqual(clock.sleeps, [3.0])  # not 1.0 — the general-call interval
+
+    def test_chart_throttle_is_independent_of_the_general_call_throttle(self):
+        """A chart call must not make an immediately-following general call
+        (e.g. get_quote) wait out the chart interval — they're separate
+        queues, since nothing about Dhan's stricter chart-endpoint limit
+        should slow down unrelated quote/order calls."""
+        session = MagicMock()
+        session.request.return_value = self._historical_response()
+        clock = FakeClock()
+        broker = DhanBroker(client_id="c1", access_token="t1", session=session,
+                             sleep=clock.sleep, clock=clock.clock)
+
+        broker.get_historical_data(symbol="RELIANCE", security_id="1333", exchange_segment="NSE_EQ",
+                                    timeframe="1day", from_date=datetime(2026, 1, 1), to_date=datetime(2026, 9, 5))
+        session.request.return_value = make_response(200, {"availabelBalance": 50000})
+        broker.connect()  # first general call ever — nothing to wait for, regardless of the chart call above
+
+        self.assertEqual(clock.sleeps, [])
+
+
 class TestDhanBrokerHistoricalData(unittest.TestCase):
     def test_get_historical_intraday_parses_parallel_arrays_into_candles(self):
         session = MagicMock()
