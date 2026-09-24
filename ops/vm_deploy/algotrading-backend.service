@@ -1,0 +1,22 @@
+[Unit]
+Description=AlgoTrading backend (live feed + recommendation engine)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/AlgoTrading/backend
+# Waits for SQL Server (a separate system-level service with no ordering
+# guarantee against this user-level one at boot) to actually accept
+# connections before starting the app -- closes a real race at VM boot,
+# not a hypothetical one (mssql-server.service and this service both start
+# around the same time with no cross-scope dependency between them).
+ExecStartPre=%h/AlgoTrading/wait_for_sqlserver.sh
+ExecStart=%h/AlgoTrading/venv/bin/python3 run.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/AlgoTrading/backend.log
+StandardError=append:%h/AlgoTrading/backend.log
+
+[Install]
+WantedBy=default.target

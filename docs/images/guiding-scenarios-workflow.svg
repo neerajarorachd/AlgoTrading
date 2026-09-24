@@ -1,0 +1,133 @@
+<svg viewBox="0 0 1080 700" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Weekly batch pipeline mines two years of candle history into a small GuidingScenario table; the live path does one indexed lookup against that table instead of re-analyzing history, and no longer queries PatternOutcome directly.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1f2430"/>
+    </marker>
+    <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/>
+    </marker>
+    <marker id="arrowAccent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b45309"/>
+    </marker>
+  </defs>
+
+  <style>
+    .box { fill:#ffffff; stroke:#1f2430; stroke-width:2; }
+    .boxAccent { fill:#fef3e2; stroke:#b45309; stroke-width:2.5; }
+    .title { font-family: Arial, Helvetica, sans-serif; font-size:14px; font-weight:700; fill:#1f2430; text-anchor:middle; }
+    .subtitle { font-family: Arial, Helvetica, sans-serif; font-size:11px; fill:#6b7280; text-anchor:middle; }
+    .lbl { font-family: Arial, Helvetica, sans-serif; font-size:11px; fill:#374151; text-anchor:middle; }
+    .lblMuted { font-family: Arial, Helvetica, sans-serif; font-size:10px; fill:#9ca3af; text-anchor:middle; font-style:italic; }
+    .lblAccent { font-family: Arial, Helvetica, sans-serif; font-size:11px; fill:#b45309; text-anchor:middle; font-weight:700; }
+    .section { font-family: Arial, Helvetica, sans-serif; font-size:12px; font-weight:700; letter-spacing:0.06em; fill:#1f2430; }
+    .flow { fill:none; stroke:#1f2430; stroke-width:2; marker-end:url(#arrow); }
+    .flowMuted { fill:none; stroke:#9ca3af; stroke-width:1.75; stroke-dasharray:5 4; marker-end:url(#arrowMuted); }
+    .flowAccent { fill:none; stroke:#b45309; stroke-width:2.25; marker-end:url(#arrowAccent); }
+    .caption { font-family: Arial, Helvetica, sans-serif; font-size:12px; fill:#374151; }
+  </style>
+
+  <!-- ===================== LANE 1: WEEKLY BATCH ===================== -->
+  <text x="20" y="26" class="section">WEEKLY BATCH — MINES TWO YEARS OF HISTORY</text>
+
+  <!-- A: CandleHistorical -->
+  <rect class="box" x="20" y="50" width="180" height="120" rx="6"/>
+  <text x="110" y="92" class="title">CandleHistorical</text>
+  <text x="110" y="112" class="subtitle">raw OHLC</text>
+  <text x="110" y="126" class="subtitle">185,418 rows · 18 MB</text>
+
+  <!-- B: InstrumentActivity + CandleIndicators -->
+  <rect class="box" x="290" y="50" width="220" height="120" rx="6"/>
+  <text x="400" y="85" class="title">InstrumentActivity</text>
+  <text x="400" y="102" class="title">+ CandleIndicators</text>
+  <text x="400" y="122" class="subtitle">pattern/crossover detection</text>
+  <text x="400" y="136" class="subtitle">551K rows · 58 MB</text>
+
+  <!-- C: PatternOutcome -->
+  <rect class="box" x="600" y="50" width="180" height="120" rx="6"/>
+  <text x="690" y="92" class="title">PatternOutcome</text>
+  <text x="690" y="112" class="subtitle">what happened next</text>
+  <text x="690" y="126" class="subtitle">349K rows · 48 MB</text>
+
+  <!-- D: GuidingScenario (accent — the artifact that matters) -->
+  <rect class="boxAccent" x="870" y="50" width="190" height="120" rx="6"/>
+  <text x="965" y="85" class="title" fill="#b45309">GuidingScenario</text>
+  <text x="965" y="102" class="title" fill="#b45309">+ IndicatorStat</text>
+  <text x="965" y="122" class="subtitle">win% &#8805; 70, n &#8805; 7</text>
+  <text x="965" y="136" class="subtitle">589 rows · 0.07 MB</text>
+
+  <!-- lane 1 arrows -->
+  <line x1="200" y1="110" x2="290" y2="110" class="flow"/>
+  <text x="245" y="100" class="lbl">replay</text>
+
+  <line x1="510" y1="110" x2="600" y2="110" class="flow"/>
+  <text x="555" y="100" class="lbl">analyze</text>
+
+  <line x1="780" y1="110" x2="870" y2="110" class="flowAccent"/>
+  <text x="825" y="95" class="lblAccent">mine</text>
+  <text x="825" y="108" class="lblAccent">weekly</text>
+
+  <!-- divider -->
+  <line x1="20" y1="205" x2="1060" y2="205" stroke="#d1d5db" stroke-width="1"/>
+
+  <!-- ===================== LANE 2: LIVE PATH ===================== -->
+  <text x="20" y="230" class="section">LIVE — EVERY CANDLE CLOSE, NO SCAN OF RAW TABLES</text>
+
+  <!-- E: Candle closes -->
+  <rect class="box" x="20" y="255" width="150" height="90" rx="6"/>
+  <text x="95" y="295" class="title">Candle</text>
+  <text x="95" y="312" class="title">closes</text>
+
+  <!-- F: on_candle_closed -->
+  <rect class="box" x="230" y="255" width="230" height="90" rx="6"/>
+  <text x="345" y="295" class="title">ActivityEngine.</text>
+  <text x="345" y="312" class="title">on_candle_closed</text>
+
+  <!-- G: on_activities -->
+  <rect class="box" x="520" y="255" width="200" height="90" rx="6"/>
+  <text x="620" y="295" class="title">recommendation_engine.</text>
+  <text x="620" y="312" class="title">on_activities</text>
+
+  <!-- H: match_guiding_scenario (accent — the cheap lookup) -->
+  <rect class="boxAccent" x="870" y="255" width="190" height="90" rx="6"/>
+  <text x="965" y="290" class="title" fill="#b45309">match_guiding_</text>
+  <text x="965" y="307" class="title" fill="#b45309">scenario</text>
+  <text x="965" y="325" class="subtitle">one indexed lookup</text>
+
+  <!-- lane 2 arrows -->
+  <line x1="170" y1="300" x2="230" y2="300" class="flow"/>
+  <text x="200" y="290" class="lbl">closes</text>
+
+  <line x1="460" y1="300" x2="520" y2="300" class="flow"/>
+  <text x="490" y="290" class="lbl">activities</text>
+
+  <line x1="720" y1="300" x2="870" y2="300" class="flowAccent"/>
+  <text x="795" y="290" class="lblAccent">pattern + intensity</text>
+
+  <!-- I: Recommendation queued -->
+  <rect class="box" x="870" y="400" width="190" height="80" rx="6"/>
+  <text x="965" y="435" class="title">Recommendation</text>
+  <text x="965" y="452" class="title">queued (RS1)</text>
+
+  <line x1="965" y1="345" x2="965" y2="400" class="flowAccent"/>
+  <text x="1000" y="375" class="lblAccent">match &#8594;</text>
+  <text x="1000" y="389" class="lblAccent">queue</text>
+
+  <!-- vertical accent arrow: the live lookup reaching UP into the tiny table -->
+  <path d="M 940 255 C 900 220, 900 205, 940 170" class="flowAccent"/>
+  <text x="845" y="215" class="lblAccent">reads only</text>
+  <text x="845" y="229" class="lblAccent">this (0.07 MB)</text>
+
+  <!-- dashed removed arrow: the OLD mechanism, for contrast -->
+  <path d="M 600 255 C 560 220, 600 200, 660 170" class="flowMuted"/>
+  <text x="500" y="222" class="lblMuted">OLD (removed 2026-09-16):</text>
+  <text x="500" y="235" class="lblMuted">live band analysis, per signal</text>
+
+  <!-- caption -->
+  <text x="20" y="530" class="caption" font-weight="700">Guiding-scenario pipeline (HINDCOPPER, 2026-09-16)</text>
+  <text x="20" y="552" class="caption">A weekly job mines PatternOutcome for (pattern, intensity band) combinations that clear 70% win rate at any of 5</text>
+  <text x="20" y="570" class="caption">checkpoints (5/10/15/20/30 candles) with at least 7 occurrences, and stores only the winners. A live pattern firing</text>
+  <text x="20" y="588" class="caption">does one indexed lookup against that small table instead of re-running analysis — the live path never touches the</text>
+  <text x="20" y="606" class="caption">106 MB of raw activity/indicator/outcome data above it. Indicator state/trend is stored per scenario for education</text>
+  <text x="20" y="624" class="caption">and future position sizing, but never gates the take-call/pass decision.</text>
+</svg>
