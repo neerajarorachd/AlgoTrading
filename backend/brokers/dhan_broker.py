@@ -57,6 +57,16 @@ RATE_LIMIT_RETRY_DELAYS_SEC = (1.0, 2.0)
 # backoff above is then just a safety net, not the primary defense.
 MIN_REQUEST_INTERVAL_SEC = 1.0
 
+# Dhan's /charts/* (historical/intraday candle) endpoints turned out to have a
+# materially stricter effective rate limit than the rest of the REST API —
+# confirmed live (2026-09-14): a batch of get_historical_data calls spaced at
+# MIN_REQUEST_INTERVAL_SEC (1s) failed 12/13 with a 400 "DH-907 ... no data
+# present" error (not a 429, so the retry-on-429 backoff above never kicked
+# in), while the exact same calls spaced 3s apart succeeded 100%. Given a
+# generic error code rather than a proper 429, this needs its own slower
+# proactive pacing rather than relying on the retry backoff to catch it.
+MIN_CHART_REQUEST_INTERVAL_SEC = 3.0
+
 _ORDER_STATUS_MAP = {
     "PENDING": OrderStatus.PENDING,
     "TRANSIT": OrderStatus.TRANSIT,
@@ -94,6 +104,8 @@ class DhanBroker(BaseBroker):
         self._connected = False
         self._request_lock = threading.Lock()
         self._last_request_at = 0.0
+        self._chart_request_lock = threading.Lock()
+        self._last_chart_request_at = 0.0
 
     # ---------------------------------------------------------------- headers/helpers
 
@@ -104,26 +116,39 @@ class DhanBroker(BaseBroker):
             "Content-Type": "application/json",
         }
 
-    def _throttle(self) -> None:
+    def _throttle(self, path: str) -> None:
         """Serializes REST calls with a minimum gap between them.
 
         Holding the lock across the wait (not just the timestamp update) is
         what makes this an actual queue rather than a best-effort check —
         concurrent callers (e.g. hydrating several symbols) block here one at
         a time, each waiting out whatever gap is left when its turn comes.
+
+        /charts/* (historical/intraday candles) gets its own lock/timestamp
+        and a longer minimum interval — a materially stricter rate limit
+        than the rest of the REST API, confirmed live (see
+        MIN_CHART_REQUEST_INTERVAL_SEC's own comment). Kept as a separate
+        lock, not just a different interval under the same one, so a chart
+        call's longer wait never blocks an unrelated quote/order call stuck
+        behind the same lock.
         """
-        with self._request_lock:
-            wait = MIN_REQUEST_INTERVAL_SEC - (self._clock() - self._last_request_at)
+        if path.startswith("/charts/"):
+            lock, last_at_attr, interval = self._chart_request_lock, "_last_chart_request_at", MIN_CHART_REQUEST_INTERVAL_SEC
+        else:
+            lock, last_at_attr, interval = self._request_lock, "_last_request_at", MIN_REQUEST_INTERVAL_SEC
+
+        with lock:
+            wait = interval - (self._clock() - getattr(self, last_at_attr))
             if wait > 0:
                 self._sleep(wait)
-            self._last_request_at = self._clock()
+            setattr(self, last_at_attr, self._clock())
 
     def _request(self, method: str, path: str, payload: Optional[dict] = None, params: Optional[dict] = None) -> dict:
         url = f"{DHAN_BASE_URL}{path}"
         remaining_retry_delays = list(RATE_LIMIT_RETRY_DELAYS_SEC)
 
         while True:
-            self._throttle()
+            self._throttle(path)
             try:
                 resp = self._session.request(method, url, headers=self._headers(),
                                               data=json.dumps(payload) if payload is not None else None,

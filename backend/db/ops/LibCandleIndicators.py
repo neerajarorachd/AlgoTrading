@@ -1,5 +1,5 @@
-"""CandleIndicators writes — see db/models.py's CandleIndicators for what
-this table records and why (the per-candle indicator-value snapshot
+"""CandleIndicators reads/writes — see db/models.py's CandleIndicators for
+what this table records and why (the per-candle indicator-value snapshot
 Strategies will eventually evaluate conditions against)."""
 from __future__ import annotations
 
@@ -9,6 +9,19 @@ from sqlalchemy.exc import IntegrityError
 
 from db.models import CandleIndicators
 from db.session import session_scope
+
+
+def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[CandleIndicators]:
+    """Bulk read, same shape/ordering as LibActivities.get_for_instrument —
+    a caller that needs to match rows up against another timestamped
+    series (pattern_outcome_analysis.py's own activities+candles) builds
+    its own ts-keyed dict from this rather than querying per-row."""
+    return (
+        session.query(CandleIndicators)
+        .filter_by(instrument_id=instrument_id, timeframe=timeframe)
+        .order_by(CandleIndicators.ts)
+        .all()
+    )
 
 
 def persist_bulk(session_factory, rows: List[dict]) -> None:

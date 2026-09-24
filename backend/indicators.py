@@ -81,6 +81,39 @@ def trend_intensity(trend: TrendResult, ratio: float = TREND_RATIO) -> float:
     return 0.0
 
 
+# Shorter than TREND_LOOKBACK (20) deliberately — RSI/MACD/Stochastic move
+# candle-to-candle much faster than a BB-width/VWAP-distance trend, so
+# "was it climbing into this formation" is a recent-momentum question, not
+# a 20-candle one. Kept as its own constant rather than reusing
+# TREND_LOOKBACK so the two can be tuned independently.
+INDICATOR_TREND_LOOKBACK = 5
+
+
+def classify_series_trend(values: Sequence[float], ratio: float = TREND_RATIO) -> Optional[str]:
+    """"increasing" | "decreasing" | "flat" | None (fewer than 2 values) —
+    classify_trend's sibling for a plain indicator VALUE series (RSI,
+    MACD line, Stochastic %K) rather than a magnitude series (BB width,
+    price-VWAP distance): compares values[i] to values[i-1] directly, NOT
+    abs(values[i]) — an indicator crossing zero (MACD going -0.5 -> +0.3)
+    is genuinely rising, not "shrinking in magnitude then growing again,"
+    so classify_trend's own abs()-based comparison would misread it.
+    values: most recent last, same convention as classify_trend."""
+    if len(values) < 2:
+        return None
+    increasing = decreasing = 0
+    for i in range(1, len(values)):
+        if values[i] > values[i - 1]:
+            increasing += 1
+        elif values[i] < values[i - 1]:
+            decreasing += 1
+    steps = len(values) - 1
+    if increasing >= steps * ratio:
+        return "increasing"
+    if decreasing >= steps * ratio:
+        return "decreasing"
+    return "flat"
+
+
 # --------------------------------------------------------------------- RSI (Wilder's)
 
 RSI_PERIOD = 14
@@ -288,3 +321,62 @@ def cross_intensity(prev_a: float, prev_b: float, curr_a: float, curr_b: float) 
     all (can't actually occur on a real cross), growing with how decisively
     the two series pulled apart on the crossing candle itself."""
     return abs((curr_a - curr_b) - (prev_a - prev_b))
+
+
+# --------------------------------------------------------------------- indicator state labels
+#
+# "record what the other indicators' state was at that exact moment" —
+# a pattern's own project memory (backtesting_calibration_plan.md's "Next
+# level" note) explicitly calls for a CONDITION label alongside the raw
+# value, computed on the fly over already-persisted CandleIndicators rows
+# rather than stored as its own column — same "store raw values, derive
+# labels on demand" convention classify_trend() above already established
+# (so the definition of "overbought" etc. can be tuned without
+# reprocessing any history). These are deliberately plain value-band
+# classifiers only (not yet the "increasing"/"just crossed" trend half of
+# that memory note, which needs a short lookback series rather than one
+# value — left for a later pass once this value-based half is in use).
+#
+# Thresholds match this project's own existing crossover detectors
+# (activity_engine.PATTERN_CATALOG: rsi_cross_above_60/below_40) and the
+# standard textbook Stochastic bands (Trading project's own convention
+# too) — not independently invented numbers.
+RSI_OVERSOLD = 30.0
+RSI_OVERBOUGHT = 70.0
+STOCH_OVERSOLD = 20.0
+STOCH_OVERBOUGHT = 80.0
+
+
+def classify_rsi(value: Optional[float]) -> Optional[str]:
+    """"oversold" | "neutral" | "overbought" | None (not enough data yet)."""
+    if value is None:
+        return None
+    if value <= RSI_OVERSOLD:
+        return "oversold"
+    if value >= RSI_OVERBOUGHT:
+        return "overbought"
+    return "neutral"
+
+
+def classify_macd(macd_line: Optional[float], macd_signal: Optional[float]) -> Optional[str]:
+    """"bullish" (line above signal) | "bearish" (line below signal) | None
+    (not enough data yet, or the two are exactly equal — rare enough with
+    real floats to not need its own label)."""
+    if macd_line is None or macd_signal is None or macd_line == macd_signal:
+        return None
+    return "bullish" if macd_line > macd_signal else "bearish"
+
+
+def classify_stochastic(stoch_k: Optional[float]) -> Optional[str]:
+    """"oversold" | "neutral" | "overbought" | None — %K level only (the
+    same convention rsi_cross_above_60/below_40-style detectors use for
+    RSI), not the %K-vs-%D relationship (that's what
+    stoch_bullish_cross/stoch_bearish_cross already detect as their own
+    separate pattern)."""
+    if stoch_k is None:
+        return None
+    if stoch_k <= STOCH_OVERSOLD:
+        return "oversold"
+    if stoch_k >= STOCH_OVERBOUGHT:
+        return "overbought"
+    return "neutral"

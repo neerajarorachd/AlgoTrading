@@ -100,6 +100,20 @@ _SWING_LOOKBACK = 5
 # every other threshold in this module.
 _DOUBLE_SIMILARITY = 0.005  # the two tops/bottoms must be within 0.5% of each other
 _DOUBLE_MIN_DEPTH = 0.003  # the valley/peak between them must be >= 0.3% deep
+
+# "ED" (Early Detection) double_top/bottom -- explicit instruction,
+# 2026-09-18: fire a real-time recommendation as soon as the SECOND top/
+# bottom shows the same clean VWAP rejection the first one did, instead of
+# waiting detect_double_top/bottom's own 5-candle swing-confirmation lag
+# for that second point (see [[stale_entry_price_bug]] for why that lag
+# matters). Thresholds tuned per-direction against real HINDCOPPER data,
+# NOT symmetric: 0.5% is double_top_ed's own sweet spot (0.6% measurably
+# overshoots -- worse win rate and edge); 0.6% is double_bottom_ed's
+# better threshold (the opposite direction). See
+# [[hindcopper_double_top_backtest_investigation]] for the full comparison.
+_ED_MAX_WATCH_CANDLES = 120  # give up watching a (a, b) pair after this many candles, same as double_top/bottom's own SL/TG race window
+_DOUBLE_TOP_ED_MIN_GAP_PCT = 0.005
+_DOUBLE_BOTTOM_ED_MIN_GAP_PCT = 0.006
 # Trade-planning levels for a confirmed double top/bottom — a small buffer
 # above/below the pattern's own extreme for the stop, and the classic
 # "measured move" target (the pattern's own height projected from the
@@ -1096,6 +1110,72 @@ PRICE_ACTION_INTENSITY: Dict[str, Callable[[Sequence[float]], float]] = {
 }
 
 
+# 2026-09-15, explicit HINDCOPPER strategy test request: "if below vwap, if
+# 2 continuous bearish candles, both's high are below vwap, sell ... and
+# mirror for buy" — a clean VWAP rejection: two consecutive candles that
+# never even touch VWAP from below (bear) / above (bull). Take BOTH highs
+# below vwap (bear) rather than a separate "price below vwap" check — if a
+# candle's high is already below vwap, its close is too, so the high check
+# alone is the stricter, sufficient condition. Deliberately NOT a plain
+# MULTI_CANDLE_PATTERNS entry: those detectors only ever see `candles`, not
+# the current VWAP value, so this needs its own call site in
+# on_candle_closed (right after vwap is computed) rather than a dict entry.
+# 0.5% — real HINDCOPPER data checked 2026-09-15: gap-from-vwap distribution
+# for the plain (min_gap_pct=0.0) patterns has median ~0.58% (bear) / ~0.40%
+# (bull), minimum ~0.0001% (essentially touching). 0.5% sits comfortably
+# above both medians (a real, substantive filter, not a token one) and not
+# coincidentally matches this strategy's own fixed target_pct — a candle
+# only counts as "completely away" once it's already as far from vwap as
+# the trade is hoping to move.
+VWAP_REJECTION_STRONG_MIN_GAP_PCT = 0.005
+
+
+def detect_vwap_rejection_bear(candles: Sequence[Candle], vwap: float, min_gap_pct: float = 0.0) -> bool:
+    """min_gap_pct: how far below vwap BOTH candles' highs must sit,
+    expressed as a fraction (0.005 = 0.5%) — 0.0 (default) is the original
+    "any nonzero gap" definition. Added 2026-09-15 after a live HINDCOPPER
+    backtest showed the default definition fires on barely-there touches
+    (real median gap only ~0.58%, minimum ~0.0001% — essentially grazing
+    vwap): "it shows there is some issue in your entry trade. please try
+    with completely away candles." See vwap_rejection_bear_strong in
+    on_candle_closed for the stricter variant this enables, kept as a
+    SEPARATE pattern name rather than redefining this one, so the
+    already-run backtest under the original definition stays a valid,
+    unchanged record to compare against."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bearish(a) and _is_bearish(b)):
+        return False
+    return (vwap - a.high) / vwap >= min_gap_pct and (vwap - b.high) / vwap >= min_gap_pct
+
+
+def detect_vwap_rejection_bull(candles: Sequence[Candle], vwap: float, min_gap_pct: float = 0.0) -> bool:
+    """Mirror of detect_vwap_rejection_bear: two consecutive bullish
+    candles whose LOWS both stay at least min_gap_pct above vwap."""
+    if len(candles) < 2:
+        return False
+    a, b = candles[-2], candles[-1]
+    if not (_is_bullish(a) and _is_bullish(b)):
+        return False
+    return (a.low - vwap) / vwap >= min_gap_pct and (b.low - vwap) / vwap >= min_gap_pct
+
+
+def vwap_rejection_bear_intensity(candles: Sequence[Candle], vwap: float) -> float:
+    """How cleanly both candles stayed below vwap — the average of each
+    candle's own (vwap - high)/vwap gap, as a percentage. Two candles that
+    barely poked under vwap score near 0; two candles that closed well
+    below it score higher."""
+    a, b = candles[-2], candles[-1]
+    return (((vwap - a.high) / vwap) + ((vwap - b.high) / vwap)) / 2 * 100
+
+
+def vwap_rejection_bull_intensity(candles: Sequence[Candle], vwap: float) -> float:
+    """Mirror of vwap_rejection_bear_intensity."""
+    a, b = candles[-2], candles[-1]
+    return (((a.low - vwap) / vwap) + ((b.low - vwap) / vwap)) / 2 * 100
+
+
 class _VwapState:
     __slots__ = ("day", "cum_pv", "cum_vol")
 
@@ -1126,6 +1206,10 @@ PATTERN_CATALOG = [
     ("bb_widening", "price_action", "Bollinger Band width has been consistently widening over the last 20 candles — volatility expansion, typically during a strong directional move"),
     ("price_vwap_divergence", "price_action", "Price's distance from VWAP has been consistently widening over the last 20 candles — stretching away from vwap"),
     ("vwap_gap_fill", "price_action", "Price's distance from VWAP has been consistently narrowing over the last 20 candles — reverting back toward vwap"),
+    ("vwap_rejection_bear", "price_action", "Two consecutive bearish candles, both highs staying below VWAP — a clean rejection down away from vwap"),
+    ("vwap_rejection_bull", "price_action", "Two consecutive bullish candles, both lows staying above VWAP — a clean rejection up away from vwap"),
+    ("vwap_rejection_bear_strong", "price_action", "vwap_rejection_bear, but both candles' highs at least VWAP_REJECTION_STRONG_MIN_GAP_PCT (0.5%) below VWAP — a decisively clean rejection, not a marginal touch"),
+    ("vwap_rejection_bull_strong", "price_action", "vwap_rejection_bull, but both candles' lows at least VWAP_REJECTION_STRONG_MIN_GAP_PCT (0.5%) above VWAP — a decisively clean rejection, not a marginal touch"),
     ("rsi_cross_above_60", "indicator", "RSI(14) crosses above 60 — momentum turning bullish"),
     ("rsi_cross_below_40", "indicator", "RSI(14) crosses below 40 — momentum turning bearish"),
     ("macd_bullish_cross", "indicator", "MACD line crosses above its signal line — bullish momentum shift"),
@@ -1138,6 +1222,8 @@ PATTERN_CATALOG = [
     ("swing_low", "structure", "A confirmed local price trough — the lowest low across a window of candles on both sides of it"),
     ("double_top", "graph_formation", "Two comparable swing highs with a meaningfully lower swing low between them — a classic bearish reversal shape"),
     ("double_bottom", "graph_formation", "Two comparable swing lows with a meaningfully higher swing high between them — a classic bullish reversal shape"),
+    ("double_top_ed", "graph_formation", "Early double_top warning: 2nd top rejecting VWAP near the 1st top's own level — fires in real time, not after the 5-candle swing-confirm lag double_top needs"),
+    ("double_bottom_ed", "graph_formation", "double_top_ed's mirror: early double_bottom warning on a real-time bullish VWAP rejection near the 1st bottom's own level"),
     ("triple_top", "graph_formation", "Three comparable swing highs with two meaningfully lower swing lows between them — a stronger bearish reversal shape than a double top"),
     ("triple_bottom", "graph_formation", "Three comparable swing lows with two meaningfully higher swing highs between them — a stronger bullish reversal shape than a double bottom"),
     ("bullish_structure_shift", "structure", "Lower Low, then Higher High, then Higher Low — trend structure shifting from bearish to bullish (CHoCH)"),
@@ -1221,6 +1307,11 @@ class ActivityEngine:
         # appended unconditionally every candle (not just on a pattern
         # fire), flushed to candle_indicators alongside self._buffer
         self._indicator_buffer: List[dict] = []
+        # Recent per-candle rows (OHLCV + every indicator value), in memory,
+        # per (symbol, exchange_segment, timeframe) -- today's indicator rows
+        # reach the DB only on the scheduled flush, so the live recommendation
+        # rule gate (rule_gate.py) reads THIS, never the DB, for same-day data.
+        self._frame_rows: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=120))
         # price-action state, one series per (symbol, exchange_segment, timeframe).
         # _closes holds _MA_LONG_PERIOD candles (the longest window any
         # indicator here needs) — BB(20) reads only the tail slice it needs.
@@ -1250,6 +1341,12 @@ class ActivityEngine:
         # own type (is this high bigger than the last high? etc.)
         self._recent_highs: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
         self._recent_lows: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=3))
+        # double_top_ed/double_bottom_ed watch state -- at most one active
+        # per key at a time (points strictly alternates high/low, so the
+        # tail is always exactly one of (high, low) or (low, high), never
+        # both at once). None/absent means "not currently watching".
+        self._ed_watching: Dict[InstrumentKey, dict] = {}
+        self._ed_candle_count: Dict[InstrumentKey, int] = defaultdict(int)
         # ATR — not used by any detector's threshold yet (see ATR_PERIOD's
         # own docstring in indicators.py), but tracked here per instrument/
         # timeframe so PredictionTracker can read the latest value via
@@ -1257,6 +1354,12 @@ class ActivityEngine:
         # module needing to know PredictionTracker exists
         self._atr_state: Dict[InstrumentKey, AtrState] = defaultdict(AtrState)
         self._latest_atr: Dict[InstrumentKey, float] = {}
+
+    def recent_rows(self, symbol: str, exchange_segment: str, timeframe: str, n: int) -> list:
+        """The last `n` in-memory candle rows (oldest first) for one
+        instrument/timeframe -- the live rule gate's data source."""
+        rows = self._frame_rows.get((symbol, exchange_segment, timeframe))
+        return list(rows)[-n:] if rows else []
 
     def buffered_count(self) -> int:
         return len(self._buffer)
@@ -1315,6 +1418,7 @@ class ActivityEngine:
         key: InstrumentKey = (symbol, exchange_segment, candle.timeframe)
         buffer = self._recent[key]
         buffer.append(candle)
+        self._ed_candle_count[key] += 1
 
         found: List[Tuple[str, str, Optional[float]]] = []  # (activity_type, activity, intensity)
         for name, detector in SINGLE_CANDLE_PATTERNS.items():
@@ -1374,6 +1478,67 @@ class ActivityEngine:
                         found.append(("price_action", name, intensity))
                 except Exception:
                     logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
+
+            # vwap_rejection_bear/bull need BOTH the recent-candles buffer
+            # AND this candle's own vwap together, unlike the dict-driven
+            # detectors above — see detect_vwap_rejection_bear's own
+            # docstring for why this can't be a MULTI_CANDLE_PATTERNS entry.
+            try:
+                rejection_candles = list(buffer)
+                if detect_vwap_rejection_bear(rejection_candles, vwap):
+                    intensity = vwap_rejection_bear_intensity(rejection_candles, vwap)
+                    found.append(("price_action", "vwap_rejection_bear", intensity))
+                if detect_vwap_rejection_bull(rejection_candles, vwap):
+                    intensity = vwap_rejection_bull_intensity(rejection_candles, vwap)
+                    found.append(("price_action", "vwap_rejection_bull", intensity))
+                # "_strong" variants — same shape, gated on a real minimum
+                # distance from vwap (VWAP_REJECTION_STRONG_MIN_GAP_PCT)
+                # instead of firing on any nonzero gap. Kept as separate
+                # pattern names (see detect_vwap_rejection_bear's own
+                # docstring) rather than redefining the plain ones.
+                if detect_vwap_rejection_bear(rejection_candles, vwap, VWAP_REJECTION_STRONG_MIN_GAP_PCT):
+                    intensity = vwap_rejection_bear_intensity(rejection_candles, vwap)
+                    found.append(("price_action", "vwap_rejection_bear_strong", intensity))
+                if detect_vwap_rejection_bull(rejection_candles, vwap, VWAP_REJECTION_STRONG_MIN_GAP_PCT):
+                    intensity = vwap_rejection_bull_intensity(rejection_candles, vwap)
+                    found.append(("price_action", "vwap_rejection_bull_strong", intensity))
+            except Exception:
+                logger.exception("Activity engine: vwap_rejection failed for %s (%s)", symbol, exchange_segment)
+
+            # double_top_ed/double_bottom_ed -- check the active watch (if
+            # any) against THIS candle. Uses `found` (not self._buffer
+            # directly) so it gets candle.timestamp/close automatically via
+            # the same real-time path every other found[] entry already
+            # uses below -- no stale swing-candle price risk at all.
+            try:
+                watching = self._ed_watching.get(key)
+                if watching is not None and not watching["fired"]:
+                    is_top = watching["pattern"] == "double_top_ed"
+                    a, b = watching["a"], watching["b"]
+                    min_gap_pct = _DOUBLE_TOP_ED_MIN_GAP_PCT if is_top else _DOUBLE_BOTTOM_ED_MIN_GAP_PCT
+                    ref_price = candle.high if is_top else candle.low
+                    near_first = abs(ref_price - a.price) / a.price <= _DOUBLE_SIMILARITY if a.price else False
+                    rejection_fn = detect_vwap_rejection_bear if is_top else detect_vwap_rejection_bull
+                    rejected = len(rejection_candles) >= 2 and rejection_fn(rejection_candles, vwap, min_gap_pct)
+                    if near_first and rejected:
+                        watching["fired"] = True
+                        entry_price = candle.close
+                        # measured-move expected target, same formula as
+                        # double_top_target/double_bottom_target, using a's
+                        # own price as a stand-in for the not-yet-confirmed
+                        # second point (guaranteed close to it by
+                        # _DOUBLE_SIMILARITY once it does confirm).
+                        height = a.price - b.price if is_top else b.price - a.price
+                        expected_target = (b.price - height) if is_top else (b.price + height)
+                        expected_move_pct = (
+                            (entry_price - expected_target) / entry_price if is_top
+                            else (expected_target - entry_price) / entry_price
+                        )
+                        found.append(("graph_formation", watching["pattern"], expected_move_pct * 100))
+                if watching is not None and self._ed_candle_count[key] - watching["since"] > _ED_MAX_WATCH_CANDLES:
+                    self._ed_watching.pop(key, None)
+            except Exception:
+                logger.exception("Activity engine: double_top_ed/double_bottom_ed failed for %s (%s)", symbol, exchange_segment)
 
         # Every one of these stays None if its own warm-up period hasn't
         # elapsed yet, or if its try block below raises — guaranteed
@@ -1459,6 +1624,14 @@ class ActivityEngine:
                     "bb_middle": bb.middle if bb else None,
                     "bb_lower": bb.lower if bb else None,
                 })
+            self._frame_rows[key].append({
+                "ts": candle.timestamp, "open": candle.open, "high": candle.high, "low": candle.low,
+                "close": candle.close, "volume": candle.volume,
+                "rsi": rsi, "macd_line": macd_line, "macd_signal": macd_signal,
+                "stoch_k": stoch_k, "stoch_d": stoch_d, "vwap": vwap, "ma21": ma21, "ma50": ma50, "atr": atr,
+                "bb_upper": bb.upper if bb else None, "bb_middle": bb.middle if bb else None,
+                "bb_lower": bb.lower if bb else None,
+            })
         except Exception:
             logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)
 
@@ -1494,6 +1667,42 @@ class ActivityEngine:
                         swing_point = SwingPoint(kind=kind, price=price, candle=swing_candle)
                         points.append(swing_point)
                         points_list = list(points)
+
+                        # double_top_ed/double_bottom_ed watch lifecycle --
+                        # this new point either resolves an ALREADY-fired
+                        # watch (confirmed if it completes a genuine
+                        # detect_double_top/bottom with the same a/b,
+                        # invalidated if it breaks past the neckline the
+                        # wrong way) or, if no watch is active, a fresh
+                        # (high, low)/(low, high) tail starts a new one.
+                        watching = self._ed_watching.get(key)
+                        if watching is not None:
+                            w_is_top = watching["pattern"] == "double_top_ed"
+                            w_a, w_b = watching["a"], watching["b"]
+                            invalidating_kind = "low" if w_is_top else "high"
+                            if kind == invalidating_kind:
+                                broke = price < w_b.price if w_is_top else price > w_b.price
+                                if broke:
+                                    self._ed_watching.pop(key, None)
+                                    watching = None
+                            if watching is not None:
+                                confirming_kind = "high" if w_is_top else "low"
+                                detect_fn = detect_double_top if w_is_top else detect_double_bottom
+                                if kind == confirming_kind and detect_fn([w_a, w_b, swing_point]):
+                                    self._ed_watching.pop(key, None)
+                                    watching = None
+                        if (self._ed_watching.get(key) is None and len(points_list) >= 2
+                                and points_list[-2].kind == "high" and points_list[-1].kind == "low"):
+                            self._ed_watching[key] = {
+                                "pattern": "double_top_ed", "a": points_list[-2], "b": points_list[-1],
+                                "since": self._ed_candle_count[key], "fired": False,
+                            }
+                        elif (self._ed_watching.get(key) is None and len(points_list) >= 2
+                                and points_list[-2].kind == "low" and points_list[-1].kind == "high"):
+                            self._ed_watching[key] = {
+                                "pattern": "double_bottom_ed", "a": points_list[-2], "b": points_list[-1],
+                                "since": self._ed_candle_count[key], "fired": False,
+                            }
 
                         # both a double_top and a triple_top (etc.) can
                         # legitimately fire on the same trigger point — a
@@ -1587,24 +1796,34 @@ class ActivityEngine:
                                 "low_price": swing_candle.low, "close_price": swing_candle.close,
                             })
 
-                        # trendline-pair patterns (triangle/wedge/
-                        # rectangle) — re-classified from scratch off
-                        # whichever 2 highs/2 lows are current every time
-                        # either one changes, unlike structure_events
-                        # above which is direction-restricted to kind
-                        channel_pattern = classify_channel(recent_highs, recent_lows)
-                        if channel_pattern is not None:
-                            channel_intensity = channel_pattern_intensity(recent_highs, recent_lows)
-                            if channel_intensity == float("inf"):
-                                channel_intensity = None
-                            self._buffer.append({
-                                "instrument_id": instrument_id, "timeframe": candle.timeframe,
-                                "ts": swing_candle.timestamp,
-                                "activity_type": "graph_formation", "activity": channel_pattern,
-                                "intensity": channel_intensity,
-                                "open_price": swing_candle.open, "high_price": swing_candle.high,
-                                "low_price": swing_candle.low, "close_price": swing_candle.close,
-                            })
+                    # trendline-pair patterns (triangle/wedge/rectangle) —
+                    # re-classified from scratch off whichever 2 highs/2
+                    # lows are current, ONCE per candle-close call, not
+                    # once per swing_hits entry. Found live 2026-09-15: the
+                    # same swing_candle can be confirmed as BOTH a swing
+                    # high and a swing low in the same call, so evaluating
+                    # this inside the per-kind loop above appended two
+                    # graph_formation rows with the identical (instrument_
+                    # id, timeframe, ts, activity) key — violating
+                    # instrument_activity's own unique constraint and (far
+                    # worse) poisoning the whole bulk flush into
+                    # LibActivities.persist_bulk's slow per-row fallback
+                    # for every buffered row, not just the duplicate.
+                    recent_highs = list(self._recent_highs[key])
+                    recent_lows = list(self._recent_lows[key])
+                    channel_pattern = classify_channel(recent_highs, recent_lows)
+                    if channel_pattern is not None:
+                        channel_intensity = channel_pattern_intensity(recent_highs, recent_lows)
+                        if channel_intensity == float("inf"):
+                            channel_intensity = None
+                        self._buffer.append({
+                            "instrument_id": instrument_id, "timeframe": candle.timeframe,
+                            "ts": swing_candle.timestamp,
+                            "activity_type": "graph_formation", "activity": channel_pattern,
+                            "intensity": channel_intensity,
+                            "open_price": swing_candle.open, "high_price": swing_candle.high,
+                            "low_price": swing_candle.low, "close_price": swing_candle.close,
+                        })
         except Exception:
             logger.exception("Activity engine: swing detection failed for %s (%s)", symbol, exchange_segment)
 

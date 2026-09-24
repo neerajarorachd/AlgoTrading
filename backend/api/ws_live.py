@@ -63,3 +63,16 @@ def broadcast_candle_closed(symbol: str, exchange_segment: str, candle) -> None:
             "low": candle.low, "close": candle.close, "volume": candle.volume,
         },
     }, room=room_for_exchange_segment(exchange_segment, symbol))
+
+
+# One fixed global room, not per-instrument like everything else above — a
+# recommendation queue view watches ACROSS instruments, so per-instrument
+# room scoping (room_for/room_for_exchange_segment) doesn't fit; any client
+# on the Recommendations page just joins this one room via the existing
+# generic subscribe_ticks handler (subscribeRooms(['recommendations'])),
+# no new join mechanism needed.
+RECOMMENDATIONS_ROOM = "recommendations"
+
+
+def broadcast_recommendation_created(recommendation: dict) -> None:
+    socketio.emit("recommendation_created", recommendation, room=RECOMMENDATIONS_ROOM)

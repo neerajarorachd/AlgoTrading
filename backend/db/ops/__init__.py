@@ -18,13 +18,15 @@ around the call — this module only knows how to read/write once handed a
 session, never how to obtain one.
 """
 from . import (
-    LibActivities, LibBrokerTokens, LibCandleIndicators, LibCandles,
-    LibPatternOutcomes, LibPredictions, LibSettings, LibStrategies,
-    LibStrategyElements, LibSymbols,
+    LibActivities, LibBacktestRuns, LibBrokerTokens, LibCandleIndicators, LibCandles,
+    LibCandlesHistorical, LibPatternOutcomes, LibPredictions, LibRecommendations,
+    LibRecommendationSystems, LibSettings, LibStrategies, LibStrategyElements, LibSymbols,
+    LibSystemSettings, LibWatchlists,
 )
 
 __all__ = [
-    "LibActivities", "LibBrokerTokens", "LibCandleIndicators", "LibCandles",
-    "LibPatternOutcomes", "LibPredictions", "LibSettings", "LibStrategies",
-    "LibStrategyElements", "LibSymbols",
+    "LibActivities", "LibBacktestRuns", "LibBrokerTokens", "LibCandleIndicators", "LibCandles",
+    "LibCandlesHistorical", "LibPatternOutcomes", "LibPredictions", "LibRecommendations",
+    "LibRecommendationSystems", "LibSettings", "LibStrategies", "LibStrategyElements", "LibSymbols",
+    "LibSystemSettings", "LibWatchlists",
 ]

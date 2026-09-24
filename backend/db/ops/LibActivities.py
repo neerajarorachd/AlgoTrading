@@ -1,8 +1,10 @@
 """InstrumentActivity + PatternDefinition reads/writes."""
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+from datetime import datetime
+from typing import List, Optional, Sequence, Tuple
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from db.models import InstrumentActivity, PatternDefinition
@@ -16,6 +18,59 @@ def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[Inst
         .order_by(InstrumentActivity.ts)
         .all()
     )
+
+
+def count_by_pattern(
+    session, instrument_id: int, timeframes: Sequence[str], ts_from: datetime, ts_to: datetime,
+    patterns: Optional[Sequence[str]] = None,
+) -> List[Tuple[str, str, int]]:
+    """[(activity_type, activity, count), ...] for the given instrument/
+    timeframes/date range — occurrence counts ("how many times did each
+    pattern fire"), the raw material for backtesting type 1 ("just count
+    the occurrences in a certain period"). No trade simulation involved —
+    a pure GROUP BY over already-detected/persisted activities.
+
+    `patterns`, when given, restricts to just those activity codes (e.g.
+    ["doji", "hammer"]) — the user picks which formations to test rather
+    than always getting every pattern back; omit for "all of them"."""
+    query = (
+        session.query(InstrumentActivity.activity_type, InstrumentActivity.activity, func.count(InstrumentActivity.id))
+        .filter(InstrumentActivity.instrument_id == instrument_id)
+        .filter(InstrumentActivity.timeframe.in_(timeframes))
+        .filter(InstrumentActivity.ts >= ts_from, InstrumentActivity.ts <= ts_to)
+    )
+    if patterns:
+        query = query.filter(InstrumentActivity.activity.in_(patterns))
+    return query.group_by(InstrumentActivity.activity_type, InstrumentActivity.activity).all()
+
+
+def intensity_values_by_pattern(
+    session, instrument_id: int, timeframes: Sequence[str], ts_from: datetime, ts_to: datetime,
+    patterns: Optional[Sequence[str]] = None,
+) -> "dict[str, List[float]]":
+    """Raw intensity values (InstrumentActivity.intensity — the wick/body
+    or range/body ratio each detector already computed, see
+    activity_engine.py's own *_INTENSITY dicts), grouped by pattern —
+    NULLs excluded (undefined/infinite-ratio patterns, see the column's
+    own docstring). A caller computes whatever summary it wants (the
+    occurrence-backtest UI's "Intensity Median" column) from this list;
+    this function only extracts, never aggregates, matching
+    LibPatternOutcomes.raw_values_by_pattern's same "raw data" convention."""
+    query = (
+        session.query(InstrumentActivity.activity, InstrumentActivity.intensity)
+        .filter(InstrumentActivity.instrument_id == instrument_id)
+        .filter(InstrumentActivity.timeframe.in_(timeframes))
+        .filter(InstrumentActivity.ts >= ts_from, InstrumentActivity.ts <= ts_to)
+    )
+    if patterns:
+        query = query.filter(InstrumentActivity.activity.in_(patterns))
+
+    by_pattern: "dict[str, List[float]]" = {}
+    for activity, intensity in query.all():
+        if intensity is None:
+            continue
+        by_pattern.setdefault(activity, []).append(float(intensity))
+    return by_pattern
 
 
 def seed_pattern_definitions(session_factory, catalog: Sequence[Tuple[str, str, str]]) -> None:

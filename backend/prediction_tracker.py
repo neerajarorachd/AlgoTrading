@@ -141,20 +141,56 @@ BULLISH_PATTERNS = {
     "stoch_bullish_cross", "double_bottom", "triple_bottom",
     "bullish_structure_shift", "bullish_break_of_structure",
     "ascending_triangle", "falling_wedge",
+    # Single/multi-candle patterns with an established directional bias
+    # (added 2026-09-14 so "backtest all candle and pattern formations"
+    # actually covers candlestick patterns, not just crossovers/graph
+    # formations — these fall through to the same generic ATR-based stop/
+    # target branch as a crossover, since they have no measured-move
+    # geometry of their own).
+    "hammer", "bullish_engulfing", "piercing_line", "tweezer_bottom",
+    "three_white_soldiers", "morning_star",
+    # 2026-09-15, explicit HINDCOPPER strategy test: "2 continuous bearish
+    # candles, both's high are below vwap, sell ... and mirror for buy" —
+    # unlike price_vwap_divergence/vwap_gap_fill (a 20-candle TREND, no
+    # directional lean of its own), a clean 2-candle VWAP rejection has an
+    # obvious bias: rejecting UP away from vwap is bullish.
+    "vwap_rejection_bull", "vwap_rejection_bull_strong",
+    # Early-detection variant, 2026-09-18: fires in real time on the
+    # second bottom's own first clean VWAP rejection, not waiting
+    # double_bottom's own 5-candle swing-confirmation lag. See
+    # [[hindcopper_double_top_backtest_investigation]].
+    "double_bottom_ed",
 }
 BEARISH_PATTERNS = {
     "rsi_cross_below_40", "macd_bearish_cross", "ma_death_cross",
     "stoch_bearish_cross", "double_top", "triple_top",
     "bearish_structure_shift", "bearish_break_of_structure",
     "descending_triangle", "rising_wedge",
+    "shooting_star", "bearish_engulfing", "dark_cloud_cover", "tweezer_top",
+    "three_black_crows", "evening_star",
+    "vwap_rejection_bear", "vwap_rejection_bear_strong",
+    # Early-detection variant, 2026-09-18: fires in real time on the
+    # second top's own first clean VWAP rejection, not waiting
+    # double_top's own 5-candle swing-confirmation lag. Validated live
+    # against real data as a better setup than either the plain
+    # confirmed double_top OR the loose-threshold early version -- see
+    # [[hindcopper_double_top_backtest_investigation]].
+    "double_top_ed",
 }
-# symmetrical_triangle and rectangle are deliberately NOT tracked — neither
-# has a directional bias until an actual breakout, which activity_engine.py
-# doesn't confirm (same "detect the shape, don't wait for a breakout"
-# stance as double_top/bottom); see activity_engine.CHANNEL_PATTERN_DIRECTION.
-# These have their own neckline-derived measured-move levels (see
+# Deliberately NOT tracked — no directional bias to trade on:
+# - doji: pure indecision, no lean either way.
+# - bb_squeeze/bb_widening/price_vwap_divergence/vwap_gap_fill: volatility/
+#   divergence metrics, not price-direction signals.
+# - swing_high/swing_low: structural markers, not trade signals.
+# - symmetrical_triangle and rectangle: no directional bias until an actual
+#   breakout, which activity_engine.py doesn't confirm (same "detect the
+#   shape, don't wait for a breakout" stance as double_top/bottom); see
+#   activity_engine.CHANNEL_PATTERN_DIRECTION.
+# double/triple top/bottom and the triangle/wedge graph formations have
+# their own neckline-derived measured-move levels (see
 # activity_engine.FORMATION_LEVEL_FUNCS) instead of the generic ATR-based
-# formula every other tracked pattern uses.
+# formula every other tracked pattern (including the candlestick ones
+# added above) uses.
 _GRAPH_FORMATIONS = set(FORMATION_LEVEL_FUNCS.keys())
 
 

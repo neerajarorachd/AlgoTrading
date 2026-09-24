@@ -131,13 +131,38 @@ def _decode_full_packet_depth(raw_levels):
     return buy_depth, sell_depth
 
 
+_DHAN_WS_EPOCH_IST_BIAS_SECONDS = 19800  # 5:30 — see _base_tick's own docstring
+
+
 def _base_tick(packet_type, exchange, security_id, ltp, epoch, fields=None):
+    """Real bug found and fixed 2026-09-17: Dhan's LIVE WebSocket feed's own
+    `epoch` field is NOT a true Unix/UTC epoch — cross-checked against
+    DhanBroker.get_historical_data's `timestamp` array (the REST /charts/
+    intraday endpoint), which correctly reproduces real UTC "now" to the
+    second, this WS `epoch` field consistently reads exactly +19800s (the
+    IST offset) ahead of the true instant, i.e. it's really "the correct
+    instant, computed as if IST were UTC." Confirmed live: real UTC now was
+    04:53:37 while `candles_today`'s freshest live-tick-driven row (the ONLY
+    consumer of this function) was already at 10:22 — an unbroken, gapless
+    sequence all day (no jump where backfill's correct-UTC rows would meet
+    live-tick rows), so nothing but this decode has been writing today's
+    candle timestamps. Left unfixed, this doesn't just mislabel the chart —
+    LibCandles.get_last_ts (feed/gap_fill.py's watermark) reads this same
+    inflated "future" timestamp and considers every symbol permanently
+    caught up, silently disabling the whole gap-fill safety net for any
+    symbol with at least one live tick. candles_historical is unaffected
+    (loaded via the same correct REST endpoint verified above, not this
+    live path). Subtracting the bias before conversion recovers the true
+    instant; only this one call site changes — get_historical_data's own
+    decode was independently verified correct and is untouched."""
     tick = {
         "type": {2: "Ticker Data", 4: "Quote Data", 8: "Full Data"}.get(packet_type),
         "exchange_segment": _EXCHANGE_SEGMENTS.get(exchange, exchange),
         "security_id": str(security_id),
         "LTP": float(ltp),
-        "timestamp": datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": datetime.fromtimestamp(
+            epoch - _DHAN_WS_EPOCH_IST_BIAS_SECONDS, timezone.utc,
+        ).isoformat().replace("+00:00", "Z"),
     }
     if fields:
         tick.update(fields)

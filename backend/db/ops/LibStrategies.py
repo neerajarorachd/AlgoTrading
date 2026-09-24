@@ -13,9 +13,13 @@ create/replace_tree accept):
       "conditions": [ {element_code, operator, compare_type,
                         compared_element_code, static_value,
                         static_value_min, static_value_max,
-                        static_value_step}, ... ],
+                        static_value_step, left_formula, right_formula},
+                       ... ],
       "groups": [ <same shape, recursively>, ... ],
     }
+left_formula/right_formula (added 2026-09-18) are the formula-based leaf
+shape — see StrategyCondition's own docstring in db/models.py and
+backend/condition_evaluator.py.
 A strategy's root group is the StrategyConditionGroup row with
 parent_group_id IS NULL for that strategy_id — not a separate column on
 Strategy (see Strategy's own docstring in db/models.py for why).
@@ -34,6 +38,14 @@ def get_all(session) -> List[Strategy]:
 
 def get_by_id(session, strategy_id: int) -> Optional[Strategy]:
     return session.query(Strategy).filter_by(id=strategy_id).one_or_none()
+
+
+def get_by_name(session, name: str) -> Optional[Strategy]:
+    """Used by strategy_generation.py's generate_best_patterns_strategy to
+    find an already-generated strategy to UPDATE in place (matched by its
+    deterministic generated name, e.g. "RS1_best_patterns_hindcopper")
+    rather than creating a new row every time it's regenerated."""
+    return session.query(Strategy).filter_by(name=name).one_or_none()
 
 
 def get_tree(session, strategy_id: int) -> Optional[dict]:
@@ -91,6 +103,8 @@ def _condition_to_dict(c: StrategyCondition) -> dict:
         "static_value_min": float(c.static_value_min) if c.static_value_min is not None else None,
         "static_value_max": float(c.static_value_max) if c.static_value_max is not None else None,
         "static_value_step": float(c.static_value_step) if c.static_value_step is not None else None,
+        "left_formula": c.left_formula,
+        "right_formula": c.right_formula,
     }
 
 
@@ -153,7 +167,7 @@ def _insert_group(session, strategy_id: int, parent_group_id: Optional[int], nod
     for cond in node.get("conditions", []):
         session.add(StrategyCondition(
             group_id=group.id,
-            element_code=cond["element_code"],
+            element_code=cond.get("element_code"),
             operator=cond.get("operator"),
             compare_type=cond.get("compare_type"),
             compared_element_code=cond.get("compared_element_code"),
@@ -161,6 +175,8 @@ def _insert_group(session, strategy_id: int, parent_group_id: Optional[int], nod
             static_value_min=cond.get("static_value_min"),
             static_value_max=cond.get("static_value_max"),
             static_value_step=cond.get("static_value_step"),
+            left_formula=cond.get("left_formula"),
+            right_formula=cond.get("right_formula"),
         ))
     for child in node.get("groups", []):
         _insert_group(session, strategy_id, group.id, child)
