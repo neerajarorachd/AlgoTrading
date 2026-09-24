@@ -8,6 +8,11 @@ import { NavLink, Outlet } from 'react-router-dom'
 const NAV_ITEMS = [
   { to: '/', label: 'Market Watch', end: true },
   { to: '/strategies', label: 'Strategies' },
+  { to: '/watchlists', label: 'Watchlists' },
+  { to: '/backtests', label: 'Backtests' },
+  { to: '/occurrence-backtest', label: 'Occurrence Backtest' },
+  { to: '/recommendations', label: 'Recommendations' },
+  { to: '/recommendation-systems', label: 'Recommendation Systems' },
 ]
 
 const linkStyle = ({ isActive }) => ({

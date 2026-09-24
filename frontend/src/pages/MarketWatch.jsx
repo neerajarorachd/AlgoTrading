@@ -170,6 +170,16 @@ export default function MarketWatch() {
     }
   }
 
+  // Rendered next to the Add button (inside SymbolRegisterForm) when the list
+  // is visible, or as its own small row when the list is hidden — either way,
+  // only shown once there's actually a chart open to apply it to.
+  const multiOpenCheckbox = openSymbols.length > 0 && (
+    <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+      <input type="checkbox" checked={multiOpenMode} onChange={handleMultiOpenModeChange} />
+      Multiple charts
+    </label>
+  )
+
   async function handleRemove(id) {
     await removeSymbol(id)
     setOpenSymbols((prev) => prev.filter((s) => s.id !== id))
@@ -246,38 +256,28 @@ export default function MarketWatch() {
           }
         }
       `}</style>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1>Market Watch</h1>
-        <button onClick={() => setListCollapsed((c) => !c)}>
-          {listCollapsed ? 'Show list' : 'Hide list'}
-        </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <h1 style={{ margin: 0 }}>Market Watch</h1>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <SymbolRegisterForm onRegistered={refresh}>
+            {multiOpenCheckbox}
+          </SymbolRegisterForm>
+          <button onClick={() => setListCollapsed((c) => !c)}>
+            {listCollapsed ? 'Show list' : 'Hide list'}
+          </button>
+        </div>
       </div>
       {!listCollapsed && (
-        <>
-          <SymbolRegisterForm onRegistered={refresh} />
-          <SymbolTable
-            symbols={symbols}
-            liveTicks={liveTicks}
-            backfillStatus={backfillStatus}
-            openSymbols={openSymbols}
-            onToggleOpen={handleToggleOpen}
-            onRemove={handleRemove}
-            focusedIndex={focusedIndex}
-            onFocusedIndexChange={setFocusedIndex}
-          />
-        </>
-      )}
-      {openSymbols.length > 0 && (
-        <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <label style={{ cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={multiOpenMode}
-              onChange={handleMultiOpenModeChange}
-            />{' '}
-            Multiple charts
-          </label>
-        </div>
+        <SymbolTable
+          symbols={symbols}
+          liveTicks={liveTicks}
+          backfillStatus={backfillStatus}
+          openSymbols={openSymbols}
+          onToggleOpen={handleToggleOpen}
+          onRemove={handleRemove}
+          focusedIndex={focusedIndex}
+          onFocusedIndexChange={setFocusedIndex}
+        />
       )}
       {openSymbols.length > 0 && (
         <div className="chart-grid" style={{ marginTop: 8 }}>

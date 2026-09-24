@@ -4,7 +4,7 @@ import { addSymbol, searchInstruments } from '../api/client.js'
 const SEARCH_DEBOUNCE_MS = 150
 const MIN_QUERY_LENGTH = 2
 
-export default function SymbolRegisterForm({ onRegistered }) {
+export default function SymbolRegisterForm({ onRegistered, children }) {
   const [symbol, setSymbol] = useState('')
   const [exchange, setExchange] = useState('NSE')
   const [segment, setSegment] = useState('EQUITY')
@@ -82,7 +82,7 @@ export default function SymbolRegisterForm({ onRegistered }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'flex-start' }}>
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: 0, alignItems: 'center' }}>
       <div style={{ position: 'relative' }}>
         <input
           placeholder="Symbol or company name (e.g. NALCO)"
@@ -133,6 +133,7 @@ export default function SymbolRegisterForm({ onRegistered }) {
       </select>
       <button type="submit" disabled={submitting}>Add</button>
       {error && <span style={{ color: 'crimson' }}>{error}</span>}
+      {children}
     </form>
   )
 }

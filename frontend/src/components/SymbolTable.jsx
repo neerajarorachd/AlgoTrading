@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 
 const DIRECTION_COLOR = { up: 'green', down: 'crimson', flat: undefined }
-const VISIBLE_ROWS = 7
+const VISIBLE_ROWS = 5
 const ROW_HEIGHT_PX = 33
 const MAX_OPEN_CHARTS = 4
 

@@ -23,7 +23,14 @@ function defaultCondition(elements) {
     static_value_min: null,
     static_value_max: null,
     static_value_step: null,
+    left_formula: null,
+    right_formula: null,
   }
+}
+
+function leafOfType(elements, type) {
+  const el = elements.find((e) => e.element_type === type) ?? elements[0]
+  return defaultCondition(el ? [el] : [])
 }
 
 function updateAtPath(root, path, updater) {
@@ -35,21 +42,36 @@ function updateAtPath(root, path, updater) {
   }
 }
 
-export default function StrategyBuilder({ tree, onChange, elements }) {
+// grammar: {fields, functions, constants} from GET /api/strategy-fields — the
+// Formula leaf's pickers, served from the evaluator's own Field enum so the
+// UI can never offer something the evaluator rejects.
+// leafKinds: which condition types a screen may use (default: all three).
+// Recommendation-system rules are ['formula'] — the live rule gate evaluates
+// formula leaves only.
+const ALL_LEAF_KINDS = ['event', 'numeric', 'formula']
+
+export function blankFormulaLeaf() {
+  return { ...defaultCondition([]), element_code: null, operator: '>', left_formula: '', right_formula: '' }
+}
+
+export default function StrategyBuilder({ tree, onChange, elements, grammar, leafKinds = ALL_LEAF_KINDS }) {
   function updateGroup(path, updater) {
     onChange(updateAtPath(tree, path, updater))
   }
   return (
     <GroupEditor
-      group={tree} path={[]} onUpdateGroup={updateGroup}
-      onRemoveGroup={null} elements={elements} depth={0}
+      group={tree} path={[]} onUpdateGroup={updateGroup} leafKinds={leafKinds}
+      onRemoveGroup={null} elements={elements} grammar={grammar} depth={0}
     />
   )
 }
 
-function GroupEditor({ group, path, onUpdateGroup, onRemoveGroup, elements, depth }) {
+function GroupEditor({ group, path, onUpdateGroup, onRemoveGroup, elements, grammar, leafKinds, depth }) {
   const setOperator = (operator) => onUpdateGroup(path, (g) => ({ ...g, operator }))
-  const addCondition = () => onUpdateGroup(path, (g) => ({ ...g, conditions: [...g.conditions, defaultCondition(elements)] }))
+  const formulaOnly = leafKinds.length === 1 && leafKinds[0] === 'formula'
+  const addCondition = () => onUpdateGroup(path, (g) => ({
+    ...g, conditions: [...g.conditions, formulaOnly ? blankFormulaLeaf() : defaultCondition(elements)],
+  }))
   const updateCondition = (i, cond) => onUpdateGroup(path, (g) => ({
     ...g, conditions: g.conditions.map((c, ci) => (ci === i ? cond : c)),
   }))
@@ -83,7 +105,7 @@ function GroupEditor({ group, path, onUpdateGroup, onRemoveGroup, elements, dept
 
       {group.conditions.map((cond, i) => (
         <ConditionEditor
-          key={i} condition={cond} elements={elements}
+          key={i} condition={cond} elements={elements} grammar={grammar} leafKinds={leafKinds}
           onChange={(next) => updateCondition(i, next)}
           onRemove={() => removeCondition(i)}
         />
@@ -92,7 +114,8 @@ function GroupEditor({ group, path, onUpdateGroup, onRemoveGroup, elements, dept
       {group.groups.map((sub, i) => (
         <GroupEditor
           key={i} group={sub} path={[...path, i]} onUpdateGroup={onUpdateGroup}
-          onRemoveGroup={() => removeSubgroup(i)} elements={elements} depth={depth + 1}
+          onRemoveGroup={() => removeSubgroup(i)} elements={elements} grammar={grammar}
+          leafKinds={leafKinds} depth={depth + 1}
         />
       ))}
 
@@ -104,7 +127,46 @@ function GroupEditor({ group, path, onUpdateGroup, onRemoveGroup, elements, dept
   )
 }
 
-function ConditionEditor({ condition, elements, onChange, onRemove }) {
+const leafRowStyle = {
+  display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+  padding: '6px 0', borderBottom: '1px dashed #e2e2e2',
+}
+
+// A formula is a free-text expression (e.g. mean(volume, 5) > order_size)
+// checked server-side by dry-running the real evaluator; the two pickers
+// just insert names from the served grammar so nobody has to remember them.
+function FormulaInput({ value, onChange, grammar, width }) {
+  const insert = (text) => {
+    if (!text) return
+    onChange(value && !/[\s(,]$/.test(value) ? `${value} ${text}` : `${value}${text}`)
+  }
+  return (
+    <span style={{ display: 'inline-flex', gap: 2 }}>
+      <input
+        value={value} spellCheck={false} placeholder="e.g. mean(volume, 5)"
+        onChange={(e) => onChange(e.target.value)} style={{ width }}
+      />
+      <select value="" title="insert a field" onChange={(e) => insert(e.target.value)}>
+        <option value="">+ field</option>
+        <optgroup label="Fields">
+          {(grammar?.fields ?? []).map((f) => <option key={f.value} value={f.value}>{f.value}</option>)}
+        </optgroup>
+        <optgroup label="Constants">
+          {(grammar?.constants ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+        </optgroup>
+      </select>
+      <select value="" title="insert a function" onChange={(e) => insert(e.target.value)}>
+        <option value="">+ fn</option>
+        {(grammar?.functions ?? []).map((f) => (
+          <option key={f.name} value={`${f.name}(`} title={f.description}>{f.signature}</option>
+        ))}
+      </select>
+    </span>
+  )
+}
+
+function ConditionEditor({ condition, elements, grammar, leafKinds, onChange, onRemove }) {
+  const isFormula = condition.left_formula != null
   const element = elements.find((e) => e.code === condition.element_code)
   const isNumeric = element?.element_type === 'numeric'
   const eventElements = elements.filter((e) => e.element_type === 'event')
@@ -157,11 +219,55 @@ function ConditionEditor({ condition, elements, onChange, onRemove }) {
     />
   )
 
+  const kind = isFormula ? 'formula' : isNumeric ? 'numeric' : 'event'
+  const kindSelect = (
+    <select
+      value={kind} title="condition type"
+      onChange={(e) => {
+        const next = e.target.value
+        if (next === kind) return
+        onChange(next === 'formula' ? blankFormulaLeaf() : leafOfType(elements, next))
+      }}
+    >
+      {leafKinds.includes('event') && <option value="event">Event</option>}
+      {leafKinds.includes('numeric') && <option value="numeric">Indicator</option>}
+      {leafKinds.includes('formula') && <option value="formula">Formula</option>}
+    </select>
+  )
+
+  if (isFormula) {
+    const op = condition.operator
+    return (
+      <div style={leafRowStyle}>
+        {kindSelect}
+        <FormulaInput
+          value={condition.left_formula} grammar={grammar} width={220}
+          onChange={(v) => onChange({ ...condition, left_formula: v })}
+        />
+        <select
+          value={op ?? ''}
+          onChange={(e) => {
+            const next = e.target.value || null
+            onChange({ ...condition, operator: next, right_formula: next ? (condition.right_formula ?? '') : null })
+          }}
+        >
+          <option value="">(formula is itself a comparison)</option>
+          {OPERATORS.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+        {op != null && (
+          <FormulaInput
+            value={condition.right_formula ?? ''} grammar={grammar} width={140}
+            onChange={(v) => onChange({ ...condition, right_formula: v })}
+          />
+        )}
+        <button type="button" onClick={onRemove} style={{ marginLeft: 'auto' }} title="Remove condition">×</button>
+      </div>
+    )
+  }
+
   return (
-    <div style={{
-      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
-      padding: '6px 0', borderBottom: '1px dashed #e2e2e2',
-    }}>
+    <div style={leafRowStyle}>
+      {kindSelect}
       <select value={condition.element_code} onChange={(e) => handleElementChange(e.target.value)}>
         <optgroup label="Events (fired / not fired)">
           {eventElements.map((e) => <option key={e.code} value={e.code}>{e.code}</option>)}
