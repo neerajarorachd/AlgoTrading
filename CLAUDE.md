@@ -173,15 +173,14 @@ twice-daily refresh cycle rather than a static `.env` value. Full plan:
   whenever tokens are refreshed and need re-mirroring). Confirmed in SQL
   Server: `DHAN_NEERAJ` account + all 5 tokens, `LastRefreshedAt` matching
   Trading.db exactly. **Found while doing this**: Trading's own
-  `dhan_token.timer` had been "succeeding" (exit 0) every run since
-  2026-10-01 without actually refreshing anything — `LastRefreshedAt` was
-  stuck 3 days stale despite 4 more scheduled runs in between. Root cause
-  not confirmed (not debugged — Trading's code is read-only to us), but the
-  pattern is consistent with the refresh needing a still-valid token to
-  refresh FROM and having none left; resolved when the user manually
-  pasted in a freshly-obtained token and the next manually-triggered run
-  (`sudo systemctl start dhan_token.service`) refreshed all 5 rows
-  normally. Worth watching for a repeat.
+  `dhan_token.timer` had "succeeded" (exit 0) every run since 2026-10-01
+  without actually refreshing anything — `LastRefreshedAt` was stuck 3
+  days stale despite 4 more scheduled runs in between. **Not a bug** —
+  per the user, the underlying Dhan API call occasionally just fails
+  on its own, an expected, occasional occurrence, not something to chase.
+  Resolved the same way it normally would: the user manually pasted in a
+  freshly-obtained token, then a manually-triggered run (`sudo systemctl
+  start dhan_token.service`) refreshed all 5 rows normally.
 - **Not yet done**: `~/Trading/LibSQLServerTokenMirror.py` (the one
   deliberate, user-approved exception to "don't touch Trading's code" — a
   small, isolated, best-effort mirror called from
