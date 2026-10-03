@@ -325,8 +325,8 @@ prefer the SQLite option above for local dev so this doesn't block work.
   lifetime, `disconnect()` is never called in normal operation) — will matter
   once the deferred `session_scheduler` (connect/disconnect around market
   hours) is built.
-- Local git repo has commits but nothing has been pushed to
-  `origin` (`https://github.com/neerajarorachd/AlgoTrading.git`) yet.
+- Pushed to `origin` (`https://github.com/neerajarorachd/AlgoTrading.git`)
+  for the first time 2026-10-04 (70 commits, `master`).
 - Decide on persistent tunnel (autossh) vs. manual `ssh -L` per dev session.
 - Dhan access tokens are short-lived (observed ~24h) — `.env`'s
   `DHAN_ACCESS_TOKEN` will need refreshing periodically; no refresh
