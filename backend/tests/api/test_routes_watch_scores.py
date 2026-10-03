@@ -18,7 +18,9 @@ def test_a_fresh_instrument_with_no_activity_is_quiet(client):
     instrument_id = _register(client)
     resp = client.get("/api/watch-scores")
     row = next(r for r in resp.get_json()["scores"] if r["instrument_id"] == instrument_id)
-    assert row == {"instrument_id": instrument_id, "bull_score": 0, "bear_score": 0, "bucket": "quiet"}
+    assert row == {
+        "instrument_id": instrument_id, "bull_score": 0, "bear_score": 0, "bucket": "quiet", "volatility_factor": 1.0,
+    }
 
 
 def test_rejects_an_invalid_timeframe(client):

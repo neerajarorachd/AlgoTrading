@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
-from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
+from db.models import CandleIndicators, InstrumentActivity, PatternDefinition, SubscribedSymbol
 from watch_scoring import (
-    BUCKET_COLORS, classify_bucket, load_pattern_weights, score_instrument, score_instruments,
+    BUCKET_COLORS, RANGE_BASELINE_CANDLES, classify_bucket, load_pattern_weights, score_instrument,
+    score_instruments, volatility_factor,
 )
 
 T0 = datetime(2026, 10, 4, 4, 0, tzinfo=timezone.utc)
@@ -124,7 +125,9 @@ def test_neutral_pattern_scores_neither_side(session_factory):
 
     with session_factory() as session:
         result = score_instrument(session, instrument_id, TF, 10, load_pattern_weights(session))
-    assert result == {"instrument_id": instrument_id, "bull_score": 0, "bear_score": 0, "bucket": "quiet"}
+    assert result == {
+        "instrument_id": instrument_id, "bull_score": 0, "bear_score": 0, "bucket": "quiet", "volatility_factor": 1.0,
+    }
 
 
 def test_same_pattern_on_different_candles_counts_each_occurrence(session_factory):
@@ -217,3 +220,101 @@ def test_score_instruments_scores_each_one_independently(session_factory):
         results = {r["instrument_id"]: r for r in score_instruments(session, [a, b], TF)}
     assert results[a]["bucket"] == "mild_bull"
     assert results[b]["bucket"] == "mild_bear"
+
+
+# ------------------------------------------------------------------ volatility_factor
+
+def _indicator_row(instrument_id, candle_index, atr=None, bb_upper=None, bb_middle=None, bb_lower=None):
+    return CandleIndicators(
+        instrument_id=instrument_id, timeframe=TF, ts=T0 + timedelta(minutes=3 * candle_index),
+        atr=atr, bb_upper=bb_upper, bb_middle=bb_middle, bb_lower=bb_lower,
+    )
+
+
+def test_volatility_factor_is_neutral_with_fewer_than_2_rows(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        session.add(_indicator_row(instrument_id, 0, atr=5.0))
+        session.commit()
+
+    with session_factory() as session:
+        assert volatility_factor(session, instrument_id, TF) == 1.0
+
+
+def test_volatility_factor_is_neutral_with_no_indicator_rows_at_all(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        assert volatility_factor(session, instrument_id, TF) == 1.0
+
+
+def test_volatility_factor_above_1_when_atr_expanded_above_its_baseline(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        for i in range(RANGE_BASELINE_CANDLES - 1):
+            session.add(_indicator_row(instrument_id, i, atr=2.0))  # flat baseline
+        session.add(_indicator_row(instrument_id, RANGE_BASELINE_CANDLES - 1, atr=6.0))  # latest, 3x baseline
+        session.commit()
+
+    with session_factory() as session:
+        factor = volatility_factor(session, instrument_id, TF)
+    assert factor > 1.0
+
+
+def test_volatility_factor_below_1_when_atr_contracted_below_its_baseline(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        for i in range(RANGE_BASELINE_CANDLES - 1):
+            session.add(_indicator_row(instrument_id, i, atr=4.0))
+        session.add(_indicator_row(instrument_id, RANGE_BASELINE_CANDLES - 1, atr=1.0))  # latest, well below baseline
+        session.commit()
+
+    with session_factory() as session:
+        factor = volatility_factor(session, instrument_id, TF)
+    assert factor < 1.0
+
+
+def test_volatility_factor_uses_bb_width_when_atr_is_missing(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        for i in range(RANGE_BASELINE_CANDLES - 1):
+            session.add(_indicator_row(instrument_id, i, bb_upper=102, bb_middle=100, bb_lower=98))  # width 0.04
+        # latest: much wider bands -- width (110-90)/100 = 0.20
+        session.add(_indicator_row(instrument_id, RANGE_BASELINE_CANDLES - 1, bb_upper=110, bb_middle=100, bb_lower=90))
+        session.commit()
+
+    with session_factory() as session:
+        factor = volatility_factor(session, instrument_id, TF)
+    assert factor > 1.0
+
+
+def test_volatility_factor_is_clamped_to_the_configured_range(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        for i in range(RANGE_BASELINE_CANDLES - 1):
+            session.add(_indicator_row(instrument_id, i, atr=1.0))
+        session.add(_indicator_row(instrument_id, RANGE_BASELINE_CANDLES - 1, atr=100.0))  # extreme spike
+        session.commit()
+
+    with session_factory() as session:
+        factor = volatility_factor(session, instrument_id, TF)
+    assert factor == 2.0  # VOLATILITY_FACTOR_MAX, not the raw ~100x ratio
+
+
+def test_score_instrument_scales_both_bull_and_bear_by_the_same_volatility_factor(session_factory):
+    _seed_patterns(session_factory, ("hammer", "single_candle"), ("shooting_star", "single_candle"))
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        session.add(_activity(instrument_id, 0, "hammer"))
+        session.add(_activity(instrument_id, 1, "shooting_star"))
+        for i in range(RANGE_BASELINE_CANDLES - 1):
+            session.add(_indicator_row(instrument_id, i, atr=2.0))
+        session.add(_indicator_row(instrument_id, RANGE_BASELINE_CANDLES - 1, atr=4.0))  # 2x baseline -> clamped factor 2.0
+        session.commit()
+
+    with session_factory() as session:
+        result = score_instrument(session, instrument_id, TF, 10, load_pattern_weights(session))
+    assert result["volatility_factor"] == 2.0
+    assert result["bull_score"] == 2.0  # 1 (hammer weight) * 2.0
+    assert result["bear_score"] == 2.0  # 1 (shooting_star weight) * 2.0
+    # direction/bucket comparison is unaffected -- both sides scaled equally, still tied -> choppy
+    assert result["bucket"] == "choppy"
