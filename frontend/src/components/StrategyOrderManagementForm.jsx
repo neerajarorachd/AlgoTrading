@@ -5,6 +5,13 @@
 // [[backtest_run_execution_wiring]]). All nullable: an empty field here
 // means "use the engine default" server-side, so a strategy can set only
 // what it cares about.
+//
+// Each sub-section is individually collapsible (explicit instruction,
+// 2026-10-03: there are 8 of these and most strategies only touch one or
+// two) — Collapsible's `boxed` look replaces the old <fieldset>/<legend>
+// pair 1:1, same border/padding, just now clickable.
+
+import Collapsible from './Collapsible.jsx'
 
 const SL_FORMULA_TYPES = [
   { value: '', label: '(default: ATR/neckline)' },
@@ -70,7 +77,6 @@ function timeField(values, onChange, key, label) {
   )
 }
 
-const fieldsetStyle = { border: '1px solid #ddd', borderRadius: 6, padding: 12, marginBottom: 12 }
 const rowStyle = { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }
 
 export default function StrategyOrderManagementForm({ values, onChange }) {
@@ -79,8 +85,7 @@ export default function StrategyOrderManagementForm({ values, onChange }) {
 
   return (
     <div>
-      <fieldset style={fieldsetStyle}>
-        <legend>Stop loss / target</legend>
+      <Collapsible title="Stop loss / target" boxed defaultOpen={false}>
         <div style={rowStyle}>
           <label>
             Direction<br />
@@ -120,10 +125,9 @@ export default function StrategyOrderManagementForm({ values, onChange }) {
           {targetMode === 'risk_reward' &&
             numField(values, onChange, 'target_risk_reward_ratio', 'Risk:reward ratio')}
         </div>
-      </fieldset>
+      </Collapsible>
 
-      <fieldset style={fieldsetStyle}>
-        <legend>Position sizing &amp; risk</legend>
+      <Collapsible title="Position sizing & risk" boxed defaultOpen={false}>
         <div style={rowStyle}>
           {numField(values, onChange, 'capital_per_trade', 'Capital pool (₹)', { step: '1000' })}
           {numField(values, onChange, 'max_vol_per_call', 'Max qty per order')}
@@ -139,38 +143,34 @@ export default function StrategyOrderManagementForm({ values, onChange }) {
           {numField(values, onChange, 'exit_at_loss_count', 'N (loss count)')}
           {numField(values, onChange, 'round_trip_cost_rate', 'Round-trip cost rate', { step: '0.0001' })}
         </div>
-      </fieldset>
+      </Collapsible>
 
-      <fieldset style={fieldsetStyle}>
-        <legend>Order-sequence margin multipliers</legend>
+      <Collapsible title="Order-sequence margin multipliers" boxed defaultOpen={false}>
         <div style={rowStyle}>
           {numField(values, onChange, 'first_order_quantity', '1st order fixed qty (overrides sizing)')}
           {numField(values, onChange, 'order1_margin_multiplier', '1st order multiplier', { step: '0.5' })}
           {numField(values, onChange, 'order2_margin_multiplier', '2nd order multiplier', { step: '0.5' })}
           {numField(values, onChange, 'order3_margin_multiplier', '3rd+ order multiplier', { step: '0.5' })}
         </div>
-      </fieldset>
+      </Collapsible>
 
-      <fieldset style={fieldsetStyle}>
-        <legend>Trading window (IST)</legend>
+      <Collapsible title="Trading window (IST)" boxed defaultOpen={false}>
         <div style={rowStyle}>
           {timeField(values, onChange, 'trading_start_time', 'New orders from')}
           {timeField(values, onChange, 'new_order_end_time', 'New orders until')}
           {timeField(values, onChange, 'trading_end_time', 'Square-off at')}
         </div>
-      </fieldset>
+      </Collapsible>
 
-      <fieldset style={fieldsetStyle}>
-        <legend>Risk management (from the HINDCOPPER double_top investigation)</legend>
+      <Collapsible title="Risk management (from the HINDCOPPER double_top investigation)" boxed defaultOpen={false}>
         <div style={rowStyle}>
           {numField(values, onChange, 'max_daily_loss_pct', 'Max daily GROSS loss (e.g. 0.01 = 1%, proven to help)', { step: '0.001', width: 160 })}
           {checkField(values, onChange, 'compounding', 'Compounding (size off running fund pool)')}
           {checkField(values, onChange, 'itemized_costs', 'Real itemized costs (brokerage/STT/exchange/SEBI/stamp/GST)')}
         </div>
-      </fieldset>
+      </Collapsible>
 
-      <fieldset style={fieldsetStyle}>
-        <legend>Multi-candle fills &amp; liquidity</legend>
+      <Collapsible title="Multi-candle fills & liquidity" boxed defaultOpen={false}>
         <div style={rowStyle}>
           {checkField(values, onChange, 'spread_fills', 'Spread fills across multiple candles')}
           {numField(values, onChange, 'max_fill_candles', 'Max candles to fill entry', { width: 90 })}
@@ -178,23 +178,27 @@ export default function StrategyOrderManagementForm({ values, onChange }) {
           {numField(values, onChange, 'max_fill_price_drift_pct', 'Abandon fill if price drifts (fraction)', { step: '0.0005', width: 130 })}
           {numField(values, onChange, 'liquidity_safety_divisor', 'Liquidity divisor (qty capped at volume / N)', { width: 130 })}
         </div>
-      </fieldset>
+      </Collapsible>
 
-      <fieldset style={fieldsetStyle}>
-        <legend>Volume entry gate</legend>
+      <Collapsible title="Volume entry gate" boxed defaultOpen={false}>
         <div style={rowStyle}>
           {numField(values, onChange, 'min_avg_volume_multiple', 'Refuse entry unless mean volume ≥ N × order qty', { step: '0.1', width: 220 })}
           {numField(values, onChange, 'min_avg_volume_lookback', 'Candles to average (default 5)', { width: 90 })}
         </div>
-      </fieldset>
+      </Collapsible>
 
-      <fieldset style={fieldsetStyle}>
-        <legend>Experimental (tested, not recommended as defaults)</legend>
+      <Collapsible title="Pattern detection" boxed defaultOpen={false}>
+        <div style={rowStyle}>
+          {numField(values, onChange, 'swing_lookback', 'Swing confirm window (candles each side, default 5)', { width: 90 })}
+        </div>
+      </Collapsible>
+
+      <Collapsible title="Experimental (tested, not recommended as defaults)" boxed defaultOpen={false}>
         <div style={rowStyle}>
           {checkField(values, onChange, 'exit_on_macd_reversal', 'Exit early on MACD reversal — made results worse on 1min')}
           {textField(values, onChange, 'win_streak_multipliers', 'Win-streak size multipliers — did not reliably help', { placeholder: '0.5,1.0,2.0,3.0,4.0', width: 200 })}
         </div>
-      </fieldset>
+      </Collapsible>
     </div>
   )
 }
@@ -215,7 +219,7 @@ export const EMPTY_ORDER_MANAGEMENT_FORM = {
   max_daily_loss_pct: null, exit_on_macd_reversal: false, win_streak_multipliers: null,
   spread_fills: false, max_fill_candles: null, max_exit_candles: null, max_fill_price_drift_pct: null,
   liquidity_safety_divisor: null, itemized_costs: false, compounding: false,
-  min_avg_volume_multiple: null, min_avg_volume_lookback: null,
+  min_avg_volume_multiple: null, min_avg_volume_lookback: null, swing_lookback: null,
 }
 
 export function orderManagementValuesFromStrategy(s) {

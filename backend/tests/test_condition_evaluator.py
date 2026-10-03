@@ -66,6 +66,25 @@ def test_compound_formula_matches_the_chartink_example(df):
     assert bool(result.iloc[2]) == expected[2]
 
 
+def test_comparison_operator_cannot_bind_tighter_than_arithmetic_on_either_side(df):
+    # Builder concern, 2026-10-03: in a formula like
+    # "slope(vwap, 3) > open[-1] - open[-2]", could ">" end up binding
+    # before "-" and silently evaluate as "(slope(...) > open[-1]) -
+    # open[-2]"? No -- left_formula and right_formula are each parsed and
+    # evaluated as PURE arithmetic (no comparison token ever appears in
+    # either string being ast.parse'd), and operator_symbol is applied
+    # only AFTERWARDS, outside any parsing (see evaluate_condition). So
+    # there is no expression in which ">" could ever bind before "-" in
+    # the first place -- this is safe by construction, not by precedence
+    # rules, and this test locks that in.
+    result = evaluate_condition("vwap", ">", "open[-1] - open[-2]", df)
+    expected = [df["vwap"][i] > (df["open"][i - 1] - df["open"][i - 2]) if i >= 2 else None
+                for i in range(len(df))]
+    assert bool(result.iloc[2]) == expected[2]
+    assert bool(result.iloc[3]) == expected[3]
+    assert bool(result.iloc[4]) == expected[4]
+
+
 def test_simple_indicator_vs_static_number(df):
     result = evaluate_condition("rsi", ">=", "45", df)
     assert list(result) == [True, True, False, True, False]

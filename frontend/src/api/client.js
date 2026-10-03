@@ -13,6 +13,19 @@ async function request(path, options) {
 
 export const listSymbols = () => request('/api/symbols')
 
+// Recent events for one instrument (doji formed, MACD crossover, etc, newest
+// first) -- the Market Watch per-row events list.
+export const getRecentActivities = (instrumentId, limit) => {
+  const params = new URLSearchParams({ instrument_id: instrumentId })
+  if (limit) params.set('limit', limit)
+  return request(`/api/activities/recent?${params.toString()}`)
+}
+
+// Today's event counts by category ({candle_pattern, indicator}) -- the
+// Market Watch row's "5 candle formations, 3 indicator crossovers" badges.
+export const getActivityCounts = (instrumentId) =>
+  request(`/api/activities/counts?instrument_id=${instrumentId}`)
+
 export const searchInstruments = (query, exchange, segment) => {
   const params = new URLSearchParams({ q: query, exchange, segment })
   return request(`/api/instruments/search?${params.toString()}`)
@@ -187,3 +200,13 @@ export const generateBestPatternsStrategy = (instrumentId, timeframe, strategyNa
       top_n: topN, strategy_type: strategyType,
     }),
   })
+
+// Engine Settings admin -- promotes a backtest-proven ActivityEngine
+// parameter (e.g. swing_lookback) into the one value live trading's shared
+// engine actually reads.
+export const listEngineSettings = () => request('/api/engine-settings')
+
+export const updateEngineSetting = (key, value) =>
+  request(`/api/engine-settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) })
+
+export const resetEngineSetting = (key) => request(`/api/engine-settings/${key}`, { method: 'DELETE' })

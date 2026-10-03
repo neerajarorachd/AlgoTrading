@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/occurrence-backtest', label: 'Occurrence Backtest' },
   { to: '/recommendations', label: 'Recommendations' },
   { to: '/recommendation-systems', label: 'Recommendation Systems' },
+  { to: '/engine-settings', label: 'Engine Settings' },
 ]
 
 const linkStyle = ({ isActive }) => ({

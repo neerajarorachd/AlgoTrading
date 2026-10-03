@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import AppShell from './AppShell.jsx'
 import Backtests from './pages/Backtests.jsx'
+import EngineSettings from './pages/EngineSettings.jsx'
 import MarketWatch from './pages/MarketWatch.jsx'
 import OccurrenceBacktest from './pages/OccurrenceBacktest.jsx'
 import RecommendationSystems from './pages/RecommendationSystems.jsx'
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="occurrence-backtest" element={<OccurrenceBacktest />} />
           <Route path="recommendations" element={<Recommendations />} />
           <Route path="recommendation-systems" element={<RecommendationSystems />} />
+          <Route path="engine-settings" element={<EngineSettings />} />
         </Route>
       </Routes>
     </BrowserRouter>

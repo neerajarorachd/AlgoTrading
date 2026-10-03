@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Index, Integer, Numeric, SmallInteger, String, Time, UniqueConstraint,
+    BigInteger, Boolean, Date, DateTime, Index, Integer, Numeric, SmallInteger, String, Time, UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -355,6 +355,43 @@ class InstrumentActivity(Base):
             "instrument_id", "timeframe", "ts", "activity", name="uq_instrument_activity",
         ),
         Index("ix_instrument_activity_instrument_ts", "instrument_id", "ts"),
+    )
+
+
+class InstrumentActivityDailyCount(Base):
+    """Running per-(instrument, IST trading day) event counts by category --
+    a STORED rollup for the Market Watch row's quick-glance "5 candle
+    formations, 3 indicator crossovers" badges (explicit instruction,
+    2026-10-01: "better to store date, instrument, cs, ind" than recompute
+    live). Incremented at write time (db/ops/LibActivities.py's
+    persist_bulk/persist_one, in the SAME transaction as the InstrumentActivity
+    insert itself), not a COUNT(*) GROUP BY scan on every page load — same
+    "precompute once, cheap lookup forever" philosophy as GuidingScenario
+    (see [[guiding_scenarios_redesign]]), just incremental instead of batch.
+
+    trading_date is the candle's own IST calendar date (this table's one
+    deliberate denormalization — every other activity table keys by the raw
+    UTC `ts`), because that's the boundary a trader actually thinks in
+    ("today's events"), matching condition_evaluator.py's own
+    TRADING_DATE_COLUMN convention elsewhere in this codebase.
+
+    Only the two categories the Market Watch badges show are tracked
+    (candle_pattern, indicator) — not a generic per-activity_type table —
+    deliberately narrow to match what's actually displayed; add a column
+    if/when a third category badge is wanted, same as every other
+    additive column in this schema.
+    """
+
+    __tablename__ = "instrument_activity_daily_counts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    trading_date: Mapped[date] = mapped_column(Date, nullable=False)
+    candle_pattern_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    indicator_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "trading_date", name="uq_instrument_activity_daily_counts"),
     )
 
 
@@ -1284,6 +1321,16 @@ class Strategy(Base):
     # min_avg_volume_multiple/min_avg_volume_lookback.
     min_avg_volume_multiple: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
     min_avg_volume_lookback: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Per-strategy override of activity_engine.ActivityEngine's swing_lookback
+    # (how many candles on EACH side confirm a swing high/low, and so how
+    # far back structure patterns like Higher-High/Higher-Low BOS can only
+    # ever confirm) -- explicit instruction, 2026-10-03: "we can make it
+    # variable so that we can test on 3 as well as 7 candles too." Previously
+    # only a single GLOBAL EngineSetting row (live trading + every backtest
+    # sharing one value) with no way to vary it per backtest run. NULL keeps
+    # that global/module default, same as every other field here -- see
+    # EngineConfig.swing_lookback / engine_config_from_strategy.
+    swing_lookback: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class StrategyConditionGroup(Base):

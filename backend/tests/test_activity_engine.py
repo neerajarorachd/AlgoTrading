@@ -1847,6 +1847,28 @@ def test_engine_uses_a_calibrated_swing_lookback_override(session_factory):
     assert "swing_high" in activities
 
 
+def test_engine_constructor_override_wins_over_the_global_engine_setting(session_factory):
+    # A per-call override (order_backtest.py's engine_config_from_strategy,
+    # 2026-10-03: "test on 3 as well as 7 candles too") takes precedence
+    # over whatever's stored in engine_settings -- so a backtest sweep can
+    # try several values without ever touching the shared/global row the
+    # live engine reads.
+    with session_factory() as session:
+        session.add(EngineSetting(key="swing_lookback", value=2, description="global override"))
+        session.commit()
+
+    engine = ActivityEngine(session_factory, swing_lookback=7)
+    assert engine.swing_lookback == 7
+
+
+def test_engine_constructor_override_never_reads_or_touches_engine_settings(session_factory):
+    # No engine_settings row exists at all here -- an override must not
+    # require load_engine_settings to succeed/return anything for it to win.
+    engine = ActivityEngine(session_factory, swing_lookback=3)
+    assert engine.swing_lookback == 3
+    assert load_engine_settings(session_factory) == {}  # untouched
+
+
 # --------------------------------------------------------------------- indicator snapshot (candle_indicators)
 
 def test_engine_buffers_an_indicator_snapshot_every_candle_unconditionally(session_factory):

@@ -1,14 +1,25 @@
 """InstrumentActivity + PatternDefinition reads/writes."""
 from __future__ import annotations
 
-from datetime import datetime
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 from typing import List, Optional, Sequence, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
-from db.models import InstrumentActivity, PatternDefinition
+from db.models import InstrumentActivity, InstrumentActivityDailyCount, PatternDefinition
 from db.session import session_scope
+
+# Local copy of the same constant every other module in this codebase
+# defines for itself (order_backtest.py, condition_evaluator.py, ...) rather
+# than importing one shared module — established convention here.
+_IST_OFFSET = timedelta(hours=5, minutes=30)
+_DAILY_COUNT_CATEGORIES = ("candle_pattern", "indicator")
+
+
+def _trading_date(ts: datetime) -> date:
+    return (ts + _IST_OFFSET).date()
 
 
 def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[InstrumentActivity]:
@@ -18,6 +29,69 @@ def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[Inst
         .order_by(InstrumentActivity.ts)
         .all()
     )
+
+
+def get_daily_counts(session, instrument_id: int, trading_date: date) -> dict:
+    """{"candle_pattern": N, "indicator": M} for one instrument/day, read
+    straight from the stored rollup (see InstrumentActivityDailyCount's own
+    docstring) -- the Market Watch row's count badges. A day with no row
+    yet (nothing detected, or pre-dates this feature and hasn't been
+    backfilled -- see scripts/backfill_activity_daily_counts.py) reads as
+    all zeros, same "None/0 until there's data" convention as elsewhere."""
+    row = session.query(InstrumentActivityDailyCount).filter_by(
+        instrument_id=instrument_id, trading_date=trading_date,
+    ).one_or_none()
+    if row is None:
+        return {"candle_pattern": 0, "indicator": 0}
+    return {"candle_pattern": row.candle_pattern_count, "indicator": row.indicator_count}
+
+
+def _bump_daily_counts(session, rows: List[dict]) -> None:
+    """Aggregates the rows just inserted by (instrument_id, trading_date,
+    category) and upserts InstrumentActivityDailyCount in the SAME
+    transaction as the activity insert itself -- called from persist_bulk/
+    persist_one below, never on its own."""
+    deltas: "dict[Tuple[int, date, str], int]" = defaultdict(int)
+    for row in rows:
+        if row["activity_type"] not in _DAILY_COUNT_CATEGORIES:
+            continue
+        deltas[(row["instrument_id"], _trading_date(row["ts"]), row["activity_type"])] += 1
+    if not deltas:
+        return
+
+    buckets = {(instrument_id, trading_date) for instrument_id, trading_date, _ in deltas}
+    existing = {
+        (r.instrument_id, r.trading_date): r
+        for r in session.query(InstrumentActivityDailyCount).filter(
+            InstrumentActivityDailyCount.instrument_id.in_({b[0] for b in buckets}),
+            InstrumentActivityDailyCount.trading_date.in_({b[1] for b in buckets}),
+        )
+    }
+    for (instrument_id, trading_date, activity_type), delta in deltas.items():
+        row = existing.get((instrument_id, trading_date))
+        if row is None:
+            row = InstrumentActivityDailyCount(
+                instrument_id=instrument_id, trading_date=trading_date,
+                candle_pattern_count=0, indicator_count=0,
+            )
+            session.add(row)
+            existing[(instrument_id, trading_date)] = row
+        if activity_type == "candle_pattern":
+            row.candle_pattern_count += delta
+        else:
+            row.indicator_count += delta
+
+
+def get_recent(session, instrument_id: int, timeframe: Optional[str] = None, limit: int = 20) -> List[InstrumentActivity]:
+    """Newest-first, for the Market Watch per-stock event list -- unlike
+    get_for_instrument (one timeframe, chronological, used by analysis
+    code), this optionally spans all of an instrument's timeframes at once
+    (1/3/5min all fire independently) since a watch-page user wants "what
+    just happened on this stock," not one timeframe's own series."""
+    query = session.query(InstrumentActivity).filter_by(instrument_id=instrument_id)
+    if timeframe is not None:
+        query = query.filter_by(timeframe=timeframe)
+    return query.order_by(InstrumentActivity.ts.desc()).limit(limit).all()
 
 
 def count_by_pattern(
@@ -100,6 +174,7 @@ def persist_bulk(session_factory, rows: List[dict]) -> None:
         with session_scope(session_factory) as session:
             session.add_all([InstrumentActivity(**row) for row in rows])
             session.flush()
+            _bump_daily_counts(session, rows)
     except IntegrityError:
         # a concurrent writer (e.g. a backfill re-run touching the same
         # candles) already recorded one of these exact activities — fall
@@ -119,6 +194,7 @@ def persist_one(session_factory, row: dict) -> None:
                 ).one_or_none()
                 if exists is None:
                     session.add(InstrumentActivity(**row))
+                    _bump_daily_counts(session, [row])
                 session.flush()
             session.commit()
         except IntegrityError:

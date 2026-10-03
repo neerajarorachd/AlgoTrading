@@ -1259,6 +1259,18 @@ ENGINE_SETTING_DEFAULTS: Dict[str, float] = {
     "swing_lookback": float(_SWING_LOOKBACK),
 }
 
+# Human-readable text for the Engine Settings admin page (routes_engine_
+# settings.py) — kept alongside the defaults above so the two never drift
+# apart; extend both dicts together when a new tunable parameter is added.
+ENGINE_SETTING_DESCRIPTIONS: Dict[str, str] = {
+    "swing_lookback": (
+        "Candles required on EACH side of a swing high/low before it's confirmed "
+        "(also the confirmation lag for structure patterns like BOS/CHoCH). "
+        "Compare candidate values per-run via Strategy.swing_lookback in a backtest "
+        "before promoting a winner here for live."
+    ),
+}
+
 
 def load_engine_settings(session_factory) -> Dict[str, float]:
     """Reads every stored override from engine_settings. A key absent from
@@ -1292,13 +1304,21 @@ class ActivityEngine:
     activities is one bulk insert, not a thousand round-trips.
     """
 
-    def __init__(self, session_factory):
+    def __init__(self, session_factory, swing_lookback: Optional[int] = None):
         self.session_factory = session_factory
-        settings = load_engine_settings(session_factory)
-        # swing_lookback is the first parameter wired to engine_settings —
-        # falls back to the module default (ENGINE_SETTING_DEFAULTS) when
-        # nothing's been calibrated yet
-        self.swing_lookback = int(settings.get("swing_lookback", ENGINE_SETTING_DEFAULTS["swing_lookback"]))
+        # swing_lookback precedence: an explicit per-call override (a
+        # backtest run's own Strategy.swing_lookback, see order_backtest.py's
+        # engine_config_from_strategy) wins first, then the GLOBAL
+        # engine_settings row (live trading, and any backtest that doesn't
+        # override), then the module default — same three-tier precedence
+        # every other per-strategy-overridable knob in this project uses.
+        # Passing an override here never reads or touches engine_settings,
+        # so a backtest sweep can never affect the live engine's own value.
+        if swing_lookback is not None:
+            self.swing_lookback = int(swing_lookback)
+        else:
+            settings = load_engine_settings(session_factory)
+            self.swing_lookback = int(settings.get("swing_lookback", ENGINE_SETTING_DEFAULTS["swing_lookback"]))
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
         self._buffer: List[dict] = []

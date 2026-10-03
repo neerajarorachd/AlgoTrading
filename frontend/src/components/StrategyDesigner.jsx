@@ -6,6 +6,7 @@ import StrategyBuilder, { emptyGroup } from './StrategyBuilder.jsx'
 import StrategyOrderManagementForm, {
   EMPTY_ORDER_MANAGEMENT_FORM, orderManagementValuesFromStrategy,
 } from './StrategyOrderManagementForm.jsx'
+import Collapsible from './Collapsible.jsx'
 
 // THE strategy designer — one component every screen that edits a Strategy
 // uses (the Strategies page, and the Recommendation Systems rule editor), so
@@ -180,13 +181,6 @@ export default function StrategyDesigner({
         </label>
       )}
 
-      {has('orderManagement') && (
-        <>
-          <h4>Order management</h4>
-          <StrategyOrderManagementForm values={form} onChange={setForm} />
-        </>
-      )}
-
       {has('conditions') && (
         <>
           <h4>Conditions</h4>
@@ -196,6 +190,12 @@ export default function StrategyDesigner({
             leafKinds={ruleMode ? ['formula'] : undefined}
           />
         </>
+      )}
+
+      {has('orderManagement') && (
+        <Collapsible title={<h4 style={{ margin: 0 }}>Order management</h4>} defaultOpen={false}>
+          <StrategyOrderManagementForm values={form} onChange={setForm} />
+        </Collapsible>
       )}
 
       {error && <div style={{ color: 'crimson', marginBottom: 8 }}>{error}</div>}

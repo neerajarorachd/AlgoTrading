@@ -319,6 +319,14 @@ class EngineConfig:
     # behavior: every directional pattern trades, unchanged for every
     # Strategy row that predates this field.
     pattern_filter: Optional[Tuple[str, ...]] = None
+    # Per-run override of ActivityEngine's swing_lookback (candles on each
+    # side confirming a swing high/low, and so the HH/HL "approval
+    # distance" structure patterns like BOS confirm on) -- explicit
+    # instruction, 2026-10-03: "make it variable so we can test on 3 as
+    # well as 7 candles too." None (default) falls back to ActivityEngine's
+    # own global engine_settings/module-default precedence, unchanged for
+    # every run that doesn't set Strategy.swing_lookback.
+    swing_lookback: Optional[int] = None
 
 
 @dataclass
@@ -1011,7 +1019,7 @@ def simulate(session_factory, symbol: str, exchange_segment: str, timeframes: Li
     macd_states = (_load_macd_states(session_factory, symbol, exchange_segment, timeframes)
                    if config.exit_on_macd_reversal else {})
 
-    engine = ActivityEngine(session_factory)
+    engine = ActivityEngine(session_factory, swing_lookback=config.swing_lookback)
     settings = load_prediction_settings(session_factory)
     # config.atr_multiplier/risk_reward_ratio (from a Strategy row's own
     # sl_atr_multiplier/target_risk_reward_ratio, via
@@ -1123,7 +1131,7 @@ def simulate_portfolio(
     engines: Dict[str, ActivityEngine] = {}
     exchange_segment_by_symbol: Dict[str, str] = {}
     for sym_idx, (symbol, exchange_segment) in enumerate(symbols):
-        engines[symbol] = ActivityEngine(session_factory)
+        engines[symbol] = ActivityEngine(session_factory, swing_lookback=config.swing_lookback)
         exchange_segment_by_symbol[symbol] = exchange_segment
         for tf_idx, tf in enumerate(timeframes):
             tf_candles = _load_candles(session_factory, symbol, exchange_segment, tf, start, end)
@@ -1309,6 +1317,7 @@ def engine_config_from_strategy(strategy) -> EngineConfig:
         compounding=_or_default(strategy.compounding, defaults.compounding),
         min_avg_volume_multiple=_num(strategy.min_avg_volume_multiple),
         min_avg_volume_lookback=min_avg_volume_lookback,
+        swing_lookback=strategy.swing_lookback,
     )
 
 

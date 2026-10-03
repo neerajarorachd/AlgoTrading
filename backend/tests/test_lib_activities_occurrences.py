@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from db.models import InstrumentActivity, SubscribedSymbol
 from db.ops import LibActivities
@@ -11,11 +11,11 @@ def _dt(d, h=9, mi=15):
     return datetime(2026, 1, d, h, mi, tzinfo=timezone.utc)
 
 
-def _register(session_factory) -> int:
+def _register(session_factory, symbol=SYMBOL) -> int:
     with session_factory() as session:
         row = SubscribedSymbol(
-            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
-            security_id="1333", previous_close=100.0,
+            symbol=symbol, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id=f"SEC-{symbol}", previous_close=100.0,
         )
         session.add(row)
         session.commit()
@@ -134,3 +134,83 @@ def test_intensity_values_by_pattern_restricts_to_requested_patterns(session_fac
             session, instrument_id, ["1min"], _dt(1, 0, 0), _dt(28, 0, 0), patterns=["hammer"],
         )
     assert list(values.keys()) == ["hammer"]
+
+
+# --------------------------------------------------------------------- InstrumentActivityDailyCount
+
+def _row(instrument_id, ts, activity_type, activity, timeframe="1min"):
+    return {
+        "instrument_id": instrument_id, "timeframe": timeframe, "ts": ts,
+        "activity_type": activity_type, "activity": activity, "intensity": None,
+        "open_price": 100, "high_price": 101, "low_price": 99, "close_price": 100.5,
+    }
+
+
+def test_persist_bulk_bumps_the_daily_count_rollup(session_factory):
+    instrument_id = _register(session_factory)
+    LibActivities.persist_bulk(session_factory, [
+        _row(instrument_id, _dt(5, 9, 15), "candle_pattern", "doji"),
+        _row(instrument_id, _dt(5, 9, 20), "candle_pattern", "hammer", timeframe="3min"),
+        _row(instrument_id, _dt(5, 9, 25), "indicator", "macd_bullish_cross"),
+    ])
+    with session_factory() as session:
+        assert LibActivities.get_daily_counts(session, instrument_id, date(2026, 1, 5)) == {
+            "candle_pattern": 2, "indicator": 1,
+        }
+
+
+def test_persist_bulk_keeps_separate_instruments_and_days_separate(session_factory):
+    a = _register(session_factory, symbol="RELIANCE")
+    b = _register(session_factory, symbol="TCS")
+    LibActivities.persist_bulk(session_factory, [
+        _row(a, _dt(5, 9, 15), "candle_pattern", "doji"),
+        _row(a, _dt(6, 9, 15), "candle_pattern", "doji"),  # a different day -- separate bucket
+        _row(b, _dt(5, 9, 15), "indicator", "macd_bullish_cross"),
+    ])
+    with session_factory() as session:
+        assert LibActivities.get_daily_counts(session, a, date(2026, 1, 5)) == {"candle_pattern": 1, "indicator": 0}
+        assert LibActivities.get_daily_counts(session, a, date(2026, 1, 6)) == {"candle_pattern": 1, "indicator": 0}
+        assert LibActivities.get_daily_counts(session, b, date(2026, 1, 5)) == {"candle_pattern": 0, "indicator": 1}
+
+
+def test_categories_outside_the_tracked_two_are_not_counted(session_factory):
+    instrument_id = _register(session_factory)
+    LibActivities.persist_bulk(session_factory, [
+        _row(instrument_id, _dt(5, 9, 15), "graph_formation", "double_top"),
+        _row(instrument_id, _dt(5, 9, 15), "structure", "swing_high"),
+        _row(instrument_id, _dt(5, 9, 16), "price_action", "vwap_gap_fill"),
+    ])
+    with session_factory() as session:
+        assert LibActivities.get_daily_counts(session, instrument_id, date(2026, 1, 5)) == {
+            "candle_pattern": 0, "indicator": 0,
+        }
+
+
+def test_daily_count_bucket_follows_the_ist_calendar_day_not_utc(session_factory):
+    instrument_id = _register(session_factory)
+    # 18:29 UTC = 23:59 IST (still 5-Jan); 18:30 UTC = 00:00 IST (rolls to 6-Jan)
+    LibActivities.persist_bulk(session_factory, [
+        _row(instrument_id, datetime(2026, 1, 5, 18, 29, tzinfo=timezone.utc), "candle_pattern", "doji"),
+        _row(instrument_id, datetime(2026, 1, 5, 18, 30, tzinfo=timezone.utc), "candle_pattern", "hammer"),
+    ])
+    with session_factory() as session:
+        assert LibActivities.get_daily_counts(session, instrument_id, date(2026, 1, 5))["candle_pattern"] == 1
+        assert LibActivities.get_daily_counts(session, instrument_id, date(2026, 1, 6))["candle_pattern"] == 1
+
+
+def test_persist_one_bumps_the_rollup_and_never_double_counts_a_duplicate(session_factory):
+    instrument_id = _register(session_factory)
+    row = _row(instrument_id, _dt(5, 9, 15), "candle_pattern", "doji")
+    LibActivities.persist_one(session_factory, row)
+    LibActivities.persist_one(session_factory, dict(row))  # exact duplicate -- must not double-count
+
+    with session_factory() as session:
+        assert LibActivities.get_daily_counts(session, instrument_id, date(2026, 1, 5))["candle_pattern"] == 1
+
+
+def test_get_daily_counts_is_zero_for_an_untouched_day(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        assert LibActivities.get_daily_counts(session, instrument_id, date(2026, 1, 1)) == {
+            "candle_pattern": 0, "indicator": 0,
+        }

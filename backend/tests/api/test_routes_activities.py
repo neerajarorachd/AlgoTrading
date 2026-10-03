@@ -232,3 +232,90 @@ def test_intensity_analysis_indicator_states_empty_without_states(client):
     assert resp.status_code == 200
     empty = {"state": [], "trend": []}
     assert resp.get_json()["indicator_states"] == {"rsi": empty, "macd": empty, "stoch": empty}
+
+
+def test_recent_activities_newest_first_with_readable_labels(client):
+    instrument_id = _register(client)
+    _seed(client, instrument_id)  # two "hammer" rows at day 1 and day 2, 1min
+
+    resp = client.get(f"/api/activities/recent?instrument_id={instrument_id}")
+    assert resp.status_code == 200
+    rows = resp.get_json()
+    assert len(rows) == 2
+    assert rows[0]["ts"] > rows[1]["ts"]  # newest first
+    assert rows[0]["label"] == "Hammer formed"
+    assert rows[0]["activity"] == "hammer" and rows[0]["timeframe"] == "1min"
+    assert rows[0]["ts"].endswith("Z")
+
+
+def test_recent_activities_respects_timeframe_and_limit(client):
+    instrument_id = _register(client)
+    _seed(client, instrument_id)
+    with client.application.extensions["db_session_factory"]() as session:
+        session.add(InstrumentActivity(
+            instrument_id=instrument_id, timeframe="3min", ts=_dt(3),
+            activity_type="indicator", activity="macd_bullish_cross", intensity=None,
+            open_price=100, high_price=101, low_price=99, close_price=100.5,
+        ))
+        session.commit()
+
+    only_1min = client.get(f"/api/activities/recent?instrument_id={instrument_id}&timeframe=1min").get_json()
+    assert all(r["timeframe"] == "1min" for r in only_1min)
+
+    limited = client.get(f"/api/activities/recent?instrument_id={instrument_id}&limit=1").get_json()
+    assert len(limited) == 1
+
+    cross = next(r for r in client.get(f"/api/activities/recent?instrument_id={instrument_id}").get_json()
+                 if r["activity"] == "macd_bullish_cross")
+    assert cross["label"] == "MACD bullish crossover"
+
+
+def test_recent_activities_requires_instrument_id(client):
+    assert client.get("/api/activities/recent").status_code == 400
+
+
+def test_recent_activities_unknown_instrument_is_empty_not_an_error(client):
+    assert client.get("/api/activities/recent?instrument_id=9999").get_json() == []
+
+
+def _activity_row(instrument_id, ts, activity_type, activity, timeframe="1min"):
+    return {
+        "instrument_id": instrument_id, "timeframe": timeframe, "ts": ts,
+        "activity_type": activity_type, "activity": activity, "intensity": None,
+        "open_price": 100, "high_price": 101, "low_price": 99, "close_price": 100.5,
+    }
+
+
+def test_activity_counts_split_by_category_for_today(client):
+    """Counts come from the STORED rollup (InstrumentActivityDailyCount),
+    kept current by the real write path (LibActivities.persist_bulk) — not
+    a live scan — so this goes through persist_bulk, not a raw ORM insert,
+    to exercise the actual increment-on-write behavior."""
+    from db.ops import LibActivities
+
+    instrument_id = _register(client)
+    now = datetime.now(timezone.utc)
+    LibActivities.persist_bulk(client.application.extensions["db_session_factory"], [
+        _activity_row(instrument_id, now, "candle_pattern", "doji"),
+        _activity_row(instrument_id, now, "candle_pattern", "hammer", timeframe="3min"),
+        _activity_row(instrument_id, now, "indicator", "macd_bullish_cross"),
+    ])
+
+    body = client.get(f"/api/activities/counts?instrument_id={instrument_id}").get_json()
+    assert body == {"candle_pattern": 2, "indicator": 1}
+
+
+def test_activity_counts_excludes_yesterdays_events(client):
+    from db.ops import LibActivities
+
+    instrument_id = _register(client)
+    LibActivities.persist_bulk(client.application.extensions["db_session_factory"], [
+        _activity_row(instrument_id, _dt(1), "candle_pattern", "doji"),  # 2026-01-01, long past
+    ])
+
+    body = client.get(f"/api/activities/counts?instrument_id={instrument_id}").get_json()
+    assert body == {"candle_pattern": 0, "indicator": 0}
+
+
+def test_activity_counts_requires_instrument_id(client):
+    assert client.get("/api/activities/counts").status_code == 400

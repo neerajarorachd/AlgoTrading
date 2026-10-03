@@ -1117,7 +1117,7 @@ _STRATEGY_ATTRS = (
     "max_daily_loss_pct", "exit_on_macd_reversal", "win_streak_multipliers",
     "spread_fills", "max_fill_candles", "max_exit_candles", "max_fill_price_drift_pct",
     "liquidity_safety_divisor", "itemized_costs", "compounding",
-    "min_avg_volume_multiple", "min_avg_volume_lookback",
+    "min_avg_volume_multiple", "min_avg_volume_lookback", "swing_lookback",
 )
 
 
@@ -1142,6 +1142,7 @@ def test_engine_config_from_strategy_falls_back_to_engine_defaults_when_all_null
     assert config.compounding == defaults.compounding
     assert config.min_avg_volume_multiple is None
     assert config.min_avg_volume_lookback == defaults.min_avg_volume_lookback
+    assert config.swing_lookback is None
 
 
 def test_engine_config_from_strategy_maps_the_new_risk_management_fields():
@@ -1150,7 +1151,7 @@ def test_engine_config_from_strategy_maps_the_new_risk_management_fields():
         win_streak_multipliers="0.5, 1.0, 2.0, 3.0, 4.0",
         spread_fills=True, max_fill_candles=3, max_exit_candles=10, max_fill_price_drift_pct=0.002,
         liquidity_safety_divisor=40, itemized_costs=True, compounding=False,
-        min_avg_volume_multiple=1.5, min_avg_volume_lookback=8,
+        min_avg_volume_multiple=1.5, min_avg_volume_lookback=8, swing_lookback=7,
     )
     config = engine_config_from_strategy(strategy)
     assert config.max_daily_loss_pct == 0.01
@@ -1165,6 +1166,7 @@ def test_engine_config_from_strategy_maps_the_new_risk_management_fields():
     assert config.compounding is False
     assert config.min_avg_volume_multiple == 1.5
     assert config.min_avg_volume_lookback == 8
+    assert config.swing_lookback == 7
 
 
 # --------------------------------------------------------------------- OrderBook: indicator snapshot

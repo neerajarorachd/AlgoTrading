@@ -7,6 +7,19 @@
 
 const OPERATORS = ['>', '>=', '<', '<=', '==', '!=']
 
+// Ready-made formulas a user can drop straight in, one click, to see a
+// working example before building their own — explicit instruction,
+// 2026-09-29: "UI is not clear what we can do with it." Each string here
+// must match the guided term-builder's own generated shape exactly (see
+// sideToFormula) so picking one immediately shows correctly in the
+// dropdowns underneath, not just as read-only text.
+const FORMULA_EXAMPLES = [
+  { label: '5-candle avg open is above yesterday-ish close', left: 'mean(open, 5)', operator: '>', right: 'open[-1]' },
+  { label: '5-candle avg close above 10-candle avg close', left: 'mean(close, 5)', operator: '>', right: 'mean(close, 10)' },
+  { label: 'RSI rising fast (3-candle slope over 45)', left: 'slope(rsi, 3)', operator: '>', right: '45' },
+  { label: 'RSI rising faster over 3 candles than over 5', left: 'slope(rsi, 3)', operator: '>', right: 'slope(rsi, 5)' },
+]
+
 export function emptyGroup() {
   return { operator: 'AND', conditions: [], groups: [] }
 }
@@ -50,8 +63,40 @@ function updateAtPath(root, path, updater) {
 // formula leaves only.
 const ALL_LEAF_KINDS = ['event', 'numeric', 'formula']
 
+// A formula's default shape: LEFT starts as the field `close`, RIGHT starts
+// as the plain number 0 — both real, valid, parseable terms (see
+// sideToFormula/parseSideToTerms below), so the dropdown builder always
+// opens on something already usable, never on an empty free-text box.
 export function blankFormulaLeaf() {
-  return { ...defaultCondition([]), element_code: null, operator: '>', left_formula: '', right_formula: '' }
+  return {
+    ...defaultCondition([]), element_code: null, operator: '>',
+    left_formula: sideToFormula([{ op: null, term: { kind: 'field', field: 'close', offset: 0 } }]),
+    right_formula: sideToFormula([{ op: null, term: { kind: 'number', value: 0 } }]),
+  }
+}
+
+// Whole-tree preview — explicit instruction, 2026-10-03: "so that user
+// should be able to see what is being cooked." Each formula leaf already
+// shows its own "= left op right" line (ConditionEditor below); this
+// renders the FULL AND/OR tree (every leaf + nested sub-group) as one
+// readable expression, same idea one level up.
+function leafToPreviewText(cond) {
+  if (cond.left_formula != null) {
+    return `${cond.left_formula || '…'} ${cond.operator ?? '>'} ${cond.right_formula || '…'}`
+  }
+  if (!cond.element_code) return '…'
+  if (cond.operator == null) return cond.element_code
+  if (cond.compare_type === 'element') return `${cond.element_code} ${cond.operator} ${cond.compared_element_code ?? '…'}`
+  if (cond.static_value_min != null) return `${cond.element_code} ${cond.operator} [${cond.static_value_min}–${cond.static_value_max}]`
+  return `${cond.element_code} ${cond.operator} ${cond.static_value ?? '…'}`
+}
+
+function treeToPreviewText(group) {
+  const parts = [
+    ...group.conditions.map(leafToPreviewText),
+    ...group.groups.map((g) => `(${treeToPreviewText(g)})`),
+  ]
+  return parts.length ? parts.join(` ${group.operator} `) : '…'
 }
 
 export default function StrategyBuilder({ tree, onChange, elements, grammar, leafKinds = ALL_LEAF_KINDS }) {
@@ -59,10 +104,19 @@ export default function StrategyBuilder({ tree, onChange, elements, grammar, lea
     onChange(updateAtPath(tree, path, updater))
   }
   return (
-    <GroupEditor
-      group={tree} path={[]} onUpdateGroup={updateGroup} leafKinds={leafKinds}
-      onRemoveGroup={null} elements={elements} grammar={grammar} depth={0}
-    />
+    <div>
+      <div style={{
+        fontFamily: 'monospace', fontSize: 13, color: '#334', background: '#eef6ff',
+        border: '1px solid #cfe3fb', borderRadius: 4, padding: '6px 10px', marginBottom: 10,
+        wordBreak: 'break-word',
+      }}>
+        <strong>Preview:</strong> {treeToPreviewText(tree)}
+      </div>
+      <GroupEditor
+        group={tree} path={[]} onUpdateGroup={updateGroup} leafKinds={leafKinds}
+        onRemoveGroup={null} elements={elements} grammar={grammar} depth={0}
+      />
+    </div>
   )
 }
 
@@ -132,38 +186,193 @@ const leafRowStyle = {
   padding: '6px 0', borderBottom: '1px dashed #e2e2e2',
 }
 
-// A formula is a free-text expression (e.g. mean(volume, 5) > order_size)
-// checked server-side by dry-running the real evaluator; the two pickers
-// just insert names from the served grammar so nobody has to remember them.
-function FormulaInput({ value, onChange, grammar, width }) {
-  const insert = (text) => {
-    if (!text) return
-    onChange(value && !/[\s(,]$/.test(value) ? `${value} ${text}` : `${value}${text}`)
+// ----------------------------------------------------------------------
+// Formula terms: a formula side (left_formula / right_formula) is built
+// ENTIRELY from dropdowns, never typed — explicit instruction, 2026-09-29:
+// "dont let the user to type in [the] formula textbox. 90% time it will be
+// failed... build formula from dropdowns and textbox [only] to enter a
+// fixed value." A side is a sequence of terms joined by +-*/, each term one
+// of: a field (with a candle offset), a function call (slope/mean), a named
+// constant (e.g. order_size), or a literal number — the ONLY free-text
+// entry left is that literal number's own value box.
+//
+// The string sent to the backend is unchanged (still plain left_formula/
+// right_formula text the real evaluator parses) — these two functions are
+// a lossless (for anything built here) string <-> term-list conversion, so
+// no backend change was needed for this rewrite.
+
+function termToString(t) {
+  if (t.kind === 'field') return t.offset ? `${t.field}[${t.offset}]` : t.field
+  if (t.kind === 'function') return `${t.fn}(${t.field}, ${t.n})`
+  if (t.kind === 'constant') return t.name
+  if (t.kind === 'number') return String(t.value)
+  return ''
+}
+
+function sideToFormula(side) {
+  return side.map((entry, i) => (i === 0 ? termToString(entry.term) : ` ${entry.op} ${termToString(entry.term)}`)).join('')
+}
+
+function parseTermString(raw, grammar) {
+  const s = raw.trim()
+  if (!s) return null
+  let m = s.match(/^([a-zA-Z_]\w*)\(\s*([a-zA-Z_]\w*)\s*,\s*(-?\d+)\s*\)$/)
+  if (m && (grammar?.functions ?? []).some((f) => f.name === m[1])) {
+    return { kind: 'function', fn: m[1], field: m[2], n: Number(m[3]) }
+  }
+  m = s.match(/^([a-zA-Z_]\w*)(?:\[(-?\d+)\])?$/)
+  if (m) {
+    const name = m[1]
+    const offset = m[2] != null ? Number(m[2]) : 0
+    if ((grammar?.fields ?? []).some((f) => f.value === name || (f.aliases ?? []).includes(name))) {
+      return { kind: 'field', field: name, offset }
+    }
+    if (offset === 0 && (grammar?.constants ?? []).includes(name)) {
+      return { kind: 'constant', name }
+    }
+    return null
+  }
+  if (/^-?\d+(\.\d+)?$/.test(s)) return { kind: 'number', value: Number(s) }
+  return null
+}
+
+// null = this string isn't in the guided shape (typically hand-typed
+// before this rewrite existed) — the caller falls back to a read-only view.
+function parseSideToTerms(formula, grammar) {
+  if (!formula || !formula.trim()) return null
+  const parts = formula.split(/\s([+\-*/])\s/)
+  if (parts.length % 2 !== 1) return null
+  const side = []
+  for (let i = 0; i < parts.length; i += 2) {
+    const term = parseTermString(parts[i], grammar)
+    if (!term) return null
+    side.push({ op: i === 0 ? null : parts[i - 1], term })
+  }
+  return side
+}
+
+function TermEditor({ term, grammar, onChange }) {
+  const fields = grammar?.fields ?? []
+  const functions = grammar?.functions ?? []
+  const constants = grammar?.constants ?? []
+  const setKind = (kind) => {
+    if (kind === 'field') onChange({ kind: 'field', field: fields[0]?.value ?? 'close', offset: 0 })
+    else if (kind === 'function') onChange({ kind: 'function', fn: functions[0]?.name ?? 'mean', field: fields[0]?.value ?? 'close', n: 5 })
+    else if (kind === 'constant') onChange({ kind: 'constant', name: constants[0] ?? '' })
+    else onChange({ kind: 'number', value: 0 })
   }
   return (
-    <span style={{ display: 'inline-flex', gap: 2 }}>
-      <input
-        value={value} spellCheck={false} placeholder="e.g. mean(volume, 5)"
-        onChange={(e) => onChange(e.target.value)} style={{ width }}
-      />
-      <select value="" title="insert a field" onChange={(e) => insert(e.target.value)}>
-        <option value="">+ field</option>
-        <optgroup label="Fields">
-          {(grammar?.fields ?? []).map((f) => <option key={f.value} value={f.value}>{f.value}</option>)}
-        </optgroup>
-        <optgroup label="Constants">
-          {(grammar?.constants ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
-        </optgroup>
+    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+      <select value={term.kind} title="term type" onChange={(e) => setKind(e.target.value)}>
+        <option value="field">Field</option>
+        <option value="function">Function</option>
+        {constants.length > 0 && <option value="constant">Constant</option>}
+        <option value="number">Number</option>
       </select>
-      <select value="" title="insert a function" onChange={(e) => insert(e.target.value)}>
-        <option value="">+ fn</option>
-        {(grammar?.functions ?? []).map((f) => (
-          <option key={f.name} value={`${f.name}(`} title={f.description}>{f.signature}</option>
-        ))}
-      </select>
+
+      {term.kind === 'field' && (
+        <>
+          <select value={term.field} onChange={(e) => onChange({ ...term, field: e.target.value })}>
+            {fields.map((f) => <option key={f.value} value={f.value}>{f.value}</option>)}
+          </select>
+          <span style={{ color: '#888' }} title="candle offset is always 0 or back in time">(-)</span>
+          <input
+            type="number" min="0" step="1" title="candles back (0 = current candle)" style={{ width: 50 }}
+            value={-term.offset}
+            onChange={(e) => {
+              const candlesBack = Math.max(0, parseInt(e.target.value, 10) || 0)
+              onChange({ ...term, offset: -candlesBack })
+            }}
+          />
+          <span style={{ color: '#888', fontSize: 12 }}>
+            {-term.offset === 0 ? 'current candle' : `candle${-term.offset === 1 ? '' : 's'} back`}
+          </span>
+        </>
+      )}
+
+      {term.kind === 'function' && (
+        <>
+          <select value={term.fn} onChange={(e) => onChange({ ...term, fn: e.target.value })}>
+            {functions.map((f) => <option key={f.name} value={f.name} title={f.description}>{f.name}</option>)}
+          </select>
+          <span>(</span>
+          <select value={term.field} onChange={(e) => onChange({ ...term, field: e.target.value })}>
+            {fields.map((f) => <option key={f.value} value={f.value}>{f.value}</option>)}
+          </select>
+          <span>,</span>
+          <input
+            type="number" min="1" step="1" style={{ width: 50 }} value={term.n}
+            onChange={(e) => onChange({ ...term, n: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+          />
+          <span>)</span>
+        </>
+      )}
+
+      {term.kind === 'constant' && (
+        <select value={term.name} onChange={(e) => onChange({ ...term, name: e.target.value })}>
+          {constants.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      )}
+
+      {term.kind === 'number' && (
+        <input
+          type="number" step="any" style={{ width: 80 }} value={term.value}
+          onChange={(e) => onChange({ ...term, value: e.target.value === '' ? 0 : Number(e.target.value) })}
+        />
+      )}
     </span>
   )
 }
+
+function FormulaSide({ formula, grammar, onChangeFormula }) {
+  const parsed = parseSideToTerms(formula, grammar)
+  // An empty side hasn't been touched yet -- show one default field term
+  // without writing anything until the user actually picks something.
+  const terms = parsed ?? (formula ? null : [{ op: null, term: { kind: 'field', field: 'close', offset: 0 } }])
+
+  if (terms == null) {
+    // Hand-typed before this rewrite (or otherwise outside the guided
+    // shape) -- shown read-only rather than guessed at; Rebuild clears it
+    // to a fresh, guided default.
+    return (
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <code style={{ background: '#f2f2f2', padding: '2px 6px', borderRadius: 4 }}>{formula}</code>
+        <button
+          type="button"
+          onClick={() => onChangeFormula(sideToFormula([{ op: null, term: { kind: 'field', field: 'close', offset: 0 } }]))}
+        >
+          Rebuild
+        </button>
+      </span>
+    )
+  }
+
+  const updateTerm = (i, nextTerm) => onChangeFormula(sideToFormula(terms.map((e, idx) => (idx === i ? { ...e, term: nextTerm } : e))))
+  const updateOp = (i, op) => onChangeFormula(sideToFormula(terms.map((e, idx) => (idx === i ? { ...e, op } : e))))
+  const addTerm = () => onChangeFormula(sideToFormula([...terms, { op: '+', term: { kind: 'number', value: 0 } }]))
+  const removeTerm = (i) => onChangeFormula(sideToFormula(terms.filter((_, idx) => idx !== i)))
+
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+      {terms.map((entry, i) => (
+        <span key={i} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+          {i > 0 && (
+            <select value={entry.op} onChange={(e) => updateOp(i, e.target.value)}>
+              {['+', '-', '*', '/'].map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          )}
+          <TermEditor term={entry.term} grammar={grammar} onChange={(t) => updateTerm(i, t)} />
+          {terms.length > 1 && (
+            <button type="button" onClick={() => removeTerm(i)} title="remove this term">×</button>
+          )}
+        </span>
+      ))}
+      <button type="button" onClick={addTerm} title="combine with another term">+ term</button>
+    </span>
+  )
+}
+
+// ----------------------------------------------------------------------
 
 function ConditionEditor({ condition, elements, grammar, leafKinds, onChange, onRemove }) {
   const isFormula = condition.left_formula != null
@@ -236,31 +445,37 @@ function ConditionEditor({ condition, elements, grammar, leafKinds, onChange, on
   )
 
   if (isFormula) {
-    const op = condition.operator
     return (
       <div style={leafRowStyle}>
         {kindSelect}
-        <FormulaInput
-          value={condition.left_formula} grammar={grammar} width={220}
-          onChange={(v) => onChange({ ...condition, left_formula: v })}
-        />
         <select
-          value={op ?? ''}
+          value="" title="start from a ready-made example"
           onChange={(e) => {
-            const next = e.target.value || null
-            onChange({ ...condition, operator: next, right_formula: next ? (condition.right_formula ?? '') : null })
+            const preset = FORMULA_EXAMPLES[e.target.value]
+            if (preset) onChange({ ...condition, left_formula: preset.left, operator: preset.operator, right_formula: preset.right })
           }}
         >
-          <option value="">(formula is itself a comparison)</option>
+          <option value="">Examples…</option>
+          {FORMULA_EXAMPLES.map((ex, i) => <option key={ex.label} value={i}>{ex.label}</option>)}
+        </select>
+        <FormulaSide
+          formula={condition.left_formula ?? ''} grammar={grammar}
+          onChangeFormula={(v) => onChange({ ...condition, left_formula: v })}
+        />
+        <select value={condition.operator ?? '>'} onChange={(e) => onChange({ ...condition, operator: e.target.value })}>
           {OPERATORS.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
-        {op != null && (
-          <FormulaInput
-            value={condition.right_formula ?? ''} grammar={grammar} width={140}
-            onChange={(v) => onChange({ ...condition, right_formula: v })}
-          />
-        )}
+        <FormulaSide
+          formula={condition.right_formula ?? ''} grammar={grammar}
+          onChangeFormula={(v) => onChange({ ...condition, right_formula: v })}
+        />
         <button type="button" onClick={onRemove} style={{ marginLeft: 'auto' }} title="Remove condition">×</button>
+        <div style={{
+          width: '100%', fontFamily: 'monospace', fontSize: 12, color: '#555',
+          background: '#f7f8fa', border: '1px solid #e2e2e2', borderRadius: 4, padding: '3px 8px',
+        }}>
+          = {condition.left_formula || '…'} {condition.operator ?? '>'} {condition.right_formula || '…'}
+        </div>
       </div>
     )
   }

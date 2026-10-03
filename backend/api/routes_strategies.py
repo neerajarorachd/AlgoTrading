@@ -42,6 +42,9 @@ _STRATEGY_PLAIN_ORDER_MGMT_FIELDS = (
     # column comment. min_avg_volume_multiple lives in the NUMERIC list
     # above (Numeric(8,4)); the lookback window itself is a plain int.
     "min_avg_volume_lookback",
+    # Per-strategy swing-confirmation window override, added 2026-10-03 --
+    # see Strategy's own column comment.
+    "swing_lookback",
 )
 _STRATEGY_ORDER_MGMT_FIELDS = _STRATEGY_NUMERIC_FIELDS + _STRATEGY_PLAIN_ORDER_MGMT_FIELDS
 _STRATEGY_TIME_FIELDS = ("trading_start_time", "new_order_end_time", "trading_end_time")

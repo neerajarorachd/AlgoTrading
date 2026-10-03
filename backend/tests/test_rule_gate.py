@@ -196,6 +196,55 @@ def test_passing_rule_queues_and_stamps_rs1(session_factory):
     assert row.status == "queued" and row.rule_note is None and row.recommendation_system_id == rs1.id
 
 
+# ------------------------------------------------------------------ order_size constant (2026-10-03)
+# Previously every live rule_gate call passed context=None, so a rule
+# referencing the "order_size" constant (condition_evaluator.
+# KNOWN_CONTEXT_NAMES) could never resolve it and always SKIPPED with a
+# formula error. _resolve_rs now sources it from the RS1 PARENT strategy's
+# own max_vol_per_call ("Max qty per order").
+
+def test_order_size_constant_resolves_from_the_parent_strategys_max_vol_per_call(session_factory):
+    inst = _setup_rs1_with_rule(session_factory, _tree(("volume", ">", "order_size")))
+    with session_factory() as session:
+        rs1 = LibRecommendationSystems.get_by_code(session, "RS1")
+        parent = session.get(Strategy, rs1.strategy_id)
+        parent.max_vol_per_call = 150
+        session.commit()
+
+    queued = _live(session_factory, inst, lambda *a: _rows([100, 200]))  # last volume 200 > 150
+    assert len(queued) == 1
+    with session_factory() as session:
+        row = session.query(Recommendation).one()
+    assert row.status == "queued" and row.rule_note is None
+
+
+def test_order_size_constant_fails_the_rule_when_volume_is_too_low(session_factory):
+    inst = _setup_rs1_with_rule(session_factory, _tree(("volume", ">", "order_size")))
+    with session_factory() as session:
+        rs1 = LibRecommendationSystems.get_by_code(session, "RS1")
+        parent = session.get(Strategy, rs1.strategy_id)
+        parent.max_vol_per_call = 500
+        session.commit()
+
+    assert _live(session_factory, inst, lambda *a: _rows([100, 200])) == []  # 200 < 500
+    with session_factory() as session:
+        row = session.query(Recommendation).one()
+    assert row.status == "rejected" and "Rule 1" in row.veto_reason
+
+
+def test_order_size_constant_skips_cleanly_when_the_parent_has_no_max_vol_per_call(session_factory):
+    # max_vol_per_call left unset (None, the default) -- order_size has
+    # nothing to resolve to. The rule must SKIP (neutral), never crash the
+    # live path, and a skipped-only rule set still queues the
+    # recommendation (gated by the guiding scenario alone).
+    inst = _setup_rs1_with_rule(session_factory, _tree(("volume", ">", "order_size")))
+    queued = _live(session_factory, inst, lambda *a: _rows([100, 200]))
+    assert len(queued) == 1
+    with session_factory() as session:
+        row = session.query(Recommendation).one()
+    assert row.status == "queued" and row.rule_note is not None and "skipped" in row.rule_note
+
+
 def test_skipped_rule_still_queues_with_an_insufficient_data_note(session_factory):
     inst = _setup_rs1_with_rule(session_factory, _tree(("mean(volume, 5)", ">", "1")))
     queued = _live(session_factory, inst, lambda *a: _rows([100, 200]))

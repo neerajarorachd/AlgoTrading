@@ -318,7 +318,26 @@ def _resolve_rs(session_factory, code: str = DEFAULT_RS_CODE) -> Optional[dict]:
         rs = LibRecommendationSystems.get_by_code(session, code)
         if rs is None or not rs.is_active:
             return None
-        return {"id": rs.id, "strategy_id": rs.strategy_id, "combine_mode": rs.rule_combine_mode or "all"}
+        # order_size: the ONLY named constant a rule's formula may reference
+        # (condition_evaluator.KNOWN_CONTEXT_NAMES) -- previously unwired
+        # (every live rule_gate call passed context=None, so any rule using
+        # it always SKIPPED with "unknown field 'order_size'"). Sourced from
+        # the RS1 PARENT strategy's own max_vol_per_call ("Max qty per
+        # order") rather than a new column -- a rule here is gating whether
+        # to recommend a pattern at all, before any real per-trade sizing
+        # exists, so there's no live computed order size to read; the
+        # strategy's own configured ceiling is the closest real number and
+        # is the conservative choice for a liquidity-style check (e.g.
+        # "mean(volume,5) > order_size": if average volume clears the
+        # LARGEST order this strategy would ever place, it clears any
+        # smaller actual size too).
+        from db.models import Strategy
+        strategy = session.get(Strategy, rs.strategy_id)
+        order_size = strategy.max_vol_per_call if strategy else None
+        return {
+            "id": rs.id, "strategy_id": rs.strategy_id, "combine_mode": rs.rule_combine_mode or "all",
+            "order_size": order_size,
+        }
 
 
 def _make_rule_gate(session_factory, rs_info: dict, symbol: str, exchange_segment: str,
@@ -334,7 +353,8 @@ def _make_rule_gate(session_factory, rs_info: dict, symbol: str, exchange_segmen
                 return True, None
             needed = max(rule_gate_mod.rule_lookback(tree) for _, tree in rules)
             rows = rows_provider(symbol, exchange_segment, timeframe, needed)
-            return rule_gate_mod.evaluate_rules(rules, rows, rs_info["combine_mode"])
+            context = {"order_size": rs_info["order_size"]} if rs_info.get("order_size") is not None else None
+            return rule_gate_mod.evaluate_rules(rules, rows, rs_info["combine_mode"], context=context)
         except Exception:
             logger.exception("recommendation_engine: rule gate failed for %s %s %s", symbol, exchange_segment, pattern)
             return True, "rule skipped: error"
