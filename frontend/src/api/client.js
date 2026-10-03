@@ -210,3 +210,11 @@ export const updateEngineSetting = (key, value) =>
   request(`/api/engine-settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) })
 
 export const resetEngineSetting = (key) => request(`/api/engine-settings/${key}`, { method: 'DELETE' })
+
+// Per-instrument "what to watch" on Market Watch -- only EXCLUSIONS are
+// stored server-side, so a fresh instrument's `excluded` list is empty
+// (watches everything) until the user turns something off.
+export const getWatchSelection = (instrumentId) => request(`/api/instruments/${instrumentId}/watch-selection`)
+
+export const putWatchSelection = (instrumentId, excluded) =>
+  request(`/api/instruments/${instrumentId}/watch-selection`, { method: 'PUT', body: JSON.stringify({ excluded }) })

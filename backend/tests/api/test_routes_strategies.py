@@ -37,6 +37,12 @@ def test_list_strategy_elements_includes_seeded_event_and_numeric_entries(client
     assert elements["doji"]["element_type"] == "event"
     assert elements["rsi"]["element_type"] == "numeric"
     assert elements["rsi"]["source"] == "candle_indicators"
+    # kind: PatternDefinition's finer category, joined in for the Market
+    # Watch "what to watch" picker (2026-10-04) -- present for a pattern
+    # element, None for a numeric (not-a-pattern) one.
+    assert elements["doji"]["kind"] == "single_candle"
+    assert elements["macd_bullish_cross"]["kind"] == "indicator"
+    assert elements["rsi"]["kind"] is None
 
 
 def test_create_strategy_requires_name_and_type(client):

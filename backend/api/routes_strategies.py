@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Blueprint, current_app, g, jsonify, request
 
 from condition_evaluator import describe_grammar, validate_condition
-from db.models import Strategy, StrategyElement
+from db.models import PatternDefinition, Strategy, StrategyElement
 from db.ops import LibStrategies as ops_strategies
 from db.ops import LibStrategyElements as ops_elements
 from strategy_generation import DEFAULT_TOP_N, generate_best_patterns_strategy
@@ -50,10 +50,18 @@ _STRATEGY_ORDER_MGMT_FIELDS = _STRATEGY_NUMERIC_FIELDS + _STRATEGY_PLAIN_ORDER_M
 _STRATEGY_TIME_FIELDS = ("trading_start_time", "new_order_end_time", "trading_end_time")
 
 
-def _serialize_element(row: StrategyElement) -> dict:
+def _serialize_element(row: StrategyElement, kind: str | None = None) -> dict:
+    # kind: PatternDefinition's finer category (single_candle/multi_candle/
+    # price_action/indicator/structure/graph_formation) when this element
+    # IS a pattern (every "event" element); None for "numeric" elements
+    # (RSI/MACD_LINE/... raw values), which have no PatternDefinition row
+    # since they're not a detected pattern. Added 2026-10-04 for the Market
+    # Watch "what to watch" picker, which needs finer grouping than
+    # element_type's own coarse event/numeric split -- additive, every
+    # existing caller (StrategyBuilder.jsx) already ignores unknown fields.
     return {
         "code": row.code, "element_type": row.element_type,
-        "source": row.source, "description": row.description,
+        "source": row.source, "description": row.description, "kind": kind,
     }
 
 
@@ -137,7 +145,8 @@ def get_strategy_fields():
 @strategies_bp.get("/api/strategy-elements")
 def list_strategy_elements():
     rows = ops_elements.get_all(g.db_session)
-    return jsonify([_serialize_element(row) for row in rows])
+    kinds = {pd.code: pd.kind for pd in g.db_session.query(PatternDefinition.code, PatternDefinition.kind).all()}
+    return jsonify([_serialize_element(row, kinds.get(row.code)) for row in rows])
 
 
 @strategies_bp.get("/api/strategies")

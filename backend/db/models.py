@@ -1771,3 +1771,40 @@ class BacktestDayResult(Base):
         Index("ix_backtest_day_results_run", "run_id"),
         UniqueConstraint("run_id", "date", name="uq_backtest_day_result"),
     )
+
+
+class InstrumentWatchExclusion(Base):
+    """Per-instrument "what to watch" on Market Watch -- explicit
+    instruction, 2026-10-03: "for each added instrument, I should be able
+    to setup what to watch, like formations, indicators, strategies. By
+    default, all should be selected."
+
+    Stores only the EXCLUSIONS (what's been turned off), not the full
+    selection -- an instrument with zero rows here watches everything,
+    matching "by default, all should be selected" exactly without a
+    41-pattern-plus-every-strategy row per instrument for the common case
+    of "watch everything." item_code is a PatternDefinition.code (e.g.
+    "doji") when item_type="pattern", or a Strategy.id as a string when
+    item_type="strategy" -- same "one string code column regardless of
+    underlying kind" convention StrategyCondition.element_code already
+    uses, not two nullable type-specific columns.
+
+    Display-only for v1 (Market Watch hides an excluded item from what it
+    shows for that instrument) -- does NOT stop ActivityEngine from
+    detecting it. Detection is currently one shared pass across every
+    subscribed instrument; scoping detection itself per instrument would
+    be a real engine change, deferred until actually needed.
+    """
+
+    __tablename__ = "instrument_watch_exclusions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_type: Mapped[str] = mapped_column(String(16), nullable=False)  # "pattern" | "strategy"
+    item_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "item_type", "item_code", name="uq_watch_exclusion"),
+        Index("ix_watch_exclusions_instrument", "instrument_id"),
+    )

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getActivityCounts, getRecentActivities } from '../api/client.js'
+import { getActivityCounts, getRecentActivities, getWatchSelection, putWatchSelection } from '../api/client.js'
 
 const DIRECTION_COLOR = { up: 'green', down: 'crimson', flat: undefined }
 const VISIBLE_ROWS = 5
@@ -102,9 +102,144 @@ function EventsCell({ instrumentId }) {
   )
 }
 
+// "what to watch" for one instrument -- which formations/indicators (both
+// just PATTERN_CATALOG-backed `elements`) and which strategies show up for
+// it on Market Watch. Explicit instruction, 2026-10-03: "for each added
+// instrument, I should be able to setup what to watch... By default, all
+// should be selected." The server only stores EXCLUSIONS (see
+// InstrumentWatchExclusion's own docstring), so every checkbox starts
+// checked and unchecking one adds it to the saved exclusion set -- this
+// component just has to invert that once on load and once on save.
+// `elements`/`strategies` are the GLOBAL catalogs (same for every row),
+// fetched once by MarketWatch and passed down, not re-fetched per row.
+function WatchSelectionCell({ instrumentId, elements, strategies }) {
+  const [open, setOpen] = useState(false)
+  const [excludedKeys, setExcludedKeys] = useState(null) // null = not loaded yet; Set of "type:code"
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  // Eager, on mount -- same convention as EventsCell's CS/IND counts badge
+  // (fetched once per row on mount, not lazily on first open), so the
+  // "(N off)" badge is visible at a glance without opening the popover.
+  useEffect(() => {
+    getWatchSelection(instrumentId)
+      .then((res) => setExcludedKeys(new Set(res.excluded.map((x) => `${x.item_type}:${x.item_code}`))))
+      .catch(() => {})
+  }, [instrumentId])
+
+  function toggle(e) {
+    e.stopPropagation()
+    setOpen((prev) => !prev)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsideClick = () => setOpen(false)
+    document.addEventListener('click', closeOnOutsideClick)
+    return () => document.removeEventListener('click', closeOnOutsideClick)
+  }, [open])
+
+  function toggleKey(key) {
+    setExcludedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function save() {
+    const excluded = [...excludedKeys].map((key) => {
+      const [item_type, item_code] = key.split(':')
+      return { item_type, item_code }
+    })
+    setSaving(true)
+    setError(null)
+    putWatchSelection(instrumentId, excluded)
+      .then(() => setOpen(false))
+      .catch((err) => setError(err.message))
+      .finally(() => setSaving(false))
+  }
+
+  const excludedCount = excludedKeys?.size ?? 0
+
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <button onClick={toggle} title="What to watch for this instrument" style={{ fontSize: 14, lineHeight: 1, padding: '2px 6px' }}>
+        ⚙{excludedCount > 0 ? ` (${excludedCount} off)` : ''}
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute', top: '100%', right: 0, zIndex: 10, width: 280, maxHeight: 320,
+            overflowY: 'auto', background: 'white', border: '1px solid #ccc', borderRadius: 4,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)', padding: 8, fontSize: 12, textAlign: 'left',
+          }}
+        >
+          {error && <div style={{ color: 'crimson' }}>{error}</div>}
+          {!error && excludedKeys === null && <div style={{ color: '#888' }}>Loading…</div>}
+          {!error && excludedKeys !== null && (
+            <>
+              {Object.entries(
+                // Only "event" elements are watchable patterns -- "numeric"
+                // ones (RSI/MACD_LINE/... raw values) aren't something that
+                // "fires," so they don't belong in a watch picker. Grouped
+                // by `kind` (PatternDefinition's finer category -- single_
+                // candle/structure/graph_formation/...), NOT `element_type`
+                // (event/numeric), which would put all 41 patterns in one
+                // "event" bucket -- a real bug found 2026-10-04 verifying
+                // this exact picker in the browser.
+                elements.filter((el) => el.element_type === 'event').reduce((groups, el) => {
+                  (groups[el.kind ?? 'other'] ??= []).push(el)
+                  return groups
+                }, {}),
+              ).map(([category, items]) => (
+                <div key={category} style={{ marginBottom: 6 }}>
+                  <div style={{ fontWeight: 600, color: '#555', marginBottom: 2 }}>{category}</div>
+                  {items.map((el) => {
+                    const key = `pattern:${el.code}`
+                    return (
+                      <label key={key} style={{ display: 'block', padding: '1px 0', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox" checked={!excludedKeys.has(key)}
+                          onChange={() => toggleKey(key)}
+                        />{' '}{el.code}
+                      </label>
+                    )
+                  })}
+                </div>
+              ))}
+              {strategies.length > 0 && (
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ fontWeight: 600, color: '#555', marginBottom: 2 }}>strategy</div>
+                  {strategies.map((s) => {
+                    const key = `strategy:${s.id}`
+                    return (
+                      <label key={key} style={{ display: 'block', padding: '1px 0', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox" checked={!excludedKeys.has(key)}
+                          onChange={() => toggleKey(key)}
+                        />{' '}{s.name}
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+              <button type="button" onClick={save} disabled={saving} style={{ width: '100%' }}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </span>
+  )
+}
+
 export default function SymbolTable({
   symbols, liveTicks, backfillStatus, openSymbols, onToggleOpen, onRemove,
-  focusedIndex, onFocusedIndexChange,
+  focusedIndex, onFocusedIndexChange, elements = [], strategies = [],
 }) {
   const containerRef = useRef(null)
 
@@ -142,7 +277,7 @@ export default function SymbolTable({
         <thead style={{ position: 'sticky', top: 0, background: 'white' }}>
           <tr>
             <th>Symbol</th><th>Exchange</th><th>LTP</th><th>Chg</th><th>Chg %</th><th>Dir</th>
-            <th>Gap</th><th>Day</th><th>Candle</th><th>Events</th><th></th>
+            <th>Gap</th><th>Day</th><th>Candle</th><th>Events</th><th>Watch</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -187,6 +322,7 @@ export default function SymbolTable({
                 <td>{tick ? changeCell(tick.day_change_absolute, tick.day_change_percentage) : '—'}</td>
                 <td>{tick ? changeCell(tick.candle_change_absolute, tick.candle_change_percentage) : '—'}</td>
                 <td><EventsCell instrumentId={row.id} /></td>
+                <td><WatchSelectionCell instrumentId={row.id} elements={elements} strategies={strategies} /></td>
                 <td>
                   <button onClick={(e) => { e.stopPropagation(); onRemove(row.id) }}>Remove</button>
                 </td>
@@ -194,7 +330,7 @@ export default function SymbolTable({
             )
           })}
           {symbols.length === 0 && (
-            <tr><td colSpan={11} style={{ textAlign: 'center', color: '#888' }}>No instruments registered yet</td></tr>
+            <tr><td colSpan={12} style={{ textAlign: 'center', color: '#888' }}>No instruments registered yet</td></tr>
           )}
         </tbody>
       </table>

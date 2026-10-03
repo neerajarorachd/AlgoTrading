@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { listSymbols, removeSymbol } from '../api/client.js'
+import { listStrategies, listStrategyElements, listSymbols, removeSymbol } from '../api/client.js'
 import { getSocket, roomFor, subscribeRooms, unsubscribeRooms } from '../api/ws.js'
 import SymbolRegisterForm from '../components/SymbolRegisterForm.jsx'
 import SymbolTable from '../components/SymbolTable.jsx'
@@ -21,6 +21,10 @@ function loadStoredOpenIds() {
 
 export default function MarketWatch() {
   const [symbols, setSymbols] = useState([])
+  // "what to watch" picker's data source -- global catalogs (every
+  // formation/indicator/strategy), fetched once here rather than per row.
+  const [elements, setElements] = useState([])
+  const [strategies, setStrategies] = useState([])
   const [liveTicks, setLiveTicks] = useState({}) // symbol -> tick payload
   const [liveDepth, setLiveDepth] = useState({}) // symbol -> depth payload
   const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
@@ -42,6 +46,11 @@ export default function MarketWatch() {
   useEffect(() => {
     refresh()
   }, [refresh])
+
+  useEffect(() => {
+    listStrategyElements().then(setElements).catch(() => {})
+    listStrategies().then(setStrategies).catch(() => {})
+  }, [])
 
   // keep WS room membership in sync with the registered-symbol list, without
   // restarting anything — each change is an incremental join/leave
@@ -277,6 +286,8 @@ export default function MarketWatch() {
           onRemove={handleRemove}
           focusedIndex={focusedIndex}
           onFocusedIndexChange={setFocusedIndex}
+          elements={elements}
+          strategies={strategies}
         />
       )}
       {openSymbols.length > 0 && (
