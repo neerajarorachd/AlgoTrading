@@ -1,4 +1,5 @@
 from rule_gate import summarize_tree
+from db.models import Strategy
 
 
 def _rs1(client):
@@ -28,6 +29,24 @@ def test_detail_lists_child_rules_with_their_patterns_and_summary(client):
     assert [r["name"] for r in detail["rules"]] == ["Rule 1", "Rule 2"]
     assert detail["rules"][0]["patterns"] == ["A", "B", "C"]
     assert detail["rules"][0]["summary"] == "rsi < 40"
+
+
+def test_rs_detail_active_filter_compiles_to_valid_mssql_not_is_1(client):
+    # Real bug found 2026-10-03 verifying against the live SQL Server VM:
+    # this endpoint's own Strategy.active.is_(True) filter (routes_
+    # recommendation_systems._rules) compiled to "WHERE active IS 1" --
+    # invalid T-SQL -- and the detail endpoint 500'd on every call, not just
+    # when an inactive row existed. SQLite tolerates "IS 1" silently, which
+    # is why no SQLite-backed test caught this; this test compiles against
+    # mssql explicitly so a regression here fails even on SQLite.
+    from sqlalchemy import select
+    from sqlalchemy.dialects import mssql
+    compiled = str(
+        select(Strategy.id).where(Strategy.parent_id == 1, Strategy.active)
+        .compile(dialect=mssql.dialect(), compile_kwargs={"literal_binds": True})
+    )
+    assert "IS 1" not in compiled
+    assert "= 1" in compiled
 
 
 def test_update_settings_and_combine_mode(client):

@@ -85,8 +85,12 @@ def rules_for_pattern(session, parent_strategy_id: int, pattern: str) -> List[Tu
     from db.models import Strategy
     from db.ops import LibStrategies
 
+    # bare Strategy.active, NOT .is_(True) -- the latter compiles to
+    # "WHERE active IS 1" on the mssql dialect, which is invalid T-SQL
+    # (IS only takes NULL/boolean literals, not 1); SQLite tolerates it,
+    # which is why the test suite never caught this against the real DB.
     children = session.query(Strategy).filter(
-        Strategy.parent_id == parent_strategy_id, Strategy.active.is_(True),
+        Strategy.parent_id == parent_strategy_id, Strategy.active,
     ).all()
     out = []
     for child in children:

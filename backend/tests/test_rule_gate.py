@@ -133,6 +133,35 @@ def test_a_rule_can_cover_many_patterns_and_a_pattern_many_rules(session_factory
         assert names("G") == []
 
 
+def test_rules_for_pattern_excludes_an_inactive_child(session_factory):
+    with session_factory() as session:
+        parent = LibStrategies.create(session, {"name": "RS1 parent", "strategy_type": "recommendation_parent"}, None)
+        _make_rule(session, parent, "Active rule", "A", _tree(("rsi", "<", "40")))
+        inactive_id = _make_rule(session, parent, "Disabled rule", "A", _tree(("rsi", "<", "40")))
+        session.query(Strategy).filter_by(id=inactive_id).update({"active": False})
+        session.commit()
+
+        names = [n for n, _ in rg.rules_for_pattern(session, parent, "A")]
+    assert names == ["Active rule"]
+
+
+def test_rules_for_pattern_compiles_to_valid_mssql_not_is_1(session_factory):
+    # Real bug found 2026-10-03 verifying against the live SQL Server VM:
+    # Strategy.active.is_(True) compiles to "WHERE active IS 1" on the mssql
+    # dialect, which is invalid T-SQL (IS only takes NULL/boolean literals).
+    # SQLite silently tolerates it, which is exactly why this test suite
+    # never caught it -- this test compiles against mssql explicitly so a
+    # regression here fails even on SQLite.
+    from sqlalchemy import select
+    from sqlalchemy.dialects import mssql
+    compiled = str(
+        select(Strategy.id).where(Strategy.parent_id == 1, Strategy.active)
+        .compile(dialect=mssql.dialect(), compile_kwargs={"literal_binds": True})
+    )
+    assert "IS 1" not in compiled
+    assert "= 1" in compiled
+
+
 def test_ensure_parent_strategies_creates_one_parent_and_is_idempotent(session_factory):
     LibRecommendationSystems.seed_defaults(session_factory, re_mod.RECOMMENDATION_SYSTEM_SEED)
     LibRecommendationSystems.ensure_parent_strategies(session_factory)

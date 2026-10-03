@@ -46,8 +46,10 @@ def _serialize(rs: RecommendationSystem) -> dict:
 def _rules(session, rs: RecommendationSystem) -> list:
     if rs.strategy_id is None:
         return []
+    # bare Strategy.active, NOT .is_(True) -- see rule_gate.rules_for_pattern's
+    # own comment: .is_(True) compiles to invalid T-SQL ("IS 1") on mssql.
     children = (
-        session.query(Strategy).filter(Strategy.parent_id == rs.strategy_id, Strategy.active.is_(True))
+        session.query(Strategy).filter(Strategy.parent_id == rs.strategy_id, Strategy.active)
         .order_by(Strategy.id).all()
     )
     return [

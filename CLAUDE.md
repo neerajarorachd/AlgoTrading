@@ -166,14 +166,31 @@ twice-daily refresh cycle rather than a static `.env` value. Full plan:
 - **Done**: `BrokerAccount`/`BrokerToken` mirror tables added to AlgoTrading's
   `backend/db/models.py` (PascalCase, deliberately matching Trading's own
   schema/casing since these mirror it exactly — not AlgoTrading-native).
+- **Done, 2026-10-04**: one-time backfill of the 5 current tokens into SQL
+  Server — `backend/scripts/backfill_broker_tokens.py` (read-only `sqlite3`
+  over SSH against `~/Trading/Trading.db`, upserts into AlgoTrading's own
+  `BrokerAccount`/`BrokerToken`; never prints secret values, safe to re-run
+  whenever tokens are refreshed and need re-mirroring). Confirmed in SQL
+  Server: `DHAN_NEERAJ` account + all 5 tokens, `LastRefreshedAt` matching
+  Trading.db exactly. **Found while doing this**: Trading's own
+  `dhan_token.timer` had been "succeeding" (exit 0) every run since
+  2026-10-01 without actually refreshing anything — `LastRefreshedAt` was
+  stuck 3 days stale despite 4 more scheduled runs in between. Root cause
+  not confirmed (not debugged — Trading's code is read-only to us), but the
+  pattern is consistent with the refresh needing a still-valid token to
+  refresh FROM and having none left; resolved when the user manually
+  pasted in a freshly-obtained token and the next manually-triggered run
+  (`sudo systemctl start dhan_token.service`) refreshed all 5 rows
+  normally. Worth watching for a repeat.
 - **Not yet done**: `~/Trading/LibSQLServerTokenMirror.py` (the one
   deliberate, user-approved exception to "don't touch Trading's code" — a
   small, isolated, best-effort mirror called from
   `LibRefreshToken.refresh_all_dhan_tokens()`, never able to break Trading's
-  own SQLite refresh even if it fails); the one-time backfill of the 5
-  current tokens into SQL Server; and wiring AlgoTrading's own `app.py` to
-  construct two `DhanBroker` instances (FIXED2 for the feed, FIXED3 for
-  REST) instead of the current single broker from `.env`.
+  own SQLite refresh even if it fails — would replace the manual backfill
+  script above with an automatic one, running on Trading's own refresh
+  cycle); and wiring AlgoTrading's own `app.py` to construct two
+  `DhanBroker` instances (FIXED2 for the feed, FIXED3 for REST) instead of
+  the current single broker from `.env`.
 - Also built, standalone, not yet wired to real multiple tokens:
   `backend/brokers/token_pool.py` (`TokenPool` — picks whichever of several
   tokens is free rather than queuing behind one) and `DhanBroker`'s own
