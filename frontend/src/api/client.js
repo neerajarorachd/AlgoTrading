@@ -226,3 +226,8 @@ export const getWatchScores = (timeframe = '3min', window) => {
   if (window) params.set('window', window)
   return request(`/api/watch-scores?${params.toString()}`)
 }
+
+// Buy/sell suggestion popover -- display-only, no order placement (see
+// backend/watch_order_popup.py's own module docstring).
+export const getOrderPopup = (instrumentId, timeframe = '3min') =>
+  request(`/api/instruments/${instrumentId}/order-popup?timeframe=${timeframe}`)

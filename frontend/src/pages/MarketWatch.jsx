@@ -333,6 +333,7 @@ export default function MarketWatch() {
           onFocusedIndexChange={setFocusedIndex}
           elements={elements}
           strategies={strategies}
+          scoreByInstrument={scoreByInstrument}
         />
       )}
       {openSymbols.length > 0 && (

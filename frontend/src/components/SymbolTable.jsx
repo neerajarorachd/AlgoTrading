@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getActivityCounts, getRecentActivities, getWatchSelection, putWatchSelection } from '../api/client.js'
+import OrderPopup from './OrderPopup.jsx'
 
 const DIRECTION_COLOR = { up: 'green', down: 'crimson', flat: undefined }
 const VISIBLE_ROWS = 5
@@ -239,9 +240,10 @@ function WatchSelectionCell({ instrumentId, elements, strategies }) {
 
 export default function SymbolTable({
   symbols, liveTicks, backfillStatus, openSymbols, onToggleOpen, onRemove,
-  focusedIndex, onFocusedIndexChange, elements = [], strategies = [],
+  focusedIndex, onFocusedIndexChange, elements = [], strategies = [], scoreByInstrument = {},
 }) {
   const containerRef = useRef(null)
+  const [popupInstrument, setPopupInstrument] = useState(null) // the row to show OrderPopup for, or null
 
   useEffect(() => {
     if (focusedIndex < 0 || !containerRef.current) return
@@ -277,7 +279,7 @@ export default function SymbolTable({
         <thead style={{ position: 'sticky', top: 0, background: 'white' }}>
           <tr>
             <th>Symbol</th><th>Exchange</th><th>LTP</th><th>Chg</th><th>Chg %</th><th>Dir</th>
-            <th>Gap</th><th>Day</th><th>Candle</th><th>Events</th><th>Watch</th><th></th>
+            <th>Gap</th><th>Day</th><th>Candle</th><th>Events</th><th>Watch</th><th>Trade</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -324,16 +326,42 @@ export default function SymbolTable({
                 <td><EventsCell instrumentId={row.id} /></td>
                 <td><WatchSelectionCell instrumentId={row.id} elements={elements} strategies={strategies} /></td>
                 <td>
+                  {(() => {
+                    const score = scoreByInstrument[row.id]
+                    const direction = score && (score.bull_score > score.bear_score ? 'bull'
+                      : score.bear_score > score.bull_score ? 'bear' : null)
+                    if (!direction) return <span style={{ color: '#ccc' }}>—</span>
+                    return (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setPopupInstrument(row) }}
+                        style={{
+                          color: '#fff', border: 'none', borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
+                          background: direction === 'bull' ? '#1b7a3d' : '#b3261e', fontWeight: 600,
+                        }}
+                      >
+                        {direction === 'bull' ? 'Buy' : 'Sell'}
+                      </button>
+                    )
+                  })()}
+                </td>
+                <td>
                   <button onClick={(e) => { e.stopPropagation(); onRemove(row.id) }}>Remove</button>
                 </td>
               </tr>
             )
           })}
           {symbols.length === 0 && (
-            <tr><td colSpan={12} style={{ textAlign: 'center', color: '#888' }}>No instruments registered yet</td></tr>
+            <tr><td colSpan={13} style={{ textAlign: 'center', color: '#888' }}>No instruments registered yet</td></tr>
           )}
         </tbody>
       </table>
+      {popupInstrument && (
+        <OrderPopup
+          instrument={popupInstrument}
+          ltp={liveTicks[popupInstrument.symbol]?.ltp}
+          onClose={() => setPopupInstrument(null)}
+        />
+      )}
     </div>
   )
 }

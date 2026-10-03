@@ -83,6 +83,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     from api.routes_recommendations import recommendations_bp
     from api.routes_strategies import strategies_bp
     from api.routes_symbols import symbols_bp
+    from api.routes_watch_popup import watch_popup_bp
     from api.routes_watch_scores import watch_scores_bp
     from api.routes_watch_selection import watch_selection_bp
     from api.routes_watchlists import watchlists_bp
@@ -93,6 +94,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.register_blueprint(watchlists_bp)
     app.register_blueprint(watch_selection_bp)
     app.register_blueprint(watch_scores_bp)
+    app.register_blueprint(watch_popup_bp)
     app.register_blueprint(historical_data_bp)
     app.register_blueprint(activities_bp)
     app.register_blueprint(backtests_bp)
