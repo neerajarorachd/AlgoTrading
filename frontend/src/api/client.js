@@ -218,3 +218,11 @@ export const getWatchSelection = (instrumentId) => request(`/api/instruments/${i
 
 export const putWatchSelection = (instrumentId, excluded) =>
   request(`/api/instruments/${instrumentId}/watch-selection`, { method: 'PUT', body: JSON.stringify({ excluded }) })
+
+// Colored-cell grid: weighted bull/bear momentum score per instrument from
+// pattern activity in the last `window` candles -- see backend/watch_scoring.py.
+export const getWatchScores = (timeframe = '3min', window) => {
+  const params = new URLSearchParams({ timeframe })
+  if (window) params.set('window', window)
+  return request(`/api/watch-scores?${params.toString()}`)
+}

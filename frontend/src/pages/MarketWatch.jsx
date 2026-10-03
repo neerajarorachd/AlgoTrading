@@ -1,11 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { listStrategies, listStrategyElements, listSymbols, removeSymbol } from '../api/client.js'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getWatchScores, listStrategies, listStrategyElements, listSymbols, removeSymbol } from '../api/client.js'
 import { getSocket, roomFor, subscribeRooms, unsubscribeRooms } from '../api/ws.js'
 import SymbolRegisterForm from '../components/SymbolRegisterForm.jsx'
 import SymbolTable from '../components/SymbolTable.jsx'
+import ScoreGrid from '../components/ScoreGrid.jsx'
 import DepthPanel from '../components/DepthPanel.jsx'
 import CandleChart from '../components/CandleChart.jsx'
 import SidePanel from '../components/SidePanel.jsx'
+
+// Bull-bucket sorts by bull_score desc, bear-bucket by bear_score desc,
+// choppy by total activity desc -- "quiet" has nothing to sort by (every
+// row is 0-0), so it's left in the table's own existing order.
+function scoreSortKey(bucket, row) {
+  if (bucket === 'choppy') return row.bull_score + row.bear_score
+  if (bucket?.endsWith('bear')) return row.bear_score
+  return row.bull_score
+}
 
 const MAX_OPEN_CHARTS = 4
 const OPEN_SYMBOL_IDS_KEY = 'marketWatch.openSymbolIds'
@@ -25,6 +35,11 @@ export default function MarketWatch() {
   // formation/indicator/strategy), fetched once here rather than per row.
   const [elements, setElements] = useState([])
   const [strategies, setStrategies] = useState([])
+  // Colored-cell grid state -- fetched once on mount/refresh (not yet
+  // live-pushed, same "snapshot on load" convention as the Events popover).
+  const [scores, setScores] = useState([])
+  const [bucketColors, setBucketColors] = useState({})
+  const [selectedBucket, setSelectedBucket] = useState(null)
   const [liveTicks, setLiveTicks] = useState({}) // symbol -> tick payload
   const [liveDepth, setLiveDepth] = useState({}) // symbol -> depth payload
   const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
@@ -51,6 +66,22 @@ export default function MarketWatch() {
     listStrategyElements().then(setElements).catch(() => {})
     listStrategies().then(setStrategies).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    getWatchScores().then((res) => { setScores(res.scores); setBucketColors(res.bucket_colors) }).catch(() => {})
+  }, [symbols])
+
+  const scoreByInstrument = useMemo(
+    () => Object.fromEntries(scores.map((r) => [r.instrument_id, r])),
+    [scores],
+  )
+
+  const visibleSymbols = useMemo(() => {
+    if (!selectedBucket) return symbols
+    return symbols
+      .filter((s) => scoreByInstrument[s.id]?.bucket === selectedBucket)
+      .sort((a, b) => scoreSortKey(selectedBucket, scoreByInstrument[b.id]) - scoreSortKey(selectedBucket, scoreByInstrument[a.id]))
+  }, [symbols, selectedBucket, scoreByInstrument])
 
   // keep WS room membership in sync with the registered-symbol list, without
   // restarting anything — each change is an incremental join/leave
@@ -276,9 +307,23 @@ export default function MarketWatch() {
           </button>
         </div>
       </div>
+      {!listCollapsed && scores.length > 0 && (
+        <>
+          <ScoreGrid
+            scores={scores} bucketColors={bucketColors}
+            selectedBucket={selectedBucket} onSelectBucket={setSelectedBucket}
+          />
+          {selectedBucket && (
+            <div style={{ marginBottom: 8, fontSize: 13 }}>
+              Showing <b>{visibleSymbols.length}</b> of {symbols.length}, sorted by {selectedBucket.replace('_', ' ')}{' '}
+              <button onClick={() => setSelectedBucket(null)}>Clear filter</button>
+            </div>
+          )}
+        </>
+      )}
       {!listCollapsed && (
         <SymbolTable
-          symbols={symbols}
+          symbols={visibleSymbols}
           liveTicks={liveTicks}
           backfillStatus={backfillStatus}
           openSymbols={openSymbols}
