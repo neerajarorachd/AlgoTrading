@@ -19,16 +19,30 @@ function volRow(label, value) {
   )
 }
 
+function priceRow(label, price, ltp) {
+  const pct = price != null && ltp ? ((price - ltp) / ltp) * 100 : null
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#666' }}>{label}</span>
+      <span>{price != null ? `${price.toFixed(2)}${pct != null ? ` (${pct > 0 ? '+' : ''}${pct.toFixed(2)}%)` : ''}` : '—'}</span>
+    </div>
+  )
+}
+
+const TARGET_SOURCE_LABEL = {
+  geometric: 'chart level', backtested: 'historical median move', atr_fallback: 'ATR estimate',
+}
+
 export default function OrderPopup({ instrument, ltp, onClose }) {
   const [data, setData] = useState(null) // undefined-ish states: null = loading
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    getOrderPopup(instrument.id)
+    getOrderPopup(instrument.id, '3min', ltp)
       .then(setData)
       .catch((err) => (err.message?.includes('no directional signal') ? setNotFound(true) : setError(err.message)))
-  }, [instrument.id])
+  }, [instrument.id, ltp])
 
   const direction = data?.direction
   const directionLabel = direction === 'bull' ? 'BUY' : direction === 'bear' ? 'SELL' : null
@@ -75,12 +89,21 @@ export default function OrderPopup({ instrument, ltp, onClose }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: '#666' }}>LTP</span>
-                <span>{ltp != null ? ltp.toFixed(2) : '—'}</span>
+                <span>{data.ltp != null ? data.ltp.toFixed(2) : '—'}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: '#666' }}>Pattern</span>
                 <span>{prettyPattern(data.pattern)}{data.intensity != null ? ` (intensity ${data.intensity.toFixed(2)})` : ''}</span>
               </div>
+            </div>
+
+            <div style={{ borderTop: '1px solid #eee', paddingTop: 8, marginBottom: 10 }}>
+              {priceRow('Suggested SL', data.sl_price, data.ltp)}
+              {priceRow('Suggested target', data.target_price, data.ltp)}
+              {data.target_source && (
+                <div style={{ color: '#888', fontSize: 11 }}>via {TARGET_SOURCE_LABEL[data.target_source] ?? data.target_source}</div>
+              )}
+              {volRow('Suggested quantity', data.suggested_quantity)}
             </div>
 
             <div style={{ borderTop: '1px solid #eee', paddingTop: 8, marginBottom: 10 }}>

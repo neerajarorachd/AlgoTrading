@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from brokers.models import Candle
-from db.models import InstrumentActivity, PatternDefinition, PatternOutcome, SubscribedSymbol
+from db.models import CandleIndicators, InstrumentActivity, PatternDefinition, PatternOutcome, SubscribedSymbol
 from db.ops import LibCandles
 from watch_order_popup import (
     intensity_band_for, latest_directional_activity, order_popup_data, volume_stats,
@@ -192,6 +192,52 @@ def test_order_popup_data_includes_pattern_direction_and_volume(session_factory)
     assert data["avg_volume_day"] == 50.0
     assert data["avg_volume_last_15min"] == 50.0
     assert data["intensity_band"] is None  # no PatternOutcome history seeded in this test
+
+
+def test_order_popup_data_uses_the_given_ltp_and_computes_sl_target_quantity(session_factory):
+    instrument_id = _register(session_factory)
+    _seed_patterns(session_factory, ("hammer", "single_candle"))
+    with session_factory() as session:
+        session.add(_activity(instrument_id, 0, "hammer", intensity=2.0))
+        session.add(CandleIndicators(instrument_id=instrument_id, timeframe=TF, ts=T0, atr=2.0))
+        session.commit()
+    LibCandles.persist_bulk(session_factory, [_candle("RELIANCE", i, 100) for i in range(5)])
+
+    with session_factory() as session:
+        data = order_popup_data(session, instrument_id, TF, ltp=250.0)
+    assert data["ltp"] == 250.0  # the given value, not derived from CandleToday
+    assert data["sl_price"] == 247.0  # 250 - 2.0*1.5 (ATR fallback, no geometry/backtest for hammer)
+    assert data["target_price"] == 256.0  # 250 + 2.0*1.5*2.0
+    assert data["target_source"] == "atr_fallback"
+    assert data["suggested_quantity"] == 5  # avg_volume_last_15min=100 / divisor 20
+
+
+def test_order_popup_data_falls_back_to_the_latest_candle_close_when_no_ltp_given(session_factory):
+    instrument_id = _register(session_factory)
+    _seed_patterns(session_factory, ("hammer", "single_candle"))
+    with session_factory() as session:
+        session.add(_activity(instrument_id, 0, "hammer"))
+        session.commit()
+    LibCandles.persist_bulk(session_factory, [_candle("RELIANCE", i, 10) for i in range(3)])
+
+    with session_factory() as session:
+        data = order_popup_data(session, instrument_id, TF)  # no ltp kwarg
+    assert data["ltp"] == 100.5  # _candle()'s own close=100.5
+
+
+def test_order_popup_data_has_no_sl_target_quantity_without_a_resolvable_ltp(session_factory):
+    instrument_id = _register(session_factory)
+    _seed_patterns(session_factory, ("hammer", "single_candle"))
+    with session_factory() as session:
+        session.add(_activity(instrument_id, 0, "hammer"))
+        session.commit()
+    # no CandleToday rows at all -- LTP can't be resolved from anywhere
+
+    with session_factory() as session:
+        data = order_popup_data(session, instrument_id, TF)
+    assert data["ltp"] is None
+    assert data["sl_price"] is None and data["target_price"] is None
+    assert data["suggested_quantity"] is None
 
 
 def test_order_popup_direction_follows_the_windowed_score_not_the_single_latest_activity(session_factory):

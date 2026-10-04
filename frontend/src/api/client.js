@@ -228,6 +228,11 @@ export const getWatchScores = (timeframe = '3min', window) => {
 }
 
 // Buy/sell suggestion popover -- display-only, no order placement (see
-// backend/watch_order_popup.py's own module docstring).
-export const getOrderPopup = (instrumentId, timeframe = '3min') =>
-  request(`/api/instruments/${instrumentId}/order-popup?timeframe=${timeframe}`)
+// backend/watch_order_popup.py's own module docstring). `ltp`, when known,
+// is the frontend's own live tick price -- more current than anything the
+// backend could resolve on its own, so SL/target are computed off it.
+export const getOrderPopup = (instrumentId, timeframe = '3min', ltp) => {
+  const params = new URLSearchParams({ timeframe })
+  if (ltp != null) params.set('ltp', ltp)
+  return request(`/api/instruments/${instrumentId}/order-popup?${params.toString()}`)
+}

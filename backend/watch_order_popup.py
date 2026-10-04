@@ -1,9 +1,15 @@
-"""Market Watch buy/sell suggestion popup — first slice, explicit
-instruction 2026-10-04: "show LTP, average vol for the day and last 15
-min, for single or multi candle patterns, should relate the intesity with
-the range." LTP itself is NOT computed here -- the frontend already holds
-it live via its own WebSocket tick stream (MarketWatch.jsx's `liveTicks`),
-so this module supplies everything ELSE the popup needs.
+"""Market Watch buy/sell suggestion popup. First slice (2026-10-04): LTP,
+average volume (day vs. last 15 min), and for single/multi-candle patterns
+the intensity-related backtested range. Second slice (2026-10-05): real
+suggested SL/target (expected_move.py's geometric-space-vs-backtested-range
+minimum, ATR fallback) and a suggested quantity.
+
+LTP: the frontend already holds it live via its own WebSocket tick stream
+(MarketWatch.jsx's `liveTicks`) and passes it through as a query param
+(routes_watch_popup.py) -- this module trusts that value when given (it's
+genuinely more current than anything queryable here) and only falls back
+to the latest stored candle's own close when no live price was supplied
+(e.g. a caller other than the Watch page itself).
 
 Display-only, same explicit scope as the rest of the Watch page work: no
 order placement from here, that stays in the separate Trading system.
@@ -18,6 +24,7 @@ import watch_scoring
 from db.models import InstrumentActivity, PatternDefinition, SubscribedSymbol
 from db.ops import LibCandles
 from db.ops.LibPatternOutcomes import intensity_banded_analysis
+from expected_move import latest_indicator_row, suggested_quantity, suggested_sl_and_target
 from guiding_scenarios import WINDOW_LOOKBACK_DAYS
 from prediction_tracker import BEARISH_PATTERNS, BULLISH_PATTERNS
 
@@ -98,7 +105,14 @@ def intensity_band_for(session, instrument_id: int, timeframe: str, pattern: str
     return None
 
 
-def order_popup_data(session, instrument_id: int, timeframe: str = "3min") -> Optional[dict]:
+def _resolve_ltp(session, instrument, ltp: Optional[float]) -> Optional[float]:
+    if ltp is not None:
+        return ltp
+    candles = LibCandles.get_range(session, instrument.symbol, instrument.exchange_segment, VOLUME_TIMEFRAME)
+    return float(candles[-1].close_price) if candles else None
+
+
+def order_popup_data(session, instrument_id: int, timeframe: str = "3min", ltp: Optional[float] = None) -> Optional[dict]:
     """None when this instrument has no directional signal to show a
     buy/sell suggestion for at all -- the caller (route) turns that into a
     404/empty response, not a half-filled popup.
@@ -138,10 +152,23 @@ def order_popup_data(session, instrument_id: int, timeframe: str = "3min") -> Op
         intensity_band = intensity_band_for(
             session, instrument_id, timeframe, activity.activity, float(activity.intensity))
 
+    volume = volume_stats(session, instrument.symbol, instrument.exchange_segment)
+
+    resolved_ltp = _resolve_ltp(session, instrument, ltp)
+    sl_target = {"sl_price": None, "target_price": None, "target_source": None}
+    quantity = None
+    if resolved_ltp is not None:
+        indicator_row = latest_indicator_row(session, instrument_id, timeframe)
+        atr = float(indicator_row.atr) if indicator_row is not None and indicator_row.atr is not None else None
+        sl_target = suggested_sl_and_target(session, instrument_id, timeframe, activity, direction, resolved_ltp, atr)
+        quantity = suggested_quantity(volume["avg_volume_last_15min"])
+
     return {
         "pattern": activity.activity, "direction": direction, "kind": kind,
         "intensity": float(activity.intensity) if activity.intensity is not None else None,
         "detected_ts": activity.ts.replace(tzinfo=timezone.utc).isoformat(),
         "intensity_band": intensity_band,
-        **volume_stats(session, instrument.symbol, instrument.exchange_segment),
+        "ltp": resolved_ltp, "suggested_quantity": quantity,
+        **sl_target,
+        **volume,
     }

@@ -19,8 +19,14 @@ def get_order_popup(instrument_id):
     timeframe = request.args.get("timeframe", "3min")
     if timeframe not in _VALID_TIMEFRAMES:
         return jsonify({"error": f"timeframe must be one of {sorted(_VALID_TIMEFRAMES)}"}), 400
+    ltp_param = request.args.get("ltp")
+    if ltp_param is not None:
+        try:
+            ltp_param = float(ltp_param)
+        except ValueError:
+            return jsonify({"error": "ltp must be numeric"}), 400
 
-    data = watch_order_popup.order_popup_data(g.db_session, instrument_id, timeframe)
+    data = watch_order_popup.order_popup_data(g.db_session, instrument_id, timeframe, ltp=ltp_param)
     if data is None:
         return jsonify({"error": "no directional signal for this instrument yet"}), 404
     return jsonify(data)

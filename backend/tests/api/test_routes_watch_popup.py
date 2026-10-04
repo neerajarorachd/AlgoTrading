@@ -17,3 +17,9 @@ def test_rejects_an_invalid_timeframe(client):
     instrument_id = _register(client)
     resp = client.get(f"/api/instruments/{instrument_id}/order-popup?timeframe=7min")
     assert resp.status_code == 400
+
+
+def test_rejects_a_non_numeric_ltp(client):
+    instrument_id = _register(client)
+    resp = client.get(f"/api/instruments/{instrument_id}/order-popup?ltp=not-a-number")
+    assert resp.status_code == 400
