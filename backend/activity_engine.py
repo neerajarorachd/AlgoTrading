@@ -1745,6 +1745,21 @@ class ActivityEngine:
                         for formation_name, formation_intensity in formation_events:
                             if formation_intensity == float("inf"):
                                 formation_intensity = None
+                            # Trade-planning levels, computed here since this
+                            # is the only point in the whole pipeline that
+                            # still has the raw points list in hand, not
+                            # just the persisted single-candle row -- now
+                            # PERSISTED alongside the activity itself (added
+                            # 2026-10-05; previously only logged, see git
+                            # history) so a later, stateless caller (the
+                            # Market Watch popup) can read the real geometry
+                            # instead of falling back to ATR/backtested-range.
+                            neckline_fn, stop_fn, target_fn = FORMATION_LEVEL_FUNCS[formation_name]
+                            neckline, stop, target = neckline_fn(points_list), stop_fn(points_list), target_fn(points_list)
+                            logger.info(
+                                "%s %s %s: neckline=%.2f stop_loss=%.2f target=%.2f",
+                                symbol, candle.timeframe, formation_name, neckline, stop, target,
+                            )
                             self._buffer.append({
                                 "instrument_id": instrument_id, "timeframe": candle.timeframe,
                                 "ts": swing_candle.timestamp,
@@ -1752,18 +1767,8 @@ class ActivityEngine:
                                 "intensity": formation_intensity,
                                 "open_price": swing_candle.open, "high_price": swing_candle.high,
                                 "low_price": swing_candle.low, "close_price": swing_candle.close,
+                                "neckline_price": neckline, "stop_loss_price": stop, "target_price": target,
                             })
-                            # trade-planning levels — derived, not stored
-                            # (see _STOP_LOSS_BUFFER's comment); logged here
-                            # since this is the only point in the whole
-                            # pipeline that still has the raw points list in
-                            # hand, not just the persisted single-candle row
-                            neckline_fn, stop_fn, target_fn = FORMATION_LEVEL_FUNCS[formation_name]
-                            neckline, stop, target = neckline_fn(points_list), stop_fn(points_list), target_fn(points_list)
-                            logger.info(
-                                "%s %s %s: neckline=%.2f stop_loss=%.2f target=%.2f",
-                                symbol, candle.timeframe, formation_name, neckline, stop, target,
-                            )
 
                         # separate type-only sequences for structure-shift
                         # detection (LL-HH-HL / HH-LL-LH) — see detect_

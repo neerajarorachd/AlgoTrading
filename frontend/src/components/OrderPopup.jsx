@@ -30,7 +30,8 @@ function priceRow(label, price, ltp) {
 }
 
 const TARGET_SOURCE_LABEL = {
-  geometric: 'chart level', backtested: 'historical median move', atr_fallback: 'ATR estimate',
+  neckline: 'formation measured-move', geometric: 'chart level',
+  backtested: 'historical median move', atr_fallback: 'ATR estimate',
 }
 
 export default function OrderPopup({ instrument, ltp, onClose }) {

@@ -349,6 +349,18 @@ class InstrumentActivity(Base):
     low_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
     close_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
     detected_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    # Trade-planning levels for a confirmed double/triple top/bottom --
+    # activity_engine.py's own FORMATION_LEVEL_FUNCS, computed at detection
+    # time (the only point in the pipeline with the raw SwingPoints list in
+    # hand) and persisted here starting 2026-10-05 so a later, stateless
+    # caller (the Market Watch buy/sell popup's expected_move.py) can read
+    # the real geometry instead of only ATR/backtested-range fallbacks.
+    # NULL for every other pattern (and for graph-formation rows detected
+    # before this column existed -- no retroactive backfill, the swing-
+    # point state that produced them is long gone from memory).
+    neckline_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    stop_loss_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    target_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(

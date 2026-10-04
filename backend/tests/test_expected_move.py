@@ -20,11 +20,13 @@ def _register(session_factory, symbol="RELIANCE") -> int:
         return row.id
 
 
-def _activity(instrument_id, activity, high_price=101, low_price=99, close_price=100.5):
+def _activity(instrument_id, activity, high_price=101, low_price=99, close_price=100.5,
+              neckline_price=None, stop_loss_price=None, target_price=None):
     return InstrumentActivity(
         instrument_id=instrument_id, timeframe=TF, ts=T0, activity_type="candle_pattern",
         activity=activity, intensity=1.0, open_price=100, high_price=high_price,
         low_price=low_price, close_price=close_price,
+        neckline_price=neckline_price, stop_loss_price=stop_loss_price, target_price=target_price,
     )
 
 
@@ -189,6 +191,32 @@ def test_sl_and_target_are_none_without_atr_and_no_other_data(session_factory):
         activity = _activity(instrument_id, "hammer")
         result = suggested_sl_and_target(session, instrument_id, TF, activity, "bull", ltp=100.0, atr=None)
     assert result == {"sl_price": None, "target_price": None, "target_source": None}
+
+
+def test_graph_formation_with_stored_geometry_uses_it_directly(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        activity = _activity(
+            instrument_id, "double_top", neckline_price=315.0, stop_loss_price=318.6, target_price=312.3,
+        )
+        # geometric/backtested distances would be computed off a totally
+        # different LTP (250) -- if the neckline shortcut works, the stored
+        # values win untouched, never recombined with a distance from ltp.
+        result = suggested_sl_and_target(session, instrument_id, TF, activity, "bear", ltp=250.0, atr=99.0)
+    assert result == {"sl_price": 318.6, "target_price": 312.3, "target_source": "neckline"}
+
+
+def test_graph_formation_without_stored_geometry_falls_through_to_atr(session_factory):
+    # A pre-2026-10-05 row (or any row where detection somehow left these
+    # NULL) -- double_top is still in _GRAPH_FORMATION_PATTERNS, but with no
+    # stored levels it must fall through to the normal distance logic, not
+    # silently return None/None.
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        activity = _activity(instrument_id, "double_top")  # neckline/stop/target all None
+        result = suggested_sl_and_target(session, instrument_id, TF, activity, "bear", ltp=100.0, atr=2.0)
+    assert result["target_source"] == "atr_fallback"
+    assert result["target_price"] == 100.0 - 2.0 * 1.5 * 2.0
 
 
 # ------------------------------------------------------------------ suggested_quantity

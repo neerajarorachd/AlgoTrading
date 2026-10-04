@@ -27,13 +27,12 @@ prediction_tracker.crossover_target/crossover_stop_loss -- the same
 fallback candlestick/indicator patterns already use everywhere else in
 this project, not a third ranked candidate squeezed into the same min().
 
-Stop-loss stays ATR-based universally (prediction_tracker.
-crossover_stop_loss) regardless of pattern -- a protective stop is a risk
-decision, not a "how far can this move" one; this project's own existing
-FORMATION_LEVEL_FUNCS precedent ties SL to the SAME geometry as target only
-for graph formations specifically, which aren't handled geometrically here
-(see graph_formation note below), so there's no existing precedent this
-would contradict by staying uniform.
+Stop-loss stays ATR-based (prediction_tracker.crossover_stop_loss) for
+every pattern EXCEPT graph formations with stored geometry (see below),
+where SL and target both come from the SAME neckline-based levels --
+matching order_backtest.py's own existing `_sl_target_for` precedent
+exactly (`atr_neckline` mode: `stop_fn(points), target_fn(points)` for a
+graph formation, ATR crossover levels for everything else).
 
 Suggested quantity: last 15-min average volume / LIQUIDITY_DIVISOR_DEFAULT
 -- a hand-picked starting divisor (not reusing Strategy.
@@ -65,14 +64,15 @@ _STRUCTURE_PATTERNS = {
     "bearish_structure_shift", "bearish_break_of_structure",
 }
 
-# double_top/double_bottom/triple_top/triple_bottom DO have a real neckline-
-# based FORMATION_LEVEL_FUNCS geometry in activity_engine.py -- but it needs
-# the pattern's own last-3 SwingPoints, which only exist in the live
-# engine's in-memory state at detection time, never persisted anywhere
-# queryable after the fact. Reconstructing them retroactively from
-# InstrumentActivity's swing_high/swing_low history is a real, separate
-# piece of work (not attempted here) -- these patterns fall back to
-# backtested range / ATR only, same as candlesticks, until that's built.
+# double_top/double_bottom/triple_top/triple_bottom have a real neckline-
+# based FORMATION_LEVEL_FUNCS geometry -- activity_engine.py computes it at
+# detection time (the only point with the raw SwingPoints list in hand) and
+# persists it directly onto the InstrumentActivity row as of 2026-10-05
+# (InstrumentActivity.neckline_price/stop_loss_price/target_price). A row
+# detected BEFORE that column existed has these as NULL -- falls through to
+# backtested range / ATR like any other pattern, no retroactive backfill
+# attempted (the swing-point state that produced an old row is long gone).
+_GRAPH_FORMATION_PATTERNS = {"double_top", "double_bottom", "triple_top", "triple_bottom"}
 
 LIQUIDITY_DIVISOR_DEFAULT = 20
 
@@ -145,12 +145,29 @@ def suggested_sl_and_target(session, instrument_id: int, timeframe: str, activit
                              direction: str, ltp: float, atr: Optional[float],
                              atr_multiplier: float = DEFAULT_ATR_MULTIPLIER,
                              risk_reward_ratio: float = DEFAULT_RISK_REWARD_RATIO) -> dict:
-    """{sl_price, target_price, target_source} -- target_source is "geometric"/
-    "backtested"/"atr_fallback" so a caller (and a curious user) can see
-    WHICH of the two real options won the min(), or that neither applied.
+    """{sl_price, target_price, target_source} -- target_source is
+    "neckline"/"geometric"/"backtested"/"atr_fallback" so a caller (and a
+    curious user) can see which real option won, or that none applied.
     None/None when ATR itself isn't available yet (too early in the
     instrument's life) -- same "don't guess, say so" posture as everywhere
-    else in this module."""
+    else in this module.
+
+    Graph formations with stored neckline geometry are a special case,
+    checked first and returned directly: BOTH sl_price and target_price
+    come from the SAME `stop_loss_price`/`target_price` columns persisted
+    at detection time -- these are the real measured-move levels for this
+    EXACT occurrence (not a distance recomputed off today's LTP the way
+    every other pattern's target is), matching order_backtest.py's own
+    `_sl_target_for` precedent exactly. Falls through to the normal
+    distance-based logic below when those columns are NULL (a pre-
+    2026-10-05 row, or a non-graph-formation pattern)."""
+    if (activity.activity in _GRAPH_FORMATION_PATTERNS
+            and activity.stop_loss_price is not None and activity.target_price is not None):
+        return {
+            "sl_price": float(activity.stop_loss_price), "target_price": float(activity.target_price),
+            "target_source": "neckline",
+        }
+
     sl_price = crossover_stop_loss(ltp, atr, direction, atr_multiplier) if atr is not None else None
 
     geo = geometric_target_distance(session, instrument_id, timeframe, activity, direction, ltp)
