@@ -1,10 +1,13 @@
-// Tab bar for the new Market Watch page -- a pinned "Market Watch" grid tab
-// plus one tab per instrument the user has opened into its own detail view.
+// Tab bar for the Workspace page -- a pinned "Market Watch" grid tab, one tab
+// per instrument the user has opened into its own detail view, and a "+"
+// (AddTabMenu) for adding a tab by hand.
 // `tabs` is the list of instrument tabs only (the grid tab is implicit and
 // always first); `activeId` is null for the grid tab or an instrument id.
-export default function PageTabBar({ tabs, activeId, onSelect, onClose }) {
+import AddTabMenu from './AddTabMenu.jsx'
+
+export default function PageTabBar({ tabs, activeId, onSelect, onClose, onAddTab }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 'var(--space-4)' }}>
+    <div data-tab-pane style={{ display: 'flex', alignItems: 'center', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 'var(--space-4)' }}>
       <TabButton active={activeId === null} onClick={() => onSelect(null)}>
         Market Watch
       </TabButton>
@@ -20,6 +23,7 @@ export default function PageTabBar({ tabs, activeId, onSelect, onClose }) {
           </span>
         </TabButton>
       ))}
+      <AddTabMenu onPick={onAddTab} />
     </div>
   )
 }

@@ -19,6 +19,17 @@ function check(name, actual, expected) {
   results.push({ name, pass, actual, expected });
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}`);
 }
+// Polls `fn` until it returns true or `ms` passes -- for checks right after
+// a click on the live stack, where live data can re-render the grid mid-check
+// (two checks failed intermittently on live, 2026-10-08, with a fixed wait).
+async function eventually(fn, ms = 3000) {
+  const end = Date.now() + ms
+  for (;;) {
+    if (await fn()) return true
+    if (Date.now() > end) return false
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
 function checkTrue(name, cond, note) {
   const pass = !!cond;
   results.push({ name, pass, actual: cond, expected: true, note });
@@ -97,10 +108,17 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] no page errors on load', errors.length === 0, errors);
 
     const h1 = await page.locator('h1').innerText();
-    check('[new] grid tab heading', h1, 'Market Watch');
+    check('[new] grid tab heading', h1.toLowerCase(), 'workspace');
 
     const tabBarText = await page.locator('button', { hasText: 'Market Watch' }).first().innerText();
     checkTrue('[new] pinned grid tab present', tabBarText.includes('Market Watch'));
+
+    // "+" add-tab menu (2026-10-08): lists the tab kinds, nothing else yet
+    await page.locator('[data-tab-pane] [data-add-tab]').click();
+    const addOptions = await page.locator('[data-add-tab-menu] [data-add-tab-option]').allInnerTexts();
+    check('[new] + opens the add-tab options', addOptions.map((t) => t.split('\n')[0]), ['Watchlist', 'Sector Watch']);
+    await page.keyboard.press('Escape');
+    checkTrue('[new] add-tab menu closes on Escape', await page.locator('[data-add-tab-menu]').count() === 0);
 
     const rowCount = await page.locator('table tbody tr').count();
     checkTrue('[new] symbol rows rendered', rowCount > 0, rowCount);
@@ -136,7 +154,7 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] old separate Trade column is gone (merged into Actions)', removeButtonsInOldColumns === 0);
 
     // ---- page header, as finalized in the preview (ported 2026-10-06) ----
-    const eyebrow = page.locator('text=Live snapshot · Market Watch');
+    const eyebrow = page.locator('text=Live snapshot · Workspace');
     checkTrue('[new] header eyebrow present', await eyebrow.count() > 0);
     const paramsText = await page.locator('text=/instruments registered/').first().innerText().catch(() => '');
     const totalRows = await page.evaluate(() => fetch('/api/symbols').then((r) => r.json()).then((rows) => rows.length));
@@ -145,7 +163,7 @@ function checkTrue(name, cond, note) {
     await headerToggle.click();
     await page.waitForTimeout(150);
     checkTrue('[new] header collapse hides eyebrow + params', await eyebrow.count() === 0 && await page.locator('text=/instruments registered/').count() === 0);
-    check('[new] header collapse keeps the title', await page.locator('h1').innerText(), 'Market Watch');
+    check('[new] header collapse keeps the title', (await page.locator('h1').innerText()).toLowerCase(), 'workspace');
     await page.locator('button[title="Expand header"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] header expand restores eyebrow', await eyebrow.count() > 0);
@@ -206,7 +224,8 @@ function checkTrue(name, cond, note) {
     await page.locator('button[title="Collapse"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] card collapse hides the grid, tiles and footer',
-      await page.locator('table tbody tr').count() === 0 && await tiles.count() === 0 && await footer.count() === 0);
+      // grid rows only -- the live events panel has its own table, which has rows on live
+      await eventually(async () => await page.locator('[data-instrument-grid] tbody tr').count() === 0 && await tiles.count() === 0 && await footer.count() === 0));
     await page.locator('button[title="Expand"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] card expand restores the grid', await page.locator('table tbody tr').count() > 0);
@@ -234,8 +253,8 @@ function checkTrue(name, cond, note) {
     });
     checkTrue('[new] every row\'s action follows the bucket rule (strong=Buy/Sell, mild=Hold, else none)', actionCheck.length === 0, actionCheck);
     checkTrue('[new] no "Remove" text left; every row has a × remove button',
-      await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
-      && await page.locator('table tbody button[aria-label^="Remove "]').count() === await page.locator('table tbody tr').count());
+      await eventually(async () => await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
+        && await page.locator('[data-instrument-grid] tbody button[aria-label^="Remove "]').count() === await page.locator('[data-instrument-grid] tbody tr').count()));
     checkTrue('[new] redundant "open chart below" icon removed', await page.locator('table tbody button[title*="chart below"]').count() === 0);
     const tallestActions = await page.$$eval('table tbody tr', (rows) => Math.max(...rows.map((r) => r.cells[r.cells.length - 1].getBoundingClientRect().height)));
     checkTrue('[new] Actions cells stay on one line (no wrapping)', tallestActions < 48, tallestActions);
@@ -304,7 +323,7 @@ function checkTrue(name, cond, note) {
     const backBtn = page.locator('button', { hasText: '← Back' }).first();
     await backBtn.click();
     await page.waitForTimeout(400);
-    checkTrue('[new] exiting fullscreen returns to the grid', await page.locator('h1', { hasText: 'Market Watch' }).count() > 0);
+    checkTrue('[new] exiting fullscreen returns to the grid', await page.locator('h1', { hasText: /workspace/i }).count() > 0);
 
     // ---- open-in-tab + real new-tab navigation ----
     const openTabBtn = firstRow.locator('button[title*="Open"][title*="tab"]').first();

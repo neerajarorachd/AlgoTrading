@@ -31,7 +31,7 @@ function readStoredCollapsed() {
 // every page, so this is the most-visible single change. Nav structure
 // unchanged from the pre-Phase-1 shell; only the styling is new.
 const NAV_ITEMS = [
-  { to: '/', label: 'Market Watch', end: true, icon: '⌂' },
+  { to: '/', label: 'Workspace', end: true, icon: '⌂' },
   { to: '/market-watch-classic', label: 'Market Watch (Classic)', icon: '⌁' },
   { to: '/strategies', label: 'Strategies', icon: '♟' },
   { to: '/watchlists', label: 'Watchlists', icon: '★' },

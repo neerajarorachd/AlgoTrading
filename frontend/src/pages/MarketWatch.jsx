@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getWatchScores, listStrategies, listStrategyElements, listSymbols, removeSymbol } from '../api/client.js'
+import {
+  getWatchScores, getWatchlist, listStrategies, listStrategyElements, listSymbols, listWatchlists, removeSymbol,
+} from '../api/client.js'
 import { getSocket, roomFor, subscribeRooms, unsubscribeRooms } from '../api/ws.js'
 import AddInstrumentButton from '../components/AddInstrumentButton.jsx'
 import FeedStatusBadge, { useFeedStatus } from '../components/FeedStatusBadge.jsx'
@@ -7,6 +9,8 @@ import LiveEventsPanel, { isIndicatorSignal } from '../components/LiveEventsPane
 import InstrumentGrid from '../components/InstrumentGrid.jsx'
 import InstrumentDetail from '../components/InstrumentDetail.jsx'
 import PageTabBar from '../components/PageTabBar.jsx'
+import PageTitleBar from '../components/PageTitleBar.jsx'
+import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import GraphWindow from '../components/GraphWindow.jsx'
 import Button from '../components/kit/Button.jsx'
@@ -60,6 +64,7 @@ function loadStoredIds(key) {
 
 export default function MarketWatch() {
   const [symbols, setSymbols] = useState([])
+  const [watchlistName, setWatchlistName] = useState(null)
   const [elements, setElements] = useState([])
   const [strategies, setStrategies] = useState([])
   const [scores, setScores] = useState([])
@@ -98,6 +103,27 @@ export default function MarketWatch() {
   const refresh = useCallback(() => {
     listSymbols().then(setSymbols).catch(() => {})
   }, [])
+
+  // The grid lists every registered instrument; name it after the watchlist
+  // whose members are exactly that set (today "All Registered Stocks").
+  // Watchlist tabs (the + menu, later) will name their own watchlist.
+  useEffect(() => {
+    if (!symbols.length) return
+    let cancelled = false
+    const ids = new Set(symbols.map((s) => s.id))
+    ;(async () => {
+      const lists = await listWatchlists().catch(() => [])
+      for (const w of lists.filter((x) => x.member_count === ids.size)) {
+        const full = await getWatchlist(w.id).catch(() => null)
+        if (full && full.members.every((m) => ids.has(m.instrument_id))) {
+          if (!cancelled) setWatchlistName(full.name)
+          return
+        }
+      }
+      if (!cancelled) setWatchlistName('All registered instruments')
+    })()
+    return () => { cancelled = true }
+  }, [symbols])
 
   useEffect(() => {
     refresh()
@@ -339,7 +365,20 @@ export default function MarketWatch() {
   const activeTabInstrument = tabs.find((s) => s.id === activeTabId) ?? null
 
   return (
-    <div style={{ paddingBlock: 32, paddingInline: 'var(--space-5)', maxWidth: 1200, margin: '0 auto' }}>
+    <>
+    {/* Title bar, full width above the tabs (user's mockup, 2026-10-08).
+        The ▲ collapse lives here now that the title moved out of the body. */}
+    <PageTitleBar
+      title="Workspace"
+      right={(
+        <button
+          type="button" onClick={() => setHeaderCollapsed((c) => !c)}
+          title={headerCollapsed ? 'Expand header' : 'Collapse header'}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 14, padding: '2px 6px' }}
+        >{headerCollapsed ? '▼' : '▲'}</button>
+      )}
+    />
+    <div style={{ paddingTop: 8, paddingBottom: 32, paddingInline: 'var(--space-5)', maxWidth: 1200, margin: '0 auto' }}>
       <style>{`
         .chart-grid {
           display: flex;
@@ -367,22 +406,16 @@ export default function MarketWatch() {
         />
       ) : (
         <>
-          {/* Page header, as finalized in the preview: eyebrow, title + ▲
-              collapse (hides eyebrow and params, keeps the title), params. */}
-          <div style={{ marginBottom: 34 }}>
+          {/* Page header: eyebrow + params under the tabs; the title itself
+              is in PageTitleBar above, whose ▲ hides these two lines. */}
+          <div style={{ marginBottom: headerCollapsed ? 12 : 20 }}>
+            {/* blank until resolved: keeps its height, so nothing jumps */}
+            <WatchlistHeading name={watchlistName ?? ' '} />
             {!headerCollapsed && (
               <div style={{ fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600, marginBottom: 3 }}>
-                Live snapshot · Market Watch
+                Live snapshot · Workspace
               </div>
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--text)' }}>Market Watch</h1>
-              <button
-                type="button" onClick={() => setHeaderCollapsed((c) => !c)}
-                title={headerCollapsed ? 'Expand header' : 'Collapse header'}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 14, padding: '2px 6px' }}
-              >{headerCollapsed ? '▼' : '▲'}</button>
-            </div>
             {!headerCollapsed && (
               <div style={{ fontSize: 13.5, color: 'var(--text-dim)', display: 'flex', flexWrap: 'wrap', gap: '6px 18px', marginTop: 3 }}>
                 <span><b style={{ color: 'var(--text)', fontWeight: 600 }}>{symbols.length}</b> instruments registered</span>
@@ -500,6 +533,7 @@ export default function MarketWatch() {
         </>
       )}
     </div>
+    </>
   )
 }
 

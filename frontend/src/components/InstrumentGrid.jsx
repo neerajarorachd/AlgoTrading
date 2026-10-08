@@ -161,7 +161,7 @@ export default function InstrumentGrid({
         border: embedded ? 'none' : '1px solid var(--border)', borderRadius: embedded ? 0 : 'var(--radius-md)', outline: 'none',
       }}
     >
-      <table>
+      <table data-instrument-grid>
         <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--surface-alt)', boxShadow: '0 1px 0 var(--border)' }}>
           <tr>
             {COLUMNS.map((col) => {
