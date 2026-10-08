@@ -16,6 +16,7 @@ from prediction_tracker import BEARISH_PATTERNS, BULLISH_PATTERNS
 candles_bp = Blueprint("candles", __name__)
 
 _VALID_TIMEFRAMES = {"1min", "3min", "5min"}
+_MAX_DAYS = 30  # sessions per /api/candles request (the chart loads more as it scrolls back)
 _IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
@@ -51,16 +52,39 @@ def get_candles():
     ts_from = _parse_ts(from_param) if from_param else None
     ts_to = _parse_ts(to_param) if to_param else None
 
-    rows = ops_candles.get_range(
-        g.db_session, symbol, exchange_segment, timeframe, ts_from=ts_from, ts_to=ts_to,
-    )
-
     # An explicit from/to range is a caller asking for exactly that period
     # (e.g. a backtest-style lookup) -- return it as-is, empty or not, and
     # skip the "is this actually today" / fallback logic entirely below,
     # which only makes sense for "give me whatever's current."
     if ts_from is not None or ts_to is not None:
+        rows = ops_candles.get_range(
+            g.db_session, symbol, exchange_segment, timeframe, ts_from=ts_from, ts_to=ts_to,
+        )
         return jsonify({"candles": [_serialize(row) for row in rows], "live": True, "as_of_date": None})
+
+    # Multi-day chart (2026-10-08, step 4): `days` sessions ending with the
+    # current one, or -- with `before` -- `days` older sessions for the
+    # chart's scroll-back. Without either, unchanged: the current session only.
+    days = min(max(request.args.get("days", 1, type=int), 1), _MAX_DAYS)
+    before_param = request.args.get("before")
+    if before_param:
+        older, has_more = _sessions_before(symbol, exchange_segment, timeframe, _parse_ts(before_param), days)
+        return jsonify({"candles": [_serialize(row) for row in older], "has_more": has_more})
+
+    rows, live, as_of_date = _current_session(symbol, exchange_segment, timeframe)
+    body = {"candles": [_serialize(row) for row in rows], "live": live, "as_of_date": as_of_date}
+    if "days" in request.args:
+        anchor = _ist_day_start(rows[0].ts if rows else datetime.now(timezone.utc).replace(tzinfo=None))
+        older, has_more = _sessions_before(symbol, exchange_segment, timeframe, anchor, days - 1)
+        body["candles"] = [_serialize(row) for row in older] + body["candles"]
+        body["has_more"] = has_more
+    return jsonify(body)
+
+
+def _current_session(symbol: str, exchange_segment: str, timeframe: str):
+    """(rows, live, as_of_date) for the session the chart opens on: today's
+    candles when there are any, else the most complete recent session."""
+    rows = ops_candles.get_range(g.db_session, symbol, exchange_segment, timeframe)
 
     if rows:
         latest_date = max(_ist_date(row.ts) for row in rows)
@@ -71,7 +95,7 @@ def get_candles():
             # on one chart, squashing its time axis. Same single-day rule
             # the not-live fallback below already applies.
             todays = [row for row in rows if _ist_date(row.ts) == latest_date]
-            return jsonify({"candles": [_serialize(row) for row in todays], "live": True, "as_of_date": None})
+            return todays, True, None
 
     # Not live (either candles_today was empty, or its rows are all stale --
     # e.g. the daily flush didn't run and scattered leftover rows from many
@@ -97,14 +121,41 @@ def get_candles():
         else candles_today_latest_day
     )
     if chosen_rows:
-        as_of_date = _ist_date(chosen_rows[0].ts).isoformat()
-        return jsonify({
-            "candles": [_serialize(row) for row in chosen_rows],
-            "live": False,
-            "as_of_date": as_of_date,
-        })
+        return chosen_rows, False, _ist_date(chosen_rows[0].ts).isoformat()
 
-    return jsonify({"candles": [], "live": True, "as_of_date": None})
+    return [], True, None
+
+
+def _ist_day_start(ts: datetime) -> datetime:
+    """00:00 IST of `ts`'s IST day, as naive UTC."""
+    return datetime.combine(_ist_date(ts), datetime.min.time()) - _IST_OFFSET
+
+
+def _sessions_before(symbol: str, exchange_segment: str, timeframe: str, before: datetime, days: int):
+    """Candles of the last `days` sessions strictly before `before` (naive
+    UTC), oldest first, and whether any older candle exists. From
+    candles_historical, plus earlier-day rows candles_today still holds
+    (no EOD archiver yet); historical wins on overlap."""
+    if days < 1:
+        return [], _has_candles_before(symbol, exchange_segment, timeframe, before)
+    # calendar span wide enough for `days` sessions across weekends/holidays
+    since = before - timedelta(days=days * 2 + 7)
+    until = before - timedelta(microseconds=1)
+    by_ts = {}
+    for ops in (ops_candles, ops_candles_historical):
+        for row in ops.get_range(g.db_session, symbol, exchange_segment, timeframe, ts_from=since, ts_to=until):
+            by_ts[row.ts.replace(tzinfo=None) if row.ts.tzinfo else row.ts] = row
+    rows = [by_ts[ts] for ts in sorted(by_ts)]
+    wanted = sorted({_ist_date(row.ts) for row in rows})[-days:]
+    if not wanted:
+        return [], False
+    first_day = wanted[0]
+    kept = [row for row in rows if _ist_date(row.ts) >= first_day]
+    return kept, _has_candles_before(symbol, exchange_segment, timeframe, _ist_day_start(kept[0].ts))
+
+
+def _has_candles_before(symbol: str, exchange_segment: str, timeframe: str, ts: datetime) -> bool:
+    return ops_candles_historical.has_candles_before(g.db_session, symbol, exchange_segment, timeframe, ts)
 
 
 @candles_bp.get("/api/candles/indicators")

@@ -43,6 +43,15 @@ export const getCandles = (symbol, exchangeSegment, timeframe, from, to) => {
   return request(`/api/candles?${params.toString()}`)
 }
 
+// Multi-day chart: `days` sessions ending with the current one, or -- with
+// `before` (an ISO ts) -- `days` older sessions for scroll-back. Response
+// adds `has_more` (older candles exist). See routes_candles.get_candles.
+export const getCandleSessions = (symbol, exchangeSegment, timeframe, days, before) => {
+  const params = new URLSearchParams({ symbol, exchange_segment: exchangeSegment, timeframe, days: String(days) })
+  if (before) params.set('before', before)
+  return request(`/api/candles?${params.toString()}`)
+}
+
 // VWAP/BB/RSI/MACD/Stochastic/MA/EMA aligned to each candle -- see
 // backend/api/routes_candles.py's get_candle_indicators. Defaults to
 // today only (no from/to) when the live chart just wants "right now".

@@ -361,3 +361,69 @@ def test_get_candle_markers_honours_an_explicit_range(client, session_factory):
 def test_get_candles_rejects_invalid_timeframe(client):
     resp = client.get("/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=10min")
     assert resp.status_code == 400
+
+
+# ---- multi-day chart (days / before), 2026-10-08 step 4 ----
+
+def _seed_hist(session_factory, ts, close=100.0, timeframe="1min"):
+    with session_factory() as session:
+        session.add(CandleHistorical(
+            symbol="RELIANCE", exchange_segment="NSE_EQ", timeframe=timeframe, ts=ts,
+            open_price=close - 1, high_price=close + 1, low_price=close - 2, close_price=close, volume=100,
+        ))
+        session.commit()
+
+
+def _past_session(days_ago, hour=4, minute=0):
+    """A UTC timestamp inside the IST session `days_ago` calendar days back."""
+    d = _ist_today() - timedelta(days=days_ago)
+    return datetime(d.year, d.month, d.day, hour, minute, tzinfo=timezone.utc)
+
+
+def test_get_candles_days_prepends_previous_sessions_before_today(client, session_factory):
+    _seed_hist(session_factory, _past_session(3), close=97.0)
+    _seed_hist(session_factory, _past_session(2), close=98.0)
+    _seed_hist(session_factory, _past_session(1), close=99.0)
+    _seed_candle(session_factory, minute=15, close=100.0)
+
+    body = client.get("/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=1min&days=3").get_json()
+    assert body["live"] is True
+    assert [c["close"] for c in body["candles"]] == [98.0, 99.0, 100.0]
+    assert body["has_more"] is True
+
+
+def test_get_candles_days_has_more_false_when_nothing_older(client, session_factory):
+    _seed_hist(session_factory, _past_session(1), close=99.0)
+    _seed_candle(session_factory, minute=15, close=100.0)
+
+    body = client.get("/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=1min&days=5").get_json()
+    assert [c["close"] for c in body["candles"]] == [99.0, 100.0]
+    assert body["has_more"] is False
+
+
+def test_get_candles_before_returns_older_sessions_only(client, session_factory):
+    for n in (5, 4, 3, 2, 1):
+        _seed_hist(session_factory, _past_session(n), close=100.0 - n)
+    before = _past_session(2, hour=0, minute=0).isoformat()
+
+    body = client.get(
+        f"/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=1min&days=2&before={before.replace('+00:00', 'Z')}"
+    ).get_json()
+    assert [c["close"] for c in body["candles"]] == [96.0, 97.0]
+    assert body["has_more"] is True  # day -5 is still older
+    assert "live" not in body
+
+
+def test_get_candles_days_keeps_the_timeframe(client, session_factory):
+    _seed_hist(session_factory, _past_session(1), close=90.0, timeframe="5min")
+    _seed_hist(session_factory, _past_session(1, minute=5), close=91.0, timeframe="1min")
+    body = client.get("/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=5min&days=2").get_json()
+    assert [c["close"] for c in body["candles"]] == [90.0]
+
+
+def test_get_candles_without_days_is_unchanged_single_session(client, session_factory):
+    _seed_hist(session_factory, _past_session(1), close=99.0)
+    _seed_candle(session_factory, minute=15, close=100.0)
+    body = client.get("/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=1min").get_json()
+    assert [c["close"] for c in body["candles"]] == [100.0]
+    assert "has_more" not in body

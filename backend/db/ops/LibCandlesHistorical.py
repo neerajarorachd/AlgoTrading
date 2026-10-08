@@ -44,6 +44,15 @@ def get_last_ts(session, symbol: str, exchange_segment: str, timeframe: str) -> 
     return row[0] if row is not None else None
 
 
+def has_candles_before(session, symbol: str, exchange_segment: str, timeframe: str, ts: datetime) -> bool:
+    """Whether any stored candle is older than `ts` -- the chart's "more to
+    load when scrolling back" flag."""
+    return session.query(CandleHistorical.id).filter(
+        CandleHistorical.symbol == symbol, CandleHistorical.exchange_segment == exchange_segment,
+        CandleHistorical.timeframe == timeframe, CandleHistorical.ts < ts,
+    ).first() is not None
+
+
 def _upsert(session, symbol: str, exchange_segment: str, candle: Candle) -> None:
     existing = session.query(CandleHistorical).filter_by(
         symbol=symbol, exchange_segment=exchange_segment,

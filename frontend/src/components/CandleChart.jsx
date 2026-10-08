@@ -20,10 +20,17 @@
 // vertically with GraphWindow's own Depth panel into one shared column
 // (validated in the preview) needs GraphWindow restructuring -- out of
 // scope here, which focused on the chart's actual data being real.
+//
+// Multi-day (2026-10-08, step 4): opens on the last INITIAL_DAYS sessions
+// (scrolled to the current one) and loads MORE_DAYS older sessions each time
+// the view nears the left edge. Past days' indicators/markers come from the
+// DB (filled by backend/feed/chart_history_fill.py); the current session's
+// are re-fetched on every closed candle, older ones only once. Faint
+// vertical lines mark day boundaries; marker names show on hover.
 import { useEffect, useRef, useState } from 'react'
 import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts'
 import {
-  getCandles, getCandleIndicators, getCandleMarkers, getCandlePivots,
+  getCandleSessions, getCandleIndicators, getCandleMarkers, getCandlePivots,
 } from '../api/client.js'
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
@@ -32,6 +39,10 @@ const TIMEFRAMES = ['1min', '3min', '5min']
 const MAIN_HEIGHT = 260
 const SUB_HEIGHT = 70
 const IST_OFFSET_SECONDS = 5.5 * 60 * 60
+const INITIAL_DAYS = 5
+const MORE_DAYS = 5
+const LOAD_MORE_EDGE_BARS = 30 // load older sessions when the view's left edge is this close to the first bar
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 function tok(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -44,6 +55,35 @@ function formatIST(unixSeconds) {
   const hh = String(shifted.getUTCHours()).padStart(2, '0')
   const mm = String(shifted.getUTCMinutes()).padStart(2, '0')
   return `${hh}:${mm}`
+}
+
+function formatISTDate(unixSeconds) {
+  const shifted = new Date((unixSeconds + IST_OFFSET_SECONDS) * 1000)
+  return `${shifted.getUTCDate()} ${MONTHS[shifted.getUTCMonth()]}`
+}
+
+// day boundaries (lightweight-charts tick types 0-2: year/month/day) show
+// the date, intraday ticks the time
+function tickFormatter(unixSeconds, tickMarkType) {
+  return tickMarkType < 3 ? formatISTDate(unixSeconds) : formatIST(unixSeconds)
+}
+
+function crosshairFormatter(unixSeconds) {
+  return `${formatISTDate(unixSeconds)} ${formatIST(unixSeconds)}`
+}
+
+function toUnix(ts) {
+  return Math.floor(new Date(ts).getTime() / 1000)
+}
+
+// IST calendar day of a unix time, as a sortable number (days since epoch)
+function istDay(unixSeconds) {
+  return Math.floor((unixSeconds + IST_OFFSET_SECONDS) / 86400)
+}
+
+// 00:00 IST of the candle's IST day, as an ISO UTC string
+function istDayStartIso(ts) {
+  return new Date((istDay(toUnix(ts)) * 86400 - IST_OFFSET_SECONDS) * 1000).toISOString()
 }
 
 function toBar(candle) {
@@ -82,8 +122,8 @@ function sharedChartOptions() {
     layout: { background: { color: tok('--chart-bg') }, textColor: tok('--chart-text'), fontFamily: 'inherit', attributionLogo: false },
     grid: { vertLines: { color: tok('--chart-grid') }, horzLines: { color: tok('--chart-grid') } },
     rightPriceScale: { borderColor: tok('--chart-border') },
-    timeScale: { borderColor: tok('--chart-border'), timeVisible: true, secondsVisible: false, tickMarkFormatter: formatIST },
-    localization: { timeFormatter: formatIST },
+    timeScale: { borderColor: tok('--chart-border'), timeVisible: true, secondsVisible: false, tickMarkFormatter: tickFormatter },
+    localization: { timeFormatter: crosshairFormatter },
     crosshair: { mode: CrosshairMode.Normal },
   }
 }
@@ -136,12 +176,23 @@ export default function CandleChart({
   const toggleState = useRef({}) // key -> bool, read by the toggle*/refresh* functions below
   const lastPivots = useRef(null) // the raw pivots object, so re-enabling the toggle after turning it off doesn't need a re-fetch
   const lastCandles = useRef([]) // so a theme change can recolor the volume bars (their up/down color is baked in per-bar, not a series-level option)
-  const rangeRef = useRef(null) // {from, to} of the fallback day being shown, or null when live (endpoints default to today)
+  const sessionStartRef = useRef(null) // ISO 00:00 IST of the current (newest) session shown -- its indicators/markers are re-fetched per candle
+  const histRows = useRef({ indicators: [], markers: [] }) // older sessions' rows, fetched once
+  const currentRows = useRef({ indicators: [], markers: [] }) // the current session's rows, re-fetched per candle
+  const hasMoreRef = useRef(false)
+  const loadingOlderRef = useRef(false)
+  const readyForMoreRef = useRef(false) // scroll-back only after the chart has opened on the current session
+  const loadTokenRef = useRef(0) // bumped per full load, so a scroll-back response for an old instrument/timeframe is dropped
+  const loadOlderRef = useRef(null) // latest loadOlder closure, called from the chart's range subscription
+  const markerNamesRef = useRef(new Map()) // bar time -> marker names, for the hover tooltip
+  const daySepRef = useRef(null)
+  const tooltipRef = useRef(null)
   const [readout, setReadout] = useState({}) // latest value per picker row, shown beside each checkbox
 
   const [timeframe, setTimeframe] = useState('1min')
   const [asOfDate, setAsOfDate] = useState(null)
   const [indicatorsOpen, setIndicatorsOpen] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [, forceRender] = useState(0) // bumped after a toggle so the picker's checked state re-renders
   const { theme } = useTheme()
 
@@ -216,6 +267,22 @@ export default function CandleChart({
       })
     })
 
+    c.main.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      drawDaySeparators()
+      if (range && range.from < LOAD_MORE_EDGE_BARS) loadOlderRef.current?.()
+    })
+    c.main.subscribeCrosshairMove((param) => {
+      const tip = tooltipRef.current
+      if (!tip) return
+      const names = param.time != null && param.point ? markerNamesRef.current.get(param.time) : null
+      if (!names || !names.length) { tip.style.display = 'none'; return }
+      tip.textContent = names.join(' · ')
+      tip.style.display = 'block'
+      const width = containerRef.current?.clientWidth ?? 0
+      tip.style.left = `${Math.min(Math.max(param.point.x + 12, 0), Math.max(width - tip.offsetWidth - 70, 0))}px`
+      tip.style.top = `${Math.max(param.point.y - 34, 4)}px`
+    })
+
     const resizeObserver = new ResizeObserver(() => resizeCharts())
     resizeObserver.observe(containerRef.current)
     const railObserver = new ResizeObserver(() => syncRailHeight())
@@ -226,6 +293,7 @@ export default function CandleChart({
       const width = containerRef.current.clientWidth
       c.main.resize(width, fillHeight ? (containerRef.current.clientHeight || MAIN_HEIGHT) : MAIN_HEIGHT)
       ;[c.rsi, c.macd, c.stoch].forEach((chart) => chart.resize(width, SUB_HEIGHT))
+      drawDaySeparators()
     }
     syncRailHeight()
     updateTimeAxisVisibility()
@@ -280,44 +348,130 @@ export default function CandleChart({
   useEffect(() => {
     if (!instrument || !charts.current.main) return
     let cancelled = false
+    const token = ++loadTokenRef.current
+    hasMoreRef.current = false
+    readyForMoreRef.current = false
+    histRows.current = { indicators: [], markers: [] }
+    currentRows.current = { indicators: [], markers: [] }
     loadAll()
     return () => { cancelled = true }
 
     async function loadAll() {
       const [candlesRes, pivotsRes] = await Promise.all([
-        getCandles(instrument.symbol, instrument.exchange_segment, timeframe).catch(() => null),
+        getCandleSessions(instrument.symbol, instrument.exchange_segment, timeframe, INITIAL_DAYS).catch(() => null),
         getCandlePivots(instrument.symbol, instrument.exchange_segment).catch(() => null),
       ])
       if (cancelled) return
-      if (candlesRes) {
-        charts.current.candle.setData(candlesRes.candles.map(toBar))
-        lastCandles.current = candlesRes.candles
-        charts.current.volume.setData(candlesRes.candles.map(toVolumeBar))
-        charts.current.spacers.forEach((s) => s.setData(toWhitespace(candlesRes.candles)))
-        setAsOfDate(candlesRes.live ? null : candlesRes.as_of_date)
-        charts.current.main.timeScale().fitContent()
-      }
       if (pivotsRes) applyPivots(pivotsRes.pivots)
-      // Indicators/markers must cover the SAME day the candles show -- when
-      // there's no live data the candles fall back to a previous session,
-      // and the endpoints' own "today" default would then return nothing.
-      const shown = candlesRes?.candles ?? []
-      rangeRef.current = candlesRes && !candlesRes.live && shown.length
-        ? { from: shown[0].ts, to: shown[shown.length - 1].ts }
-        : null
+      if (!candlesRes) return
+      const candles = candlesRes.candles
+      applyCandles(candles)
+      setAsOfDate(candlesRes.live ? null : candlesRes.as_of_date)
+      hasMoreRef.current = Boolean(candlesRes.has_more)
+      sessionStartRef.current = candles.length ? istDayStartIso(candles[candles.length - 1].ts) : null
+      // Older sessions' indicators/markers once; the current session's in
+      // refreshIndicatorsAndMarkers (also re-run on every closed candle).
+      const start = sessionStartRef.current
+      if (start && candles.length && candles[0].ts < start) {
+        const to = new Date(new Date(start).getTime() - 1000).toISOString()
+        const [ind, mk] = await Promise.all([
+          getCandleIndicators(instrument.symbol, instrument.exchange_segment, timeframe, candles[0].ts, to).catch(() => null),
+          getCandleMarkers(instrument.symbol, instrument.exchange_segment, timeframe, candles[0].ts, to).catch(() => null),
+        ])
+        if (cancelled) return
+        histRows.current = { indicators: ind?.indicators ?? [], markers: mk?.markers ?? [] }
+      }
       await refreshIndicatorsAndMarkers(() => cancelled)
+      if (cancelled || token !== loadTokenRef.current) return
+      showCurrentSession(candles)
+      readyForMoreRef.current = true
     }
-  }, [instrument, timeframe])
+  }, [instrument, timeframe, reloadKey])
+
+  // opens scrolled to the newest session, with a little of the previous one in view
+  function showCurrentSession(candles) {
+    if (!candles.length || !charts.current.main) return
+    const start = sessionStartRef.current
+    const firstCurrent = candles.findIndex((x) => x.ts >= start)
+    const from = Math.max((firstCurrent < 0 ? 0 : firstCurrent) - 15, 0)
+    charts.current.main.timeScale().setVisibleLogicalRange({ from, to: candles.length + 3 })
+  }
+
+  function applyCandles(candles) {
+    const c = charts.current
+    if (!c.main) return
+    lastCandles.current = candles
+    c.candle.setData(candles.map(toBar))
+    c.volume.setData(candles.map(toVolumeBar))
+    c.spacers.forEach((s) => s.setData(toWhitespace(candles)))
+    drawDaySeparators()
+  }
 
   async function refreshIndicatorsAndMarkers(isCancelled) {
-    const { from, to } = rangeRef.current ?? {}
+    const start = sessionStartRef.current
     const [indicatorsRes, markersRes] = await Promise.all([
-      getCandleIndicators(instrument.symbol, instrument.exchange_segment, timeframe, from, to).catch(() => null),
-      getCandleMarkers(instrument.symbol, instrument.exchange_segment, timeframe, from, to).catch(() => null),
+      getCandleIndicators(instrument.symbol, instrument.exchange_segment, timeframe, start).catch(() => null),
+      getCandleMarkers(instrument.symbol, instrument.exchange_segment, timeframe, start).catch(() => null),
     ])
     if (isCancelled()) return
-    if (indicatorsRes) applyIndicatorRows(indicatorsRes.indicators)
-    if (markersRes) applyMarkers(markersRes.markers)
+    if (indicatorsRes) currentRows.current.indicators = indicatorsRes.indicators
+    if (markersRes) currentRows.current.markers = markersRes.markers
+    applyIndicatorRows([...histRows.current.indicators, ...currentRows.current.indicators])
+    applyMarkers([...histRows.current.markers, ...currentRows.current.markers])
+  }
+
+  // scroll-back: prepend MORE_DAYS older sessions, keeping the view where it was
+  async function loadOlder() {
+    if (!readyForMoreRef.current || loadingOlderRef.current || !hasMoreRef.current || !lastCandles.current.length || !instrument) return
+    loadingOlderRef.current = true
+    const token = loadTokenRef.current
+    const stale = () => token !== loadTokenRef.current
+    try {
+      const first = lastCandles.current[0].ts
+      const res = await getCandleSessions(instrument.symbol, instrument.exchange_segment, timeframe, MORE_DAYS, first).catch(() => null)
+      if (stale() || !res) return
+      hasMoreRef.current = Boolean(res.has_more)
+      const older = res.candles
+      if (!older.length) return
+      const to = new Date(new Date(first).getTime() - 1000).toISOString()
+      const [ind, mk] = await Promise.all([
+        getCandleIndicators(instrument.symbol, instrument.exchange_segment, timeframe, older[0].ts, to).catch(() => null),
+        getCandleMarkers(instrument.symbol, instrument.exchange_segment, timeframe, older[0].ts, to).catch(() => null),
+      ])
+      if (stale() || !charts.current.main) return
+      const timeScale = charts.current.main.timeScale()
+      const range = timeScale.getVisibleLogicalRange()
+      histRows.current = {
+        indicators: [...(ind?.indicators ?? []), ...histRows.current.indicators],
+        markers: [...(mk?.markers ?? []), ...histRows.current.markers],
+      }
+      applyCandles([...older, ...lastCandles.current])
+      applyIndicatorRows([...histRows.current.indicators, ...currentRows.current.indicators])
+      applyMarkers([...histRows.current.markers, ...currentRows.current.markers])
+      if (range) timeScale.setVisibleLogicalRange({ from: range.from + older.length, to: range.to + older.length })
+    } finally {
+      loadingOlderRef.current = false
+    }
+  }
+  loadOlderRef.current = loadOlder
+
+  // faint vertical line + date at the first bar of each IST day
+  function drawDaySeparators() {
+    const layer = daySepRef.current
+    const c = charts.current
+    if (!layer || !c.main) return
+    const candles = lastCandles.current
+    const timeScale = c.main.timeScale()
+    const parts = []
+    for (let i = 1; i < candles.length; i++) {
+      const t = toUnix(candles[i].ts)
+      if (istDay(t) === istDay(toUnix(candles[i - 1].ts))) continue
+      const x = timeScale.timeToCoordinate(t)
+      if (x == null) continue
+      parts.push(`<div style="position:absolute;top:0;bottom:0;left:${Math.round(x) - 4}px;border-left:1px dashed var(--chart-border)"></div>`
+        + `<div style="position:absolute;top:2px;left:${Math.round(x)}px;font-size:10.5px;color:var(--text-faint)">${formatISTDate(t)}</div>`)
+    }
+    layer.innerHTML = parts.join('')
   }
 
   function applyIndicatorRows(rows) {
@@ -392,10 +546,12 @@ export default function CandleChart({
       patterns: rows.filter((r) => MARKER_DEFS[0].types.includes(r.activity_type)).map(markerFor),
       signals: rows.filter((r) => MARKER_DEFS[1].types.includes(r.activity_type)).map(markerFor),
     }
+    // readout counts: the current session only
+    const current = currentRows.current.markers
     setReadout((prev) => ({
       ...prev,
-      patterns: String(markersRef.current.patterns.length),
-      signals: String(markersRef.current.signals.length),
+      patterns: String(current.filter((r) => MARKER_DEFS[0].types.includes(r.activity_type)).length),
+      signals: String(current.filter((r) => MARKER_DEFS[1].types.includes(r.activity_type)).length),
     }))
     refreshMarkers()
   }
@@ -410,7 +566,9 @@ export default function CandleChart({
       position: bear ? 'aboveBar' : 'belowBar',
       color,
       shape: isSignal ? (bear ? 'arrowDown' : 'arrowUp') : 'circle',
-      text: row.activity,
+      // no label on the chart (dozens per session made it unreadable,
+      // 2026-10-08) -- the names show in a tooltip on hover instead
+      name: row.activity,
     }
   }
 
@@ -419,7 +577,10 @@ export default function CandleChart({
     if (toggleState.current.patterns !== false) active.push(...markersRef.current.patterns)
     if (toggleState.current.signals !== false) active.push(...markersRef.current.signals)
     active.sort((a, b) => a.time - b.time)
-    charts.current.candle?.setMarkers(active)
+    const names = new Map()
+    active.forEach((m) => names.set(m.time, [...(names.get(m.time) ?? []), m.name]))
+    markerNamesRef.current = names
+    charts.current.candle?.setMarkers(active.map(({ name, ...marker }) => marker))
   }
 
   // ---- live updates: incremental candle+volume, full re-fetch for the rest
@@ -431,28 +592,23 @@ export default function CandleChart({
     const socket = getSocket()
     function onCandleClosed(msg) {
       if (cancelled || msg.symbol !== instrument.symbol || msg.timeframe !== timeframe) return
+      // a candle from a newer day than the current session (a new day, or
+      // live data after a not-live fallback): reload everything
+      if (!sessionStartRef.current || istDayStartIso(msg.candle.ts) > sessionStartRef.current) {
+        setReloadKey((k) => k + 1)
+        return
+      }
       charts.current.candle?.update(toBar(msg.candle))
       charts.current.volume?.update(toVolumeBar(msg.candle))
       charts.current.spacers?.forEach((s) => s.update(toWhitespace([msg.candle])[0]))
       const withoutDup = lastCandles.current.filter((c) => c.ts !== msg.candle.ts)
       lastCandles.current = [...withoutDup, msg.candle]
       setAsOfDate(null)
-      rangeRef.current = null // a real live candle landed -- we're on today now
       refreshIndicatorsAndMarkers(() => cancelled)
     }
     function onBackfillStatus(status) {
       if (cancelled || status.symbol !== instrument.symbol || status.status !== 'done') return
-      getCandles(instrument.symbol, instrument.exchange_segment, timeframe).catch(() => null).then((candlesRes) => {
-        if (cancelled || !candlesRes) return
-        charts.current.candle?.setData(candlesRes.candles.map(toBar))
-        lastCandles.current = candlesRes.candles
-        charts.current.volume?.setData(candlesRes.candles.map(toVolumeBar))
-        charts.current.spacers?.forEach((s) => s.setData(toWhitespace(candlesRes.candles)))
-        setAsOfDate(candlesRes.live ? null : candlesRes.as_of_date)
-        const shown = candlesRes.candles
-        rangeRef.current = !candlesRes.live && shown.length ? { from: shown[0].ts, to: shown[shown.length - 1].ts } : null
-        refreshIndicatorsAndMarkers(() => cancelled)
-      })
+      setReloadKey((k) => k + 1)
     }
     socket.on('candle_closed', onCandleClosed)
     socket.on('backfill_status', onBackfillStatus)
@@ -565,12 +721,21 @@ export default function CandleChart({
 
       <div style={{ display: 'flex', gap: 14, flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
         <div ref={stackRef} style={{ flex: '1 1 auto', minWidth: 0, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', display: fillHeight ? 'flex' : undefined, flexDirection: fillHeight ? 'column' : undefined }}>
-          <div style={{ flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
+          <div style={{ position: 'relative', flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
             {/* height:100% in fullscreen so the price pane fills whatever the
                 sub-panels leave -- without it this div only ever wraps the
                 canvas's own 260px and resizeCharts() reads that back, so
                 fullscreen never grew (caught by ui_test_suite.cjs). */}
             <div ref={containerRef} style={{ width: '100%', height: fillHeight ? '100%' : undefined, overflow: fillHeight ? 'hidden' : undefined }} />
+            <div ref={daySepRef} data-day-separators aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none', overflow: 'hidden' }} />
+            <div
+              ref={tooltipRef} data-marker-tooltip role="tooltip"
+              style={{
+                display: 'none', position: 'absolute', pointerEvents: 'none', zIndex: 4, maxWidth: 320,
+                fontSize: 11.5, fontWeight: 600, color: 'var(--text)', background: 'var(--surface)',
+                border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-sm)', padding: '4px 8px',
+              }}
+            />
           </div>
           <div data-pane style={{ borderTop: '1px solid var(--border)' }}><div ref={rsiElRef} style={{ width: '100%' }} /></div>
           <div data-pane style={{ borderTop: '1px solid var(--border)' }}><div ref={macdElRef} style={{ width: '100%' }} /></div>

@@ -12,6 +12,8 @@ shortly after session_scheduler.py's 15:30 IST stop. Two responsibilities:
      in a 7-day rotation, against every active instrument, on each of
      1min/3min/5min, writing results into the existing BacktestRunMaster/
      BacktestRun/BacktestRunResult tables via scripts/run_backtest.py.
+  In between, past days' indicator rows and patterns are stored for the
+  chart (feed/chart_history_fill.py), for days that lack them.
 
 Assumptions, carried over from planning rather than silently re-decided
 here (see memory: the market-session-scheduler/EOD-service design):
@@ -45,6 +47,7 @@ from typing import Callable, List, Optional, Tuple
 from db.ops.LibStrategies import get_all as get_all_strategies
 from db.ops.LibSymbols import get_active as get_active_symbols
 from db.session import session_scope
+from feed.chart_history_fill import fill_all as fill_chart_history
 from feed.gap_fill import backfill_missing_candles
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
@@ -109,6 +112,12 @@ def run_eod_cycle(session_factory, rest_broker, aggregator, now: Optional[dateti
         except Exception:
             logger.exception("EOD backfill failed for %s (%s)", symbol, exchange_segment)
             backfill_errors.append(symbol)
+
+    # past days' indicators + patterns for the chart (feed/chart_history_fill.py)
+    try:
+        fill_chart_history(session_factory, [(s, seg) for s, seg, _ in symbol_targets], now=now)
+    except Exception:
+        logger.exception("EOD chart history fill failed")
 
     logger.info(
         "EOD: %d strategy(ies) rotated today, backtesting against %d active symbol(s) x %d timeframe(s)",

@@ -84,11 +84,11 @@ def ensure_warmup_history(session_factory, rest_broker, symbol, security_id, exc
     ensure_data_available(session_factory, rest_broker, symbol, security_id, exchange_segment, "1min", start, end)
 
 
-def _history_1min(session_factory, symbol, exchange_segment, day_start) -> list:
-    """Prior sessions' 1-min candles: candles_historical plus whatever
-    earlier-day rows candles_today still holds (it has no EOD archiver yet),
-    de-duplicated by timestamp."""
-    since = day_start - timedelta(days=WARMUP_DAYS + 1)
+def _history_1min(session_factory, symbol, exchange_segment, day_start, days: int = WARMUP_DAYS) -> list:
+    """Prior sessions' 1-min candles (the last `days` calendar days):
+    candles_historical plus whatever earlier-day rows candles_today still
+    holds (it has no EOD archiver yet), de-duplicated by timestamp."""
+    since = day_start - timedelta(days=days + 1)
     before = day_start - timedelta(seconds=1)
     by_ts = {}
     with session_scope(session_factory) as session:

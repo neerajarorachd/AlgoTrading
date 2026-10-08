@@ -338,6 +338,58 @@ function checkTrue(name, cond, note) {
     await page.close();
   }
 
+  // ==================== multi-day chart (step 4, 2026-10-08) ====================
+  // Needs a stock with several stored sessions; CHART_SYMBOL picks it (the
+  // test stack is seeded with BANKBARODA). Skipped if that row isn't there.
+  {
+    const symbol = process.env.CHART_SYMBOL || 'BANKBARODA';
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const candleCalls = [];
+    page.on('request', (r) => { if (r.url().includes('/api/candles?')) candleCalls.push(r.url()); });
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page.waitForTimeout(4000);
+    const row = page.locator('table tbody tr', { hasText: symbol }).first();
+    if (await row.count() === 0) {
+      console.log(`SKIP  [chart] no ${symbol} row on this stack`);
+    } else {
+      await row.click();
+      await page.waitForTimeout(3500);
+      checkTrue('[chart] opens with several sessions (days= requested)', candleCalls.some((u) => /[?&]days=\d+/.test(u)), candleCalls);
+      const chart = page.locator('.chart-grid').first();
+      const dayLabels = await chart.locator('[data-day-separators] div').count();
+      checkTrue('[chart] day-boundary lines drawn for earlier sessions', dayLabels >= 2, dayLabels);
+
+      // hover across the price pane until a marker's names show
+      const canvas = chart.locator('canvas').first();
+      const box = await canvas.boundingBox();
+      let tipText = ''
+      for (let x = box.x + box.width - 80; x > box.x + 20 && !tipText; x -= 3) {
+        await page.mouse.move(x, box.y + box.height / 2);
+        tipText = await chart.locator('[data-marker-tooltip]').evaluate((el) => (el.style.display === 'block' ? el.textContent : ''));
+      }
+      checkTrue('[chart] marker names show on hover (no labels drawn on the chart)', tipText.length > 0, tipText);
+
+      // scroll back: drag the chart right until older sessions are requested
+      const before = candleCalls.length;
+      for (let i = 0; i < 30 && !candleCalls.slice(before).some((u) => u.includes('before=')); i++) {
+        await page.mouse.move(box.x + 60, box.y + box.height / 2);
+        await page.mouse.wheel(-1500, 0); // horizontal wheel (headless drag only scrolls once)
+        await page.waitForTimeout(400);
+      }
+      // the test stack's socket.io polling keeps resetting and can queue this request ~15s behind hung long-polls
+      await page.waitForResponse((r) => r.url().includes('before='), { timeout: 30000 }).catch(() => {});
+      checkTrue('[chart] scrolling back loads older sessions (before= requested)', candleCalls.slice(before).some((u) => u.includes('before=')), candleCalls.slice(before));
+      await page.waitForTimeout(3000);
+      const dayLabelsAfter = await chart.locator('[data-day-separators] div').count();
+      checkTrue('[chart] more day lines after loading older sessions', dayLabelsAfter > dayLabels, { dayLabels, dayLabelsAfter });
+      await page.screenshot({ path: process.env.CHART_SHOT || 'chart_multiday.png', clip: await chart.boundingBox() }).catch(() => {});
+    }
+    checkTrue('[chart] no page errors', errors.length === 0, errors);
+    await page.close();
+  }
+
   console.log('\n==================== REAL APP UI TEST SUITE ====================');
   results.forEach((r) => console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.name}${r.pass ? '' : `  (got ${JSON.stringify(r.actual)}, expected ${JSON.stringify(r.expected)})`}`));
   const failed = results.filter((r) => !r.pass);
