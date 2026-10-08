@@ -97,7 +97,7 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] no page errors on load', errors.length === 0, errors);
 
     const h1 = await page.locator('h1').innerText();
-    check('[new] grid tab heading', h1, 'Workspace');
+    check('[new] grid tab heading', h1.toLowerCase(), 'workspace');
 
     const tabBarText = await page.locator('button', { hasText: 'Market Watch' }).first().innerText();
     checkTrue('[new] pinned grid tab present', tabBarText.includes('Market Watch'));
@@ -152,7 +152,7 @@ function checkTrue(name, cond, note) {
     await headerToggle.click();
     await page.waitForTimeout(150);
     checkTrue('[new] header collapse hides eyebrow + params', await eyebrow.count() === 0 && await page.locator('text=/instruments registered/').count() === 0);
-    check('[new] header collapse keeps the title', await page.locator('h1').innerText(), 'Workspace');
+    check('[new] header collapse keeps the title', (await page.locator('h1').innerText()).toLowerCase(), 'workspace');
     await page.locator('button[title="Expand header"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] header expand restores eyebrow', await eyebrow.count() > 0);
@@ -311,7 +311,7 @@ function checkTrue(name, cond, note) {
     const backBtn = page.locator('button', { hasText: '← Back' }).first();
     await backBtn.click();
     await page.waitForTimeout(400);
-    checkTrue('[new] exiting fullscreen returns to the grid', await page.locator('h1', { hasText: 'Workspace' }).count() > 0);
+    checkTrue('[new] exiting fullscreen returns to the grid', await page.locator('h1', { hasText: /workspace/i }).count() > 0);
 
     // ---- open-in-tab + real new-tab navigation ----
     const openTabBtn = firstRow.locator('button[title*="Open"][title*="tab"]').first();

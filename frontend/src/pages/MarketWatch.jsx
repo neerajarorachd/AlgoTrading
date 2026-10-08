@@ -7,6 +7,7 @@ import LiveEventsPanel, { isIndicatorSignal } from '../components/LiveEventsPane
 import InstrumentGrid from '../components/InstrumentGrid.jsx'
 import InstrumentDetail from '../components/InstrumentDetail.jsx'
 import PageTabBar from '../components/PageTabBar.jsx'
+import PageTitleBar from '../components/PageTitleBar.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import GraphWindow from '../components/GraphWindow.jsx'
 import Button from '../components/kit/Button.jsx'
@@ -339,7 +340,20 @@ export default function MarketWatch() {
   const activeTabInstrument = tabs.find((s) => s.id === activeTabId) ?? null
 
   return (
-    <div style={{ paddingBlock: 32, paddingInline: 'var(--space-5)', maxWidth: 1200, margin: '0 auto' }}>
+    <>
+    {/* Title bar, full width above the tabs (user's mockup, 2026-10-08).
+        The ▲ collapse lives here now that the title moved out of the body. */}
+    <PageTitleBar
+      title="Workspace"
+      right={(
+        <button
+          type="button" onClick={() => setHeaderCollapsed((c) => !c)}
+          title={headerCollapsed ? 'Expand header' : 'Collapse header'}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 14, padding: '2px 6px' }}
+        >{headerCollapsed ? '▼' : '▲'}</button>
+      )}
+    />
+    <div style={{ paddingTop: 8, paddingBottom: 32, paddingInline: 'var(--space-5)', maxWidth: 1200, margin: '0 auto' }}>
       <style>{`
         .chart-grid {
           display: flex;
@@ -367,22 +381,14 @@ export default function MarketWatch() {
         />
       ) : (
         <>
-          {/* Page header, as finalized in the preview: eyebrow, title + ▲
-              collapse (hides eyebrow and params, keeps the title), params. */}
-          <div style={{ marginBottom: 34 }}>
+          {/* Page header: eyebrow + params under the tabs; the title itself
+              is in PageTitleBar above, whose ▲ hides these two lines. */}
+          <div style={{ marginBottom: headerCollapsed ? 0 : 20 }}>
             {!headerCollapsed && (
               <div style={{ fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600, marginBottom: 3 }}>
                 Live snapshot · Workspace
               </div>
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--text)' }}>Workspace</h1>
-              <button
-                type="button" onClick={() => setHeaderCollapsed((c) => !c)}
-                title={headerCollapsed ? 'Expand header' : 'Collapse header'}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 14, padding: '2px 6px' }}
-              >{headerCollapsed ? '▼' : '▲'}</button>
-            </div>
             {!headerCollapsed && (
               <div style={{ fontSize: 13.5, color: 'var(--text-dim)', display: 'flex', flexWrap: 'wrap', gap: '6px 18px', marginTop: 3 }}>
                 <span><b style={{ color: 'var(--text)', fontWeight: 600 }}>{symbols.length}</b> instruments registered</span>
@@ -500,6 +506,7 @@ export default function MarketWatch() {
         </>
       )}
     </div>
+    </>
   )
 }
 

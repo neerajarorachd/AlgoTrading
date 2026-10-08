@@ -43,6 +43,9 @@
   --text-dim: #5a6773;
   --text-faint: #8996a2;
   --text-on-accent: #ffffff;
+  /* page title bar (PageTitleBar.jsx) */
+  --title-bg: #5b4b9e;
+  --title-text: #ffffff;
 
   /* Brand / interactive */
   --accent: #5b4b9e;
@@ -130,6 +133,8 @@
     --text-dim: #9aa7b3;
     --text-faint: #69757f;
     --text-on-accent: #04181a;
+    --title-bg: #2e2552;
+    --title-text: #e4dcff;
 
     --accent: #a594f0;
     --accent-hover: #bcadf5;
@@ -183,6 +188,8 @@
   --text-dim: #9aa7b3;
   --text-faint: #69757f;
   --text-on-accent: #04181a;
+  --title-bg: #2e2552;
+  --title-text: #e4dcff;
 
   --accent: #a594f0;
   --accent-hover: #bcadf5;
