@@ -372,11 +372,11 @@ export default function MarketWatch() {
           <div style={{ marginBottom: 34 }}>
             {!headerCollapsed && (
               <div style={{ fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600, marginBottom: 3 }}>
-                Live snapshot · Market Watch
+                Live snapshot · Workspace
               </div>
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--text)' }}>Market Watch</h1>
+              <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--text)' }}>Workspace</h1>
               <button
                 type="button" onClick={() => setHeaderCollapsed((c) => !c)}
                 title={headerCollapsed ? 'Expand header' : 'Collapse header'}

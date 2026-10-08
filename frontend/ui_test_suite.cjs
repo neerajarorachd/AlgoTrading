@@ -97,10 +97,17 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] no page errors on load', errors.length === 0, errors);
 
     const h1 = await page.locator('h1').innerText();
-    check('[new] grid tab heading', h1, 'Market Watch');
+    check('[new] grid tab heading', h1, 'Workspace');
 
     const tabBarText = await page.locator('button', { hasText: 'Market Watch' }).first().innerText();
     checkTrue('[new] pinned grid tab present', tabBarText.includes('Market Watch'));
+
+    // "+" add-tab menu (2026-10-08): lists the tab kinds, nothing else yet
+    await page.locator('[data-tab-pane] [data-add-tab]').click();
+    const addOptions = await page.locator('[data-add-tab-menu] [data-add-tab-option]').allInnerTexts();
+    check('[new] + opens the add-tab options', addOptions.map((t) => t.split('\n')[0]), ['Watchlist', 'Sector Watch']);
+    await page.keyboard.press('Escape');
+    checkTrue('[new] add-tab menu closes on Escape', await page.locator('[data-add-tab-menu]').count() === 0);
 
     const rowCount = await page.locator('table tbody tr').count();
     checkTrue('[new] symbol rows rendered', rowCount > 0, rowCount);
@@ -136,7 +143,7 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] old separate Trade column is gone (merged into Actions)', removeButtonsInOldColumns === 0);
 
     // ---- page header, as finalized in the preview (ported 2026-10-06) ----
-    const eyebrow = page.locator('text=Live snapshot · Market Watch');
+    const eyebrow = page.locator('text=Live snapshot · Workspace');
     checkTrue('[new] header eyebrow present', await eyebrow.count() > 0);
     const paramsText = await page.locator('text=/instruments registered/').first().innerText().catch(() => '');
     const totalRows = await page.evaluate(() => fetch('/api/symbols').then((r) => r.json()).then((rows) => rows.length));
@@ -145,7 +152,7 @@ function checkTrue(name, cond, note) {
     await headerToggle.click();
     await page.waitForTimeout(150);
     checkTrue('[new] header collapse hides eyebrow + params', await eyebrow.count() === 0 && await page.locator('text=/instruments registered/').count() === 0);
-    check('[new] header collapse keeps the title', await page.locator('h1').innerText(), 'Market Watch');
+    check('[new] header collapse keeps the title', await page.locator('h1').innerText(), 'Workspace');
     await page.locator('button[title="Expand header"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] header expand restores eyebrow', await eyebrow.count() > 0);
@@ -304,7 +311,7 @@ function checkTrue(name, cond, note) {
     const backBtn = page.locator('button', { hasText: '← Back' }).first();
     await backBtn.click();
     await page.waitForTimeout(400);
-    checkTrue('[new] exiting fullscreen returns to the grid', await page.locator('h1', { hasText: 'Market Watch' }).count() > 0);
+    checkTrue('[new] exiting fullscreen returns to the grid', await page.locator('h1', { hasText: 'Workspace' }).count() > 0);
 
     // ---- open-in-tab + real new-tab navigation ----
     const openTabBtn = firstRow.locator('button[title*="Open"][title*="tab"]').first();
