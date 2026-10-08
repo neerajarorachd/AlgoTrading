@@ -19,6 +19,17 @@ function check(name, actual, expected) {
   results.push({ name, pass, actual, expected });
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}`);
 }
+// Polls `fn` until it returns true or `ms` passes -- for checks right after
+// a click on the live stack, where live data can re-render the grid mid-check
+// (two checks failed intermittently on live, 2026-10-08, with a fixed wait).
+async function eventually(fn, ms = 3000) {
+  const end = Date.now() + ms
+  for (;;) {
+    if (await fn()) return true
+    if (Date.now() > end) return false
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
 function checkTrue(name, cond, note) {
   const pass = !!cond;
   results.push({ name, pass, actual: cond, expected: true, note });
@@ -213,7 +224,7 @@ function checkTrue(name, cond, note) {
     await page.locator('button[title="Collapse"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] card collapse hides the grid, tiles and footer',
-      await page.locator('table tbody tr').count() === 0 && await tiles.count() === 0 && await footer.count() === 0);
+      await eventually(async () => await page.locator('table tbody tr').count() === 0 && await tiles.count() === 0 && await footer.count() === 0));
     await page.locator('button[title="Expand"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] card expand restores the grid', await page.locator('table tbody tr').count() > 0);
@@ -241,8 +252,8 @@ function checkTrue(name, cond, note) {
     });
     checkTrue('[new] every row\'s action follows the bucket rule (strong=Buy/Sell, mild=Hold, else none)', actionCheck.length === 0, actionCheck);
     checkTrue('[new] no "Remove" text left; every row has a × remove button',
-      await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
-      && await page.locator('table tbody button[aria-label^="Remove "]').count() === await page.locator('table tbody tr').count());
+      await eventually(async () => await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
+        && await page.locator('table tbody button[aria-label^="Remove "]').count() === await page.locator('table tbody tr').count()));
     checkTrue('[new] redundant "open chart below" icon removed', await page.locator('table tbody button[title*="chart below"]').count() === 0);
     const tallestActions = await page.$$eval('table tbody tr', (rows) => Math.max(...rows.map((r) => r.cells[r.cells.length - 1].getBoundingClientRect().height)));
     checkTrue('[new] Actions cells stay on one line (no wrapping)', tallestActions < 48, tallestActions);

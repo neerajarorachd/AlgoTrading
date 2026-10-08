@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getWatchScores, listStrategies, listStrategyElements, listSymbols, removeSymbol } from '../api/client.js'
+import {
+  getWatchScores, getWatchlist, listStrategies, listStrategyElements, listSymbols, listWatchlists, removeSymbol,
+} from '../api/client.js'
 import { getSocket, roomFor, subscribeRooms, unsubscribeRooms } from '../api/ws.js'
 import AddInstrumentButton from '../components/AddInstrumentButton.jsx'
 import FeedStatusBadge, { useFeedStatus } from '../components/FeedStatusBadge.jsx'
@@ -8,6 +10,7 @@ import InstrumentGrid from '../components/InstrumentGrid.jsx'
 import InstrumentDetail from '../components/InstrumentDetail.jsx'
 import PageTabBar from '../components/PageTabBar.jsx'
 import PageTitleBar from '../components/PageTitleBar.jsx'
+import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import GraphWindow from '../components/GraphWindow.jsx'
 import Button from '../components/kit/Button.jsx'
@@ -61,6 +64,7 @@ function loadStoredIds(key) {
 
 export default function MarketWatch() {
   const [symbols, setSymbols] = useState([])
+  const [watchlistName, setWatchlistName] = useState(null)
   const [elements, setElements] = useState([])
   const [strategies, setStrategies] = useState([])
   const [scores, setScores] = useState([])
@@ -99,6 +103,27 @@ export default function MarketWatch() {
   const refresh = useCallback(() => {
     listSymbols().then(setSymbols).catch(() => {})
   }, [])
+
+  // The grid lists every registered instrument; name it after the watchlist
+  // whose members are exactly that set (today "All Registered Stocks").
+  // Watchlist tabs (the + menu, later) will name their own watchlist.
+  useEffect(() => {
+    if (!symbols.length) return
+    let cancelled = false
+    const ids = new Set(symbols.map((s) => s.id))
+    ;(async () => {
+      const lists = await listWatchlists().catch(() => [])
+      for (const w of lists.filter((x) => x.member_count === ids.size)) {
+        const full = await getWatchlist(w.id).catch(() => null)
+        if (full && full.members.every((m) => ids.has(m.instrument_id))) {
+          if (!cancelled) setWatchlistName(full.name)
+          return
+        }
+      }
+      if (!cancelled) setWatchlistName(null)
+    })()
+    return () => { cancelled = true }
+  }, [symbols])
 
   useEffect(() => {
     refresh()
@@ -383,7 +408,8 @@ export default function MarketWatch() {
         <>
           {/* Page header: eyebrow + params under the tabs; the title itself
               is in PageTitleBar above, whose ▲ hides these two lines. */}
-          <div style={{ marginBottom: headerCollapsed ? 0 : 20 }}>
+          <div style={{ marginBottom: headerCollapsed ? 12 : 20 }}>
+            <WatchlistHeading name={watchlistName ?? 'All registered instruments'} />
             {!headerCollapsed && (
               <div style={{ fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600, marginBottom: 3 }}>
                 Live snapshot · Workspace
