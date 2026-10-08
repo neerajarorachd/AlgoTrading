@@ -120,7 +120,7 @@ export default function MarketWatch() {
           return
         }
       }
-      if (!cancelled) setWatchlistName(null)
+      if (!cancelled) setWatchlistName('All registered instruments')
     })()
     return () => { cancelled = true }
   }, [symbols])
@@ -409,7 +409,8 @@ export default function MarketWatch() {
           {/* Page header: eyebrow + params under the tabs; the title itself
               is in PageTitleBar above, whose ▲ hides these two lines. */}
           <div style={{ marginBottom: headerCollapsed ? 12 : 20 }}>
-            <WatchlistHeading name={watchlistName ?? 'All registered instruments'} />
+            {/* blank until resolved: keeps its height, so nothing jumps */}
+            <WatchlistHeading name={watchlistName ?? ' '} />
             {!headerCollapsed && (
               <div style={{ fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600, marginBottom: 3 }}>
                 Live snapshot · Workspace

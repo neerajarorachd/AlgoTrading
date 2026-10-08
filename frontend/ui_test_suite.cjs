@@ -224,7 +224,8 @@ function checkTrue(name, cond, note) {
     await page.locator('button[title="Collapse"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] card collapse hides the grid, tiles and footer',
-      await eventually(async () => await page.locator('table tbody tr').count() === 0 && await tiles.count() === 0 && await footer.count() === 0));
+      // grid rows only -- the live events panel has its own table, which has rows on live
+      await eventually(async () => await page.locator('[data-instrument-grid] tbody tr').count() === 0 && await tiles.count() === 0 && await footer.count() === 0));
     await page.locator('button[title="Expand"]').click();
     await page.waitForTimeout(150);
     checkTrue('[new] card expand restores the grid', await page.locator('table tbody tr').count() > 0);
@@ -253,7 +254,7 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] every row\'s action follows the bucket rule (strong=Buy/Sell, mild=Hold, else none)', actionCheck.length === 0, actionCheck);
     checkTrue('[new] no "Remove" text left; every row has a × remove button',
       await eventually(async () => await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
-        && await page.locator('table tbody button[aria-label^="Remove "]').count() === await page.locator('table tbody tr').count()));
+        && await page.locator('[data-instrument-grid] tbody button[aria-label^="Remove "]').count() === await page.locator('[data-instrument-grid] tbody tr').count()));
     checkTrue('[new] redundant "open chart below" icon removed', await page.locator('table tbody button[title*="chart below"]').count() === 0);
     const tallestActions = await page.$$eval('table tbody tr', (rows) => Math.max(...rows.map((r) => r.cells[r.cells.length - 1].getBoundingClientRect().height)));
     checkTrue('[new] Actions cells stay on one line (no wrapping)', tallestActions < 48, tallestActions);
