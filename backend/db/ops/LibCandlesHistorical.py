@@ -9,7 +9,8 @@ fetch-on-demand) and this project's convention is one Lib file per table.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
@@ -63,11 +64,54 @@ def _upsert(session, symbol: str, exchange_segment: str, candle: Candle) -> None
     existing.volume = candle.volume
 
 
+def _naive_utc(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
+
+
+def _update_already_stored(session_factory, candles: List[Tuple[str, str, Candle]]) -> List[Tuple[str, str, Candle]]:
+    """Candles whose (symbol, segment, timeframe, ts) is already stored are
+    updated in place with ONE bulk UPDATE (found by one range SELECT per
+    symbol/timeframe); returns only the genuinely new ones, for the bulk
+    insert. Found live 2026-10-08: a 20-day warm-up fetch overlapping a few
+    already-stored rows made the bulk insert hit the unique constraint and
+    fall back to the per-row upsert, which over the SSH tunnel to the
+    I/O-capped VM ran at ~1 row/second and held every stock off the live
+    feed. Same end state as that per-row upsert, without the round trips."""
+    groups = defaultdict(list)
+    for item in candles:
+        groups[(item[0], item[1], item[2].timeframe)].append(item)
+    new, updates = [], []
+    with session_scope(session_factory) as session:
+        for (symbol, exchange_segment, timeframe), items in groups.items():
+            stamps = [_naive_utc(c.timestamp) for _, _, c in items]
+            existing = {
+                _naive_utc(ts): row_id for row_id, ts in session.query(CandleHistorical.id, CandleHistorical.ts).filter(
+                    CandleHistorical.symbol == symbol, CandleHistorical.exchange_segment == exchange_segment,
+                    CandleHistorical.timeframe == timeframe,
+                    CandleHistorical.ts >= min(stamps), CandleHistorical.ts <= max(stamps),
+                )
+            }
+            for item, ts in zip(items, stamps):
+                row_id = existing.get(ts)
+                if row_id is None:
+                    new.append(item)
+                else:
+                    c = item[2]
+                    updates.append({"id": row_id, "open_price": c.open, "high_price": c.high,
+                                    "low_price": c.low, "close_price": c.close, "volume": c.volume})
+        if updates:
+            session.bulk_update_mappings(CandleHistorical, updates)
+    return new
+
+
 def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
     """Same optimistic-insert-then-per-row-fallback strategy as
     LibCandles.persist_bulk — see that function's own docstring for why
     (avoiding one existence-check round trip per candle over the SSH
     tunnel is what actually matters at backfill-sized batches)."""
+    if not candles:
+        return
+    candles = _update_already_stored(session_factory, candles)
     if not candles:
         return
     try:
