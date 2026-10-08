@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import logging
 import statistics
+import threading
 from collections import defaultdict, deque
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from brokers.models import Candle
@@ -34,6 +35,7 @@ from db.session import session_scope
 from indicators import (
     TREND_LOOKBACK,
     AtrState,
+    EmaState,
     MacdState,
     RsiState,
     StochasticState,
@@ -43,6 +45,7 @@ from indicators import (
     crossed_below,
     trend_intensity,
     update_atr,
+    update_ema,
     update_macd,
     update_rsi,
     update_stochastic,
@@ -1284,6 +1287,13 @@ def load_engine_settings(session_factory) -> Dict[str, float]:
 
 # --------------------------------------------------------------------- engine
 
+_IST = timedelta(hours=5, minutes=30)
+
+
+def _as_utc(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
 class ActivityEngine:
     """Call on_candle_closed(symbol, exchange_segment, candle) for every
     finalized 1-/3-/5-min candle (live or backfilled) — same entry point
@@ -1321,6 +1331,18 @@ class ActivityEngine:
             self.swing_lookback = int(settings.get("swing_lookback", ENGINE_SETTING_DEFAULTS["swing_lookback"]))
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
+        # Today's store (2026-10-08, live_pattern_store_and_grid_window_plan):
+        # _buffer/_indicator_buffer hold ALL of today's rows for the whole day
+        # -- the UI's source for today -- and flush() only writes the unsaved
+        # tail (from _saved_* on) and advances the marker, instead of clearing.
+        # Saved rows from earlier days are dropped on the next flush.
+        # _lock: live candles (feed thread) and backfill/recovery (hydration
+        # and add-symbol threads) now both drive the engine concurrently;
+        # _flush_lock keeps the 15-min and 15:30 flushes from overlapping.
+        self._lock = threading.RLock()
+        self._flush_lock = threading.Lock()
+        self._saved_activities = 0
+        self._saved_indicators = 0
         self._buffer: List[dict] = []
         # per-candle indicator-value snapshots (RSI/MACD/Stochastic/VWAP/
         # MA/ATR/Bollinger Bands) — the "walkthrough engine" groundwork,
@@ -1374,6 +1396,15 @@ class ActivityEngine:
         # module needing to know PredictionTracker exists
         self._atr_state: Dict[InstrumentKey, AtrState] = defaultdict(AtrState)
         self._latest_atr: Dict[InstrumentKey, float] = {}
+        # EMA overlay lines (live chart, memory: live_indicators_phase1_priority)
+        # -- genuinely separate state from ma21/ma50 above: those are SMAs read
+        # off the _closes window, these are their own recursive EmaState per
+        # period (an EMA can't be derived from a plain closes window the way
+        # an SMA can).
+        self._ema5_state: Dict[InstrumentKey, EmaState] = defaultdict(EmaState)
+        self._ema14_state: Dict[InstrumentKey, EmaState] = defaultdict(EmaState)
+        self._ema21_state: Dict[InstrumentKey, EmaState] = defaultdict(EmaState)
+        self._ema50_state: Dict[InstrumentKey, EmaState] = defaultdict(EmaState)
 
     def recent_rows(self, symbol: str, exchange_segment: str, timeframe: str, n: int) -> list:
         """The last `n` in-memory candle rows (oldest first) for one
@@ -1381,8 +1412,50 @@ class ActivityEngine:
         rows = self._frame_rows.get((symbol, exchange_segment, timeframe))
         return list(rows)[-n:] if rows else []
 
+    def pending_indicator_rows(self, instrument_id: int, timeframe: str) -> list:
+        """Today's in-memory indicator snapshots for one instrument/timeframe,
+        saved or not -- callers (the live chart, watch scoring) merge these
+        with the stored rows, de-duplicating by ts."""
+        with self._lock:
+            rows = list(self._indicator_buffer)
+        return [r for r in rows if r["instrument_id"] == instrument_id and r["timeframe"] == timeframe]
+
+    def pending_activities(self, instrument_id: int, timeframe: str) -> list:
+        """pending_indicator_rows' sibling for detected activities (the
+        live chart's pattern/signal markers)."""
+        with self._lock:
+            rows = list(self._buffer)
+        return [r for r in rows if r["instrument_id"] == instrument_id and r["timeframe"] == timeframe]
+
     def buffered_count(self) -> int:
-        return len(self._buffer)
+        """Activities detected but not yet written to the DB."""
+        with self._lock:
+            return len(self._buffer) - self._saved_activities
+
+    def has_state(self, symbol: str, exchange_segment: str) -> bool:
+        """True once this process has run any candle of this instrument
+        through the engine -- recovery/warm-up must then be skipped, since
+        re-feeding older candles would corrupt the rolling state."""
+        with self._lock:
+            return any(k[0] == symbol and k[1] == exchange_segment and self._recent[k] for k in list(self._recent))
+
+    def load_saved(self, activities: List[dict], indicator_rows: List[dict]) -> None:
+        """Restart recovery: puts today's already-stored rows back into the
+        in-memory store, marked as saved (never re-written). Rows already in
+        memory are skipped."""
+        def _utc(ts):
+            return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+        with self._lock:
+            have_acts = {(r["instrument_id"], r["timeframe"], _utc(r["ts"]), r["activity"]) for r in self._buffer}
+            new_acts = [{**r, "ts": _utc(r["ts"])} for r in activities
+                        if (r["instrument_id"], r["timeframe"], _utc(r["ts"]), r["activity"]) not in have_acts]
+            self._buffer[self._saved_activities:self._saved_activities] = new_acts
+            self._saved_activities += len(new_acts)
+            have_inds = {(r["instrument_id"], r["timeframe"], _utc(r["ts"])) for r in self._indicator_buffer}
+            new_inds = [{**r, "ts": _utc(r["ts"])} for r in indicator_rows
+                        if (r["instrument_id"], r["timeframe"], _utc(r["ts"])) not in have_inds]
+            self._indicator_buffer[self._saved_indicators:self._saved_indicators] = new_inds
+            self._saved_indicators += len(new_inds)
 
     def to_dataframe(self):
         """Optional convenience for calibration/analysis work — pandas is
@@ -1410,23 +1483,60 @@ class ActivityEngine:
         return df
 
     def flush(self) -> int:
-        """Write every buffered activity to instrument_activity, and every
-        buffered indicator snapshot to candle_indicators, in as few DB
-        round-trips as possible, then clear both buffers. Returns the
-        number of activities flushed (candle_indicators rows flush
-        alongside but aren't counted here — same convention as
-        PredictionTracker.flush() returning only its own primary count)."""
-        if self._indicator_buffer:
-            indicator_rows, self._indicator_buffer = self._indicator_buffer, []
-            LibCandleIndicators.persist_bulk(self.session_factory, indicator_rows)
+        """Write every not-yet-saved activity to instrument_activity, and
+        every not-yet-saved indicator snapshot to candle_indicators, in as
+        few DB round-trips as possible, then advance the saved markers --
+        the rows themselves stay in memory as today's store (see __init__).
+        Activities are written BEFORE indicators: restart recovery treats
+        the latest stored indicator row as "processed up to here", so a
+        crash between the two writes re-processes (de-duplicated on insert)
+        rather than skips. Returns the number of activities flushed
+        (candle_indicators rows flush alongside but aren't counted here —
+        same convention as PredictionTracker.flush() returning only its own
+        primary count)."""
+        with self._flush_lock:
+            with self._lock:
+                acts = self._buffer[self._saved_activities:]
+                inds = self._indicator_buffer[self._saved_indicators:]
+            if acts:
+                LibActivities.persist_bulk(self.session_factory, acts)
+            if inds:
+                LibCandleIndicators.persist_bulk(self.session_factory, inds)
+            with self._lock:
+                self._saved_activities += len(acts)
+                self._saved_indicators += len(inds)
+                self._drop_saved_before_today()
+            return len(acts)
 
-        if not self._buffer:
-            return 0
-        rows, self._buffer = self._buffer, []
-        LibActivities.persist_bulk(self.session_factory, rows)
-        return len(rows)
+    def _drop_saved_before_today(self) -> None:
+        """Keeps the in-memory store to ~one day: saved rows from earlier IST
+        days are already in the DB, which is where older days are read from.
+        Caller holds self._lock."""
+        today = (datetime.now(timezone.utc) + _IST).date()
+        for name, marker in (("_buffer", "_saved_activities"), ("_indicator_buffer", "_saved_indicators")):
+            rows, saved = getattr(self, name), getattr(self, marker)
+            kept = [r for r in rows[:saved] if (_as_utc(r["ts"]) + _IST).date() >= today]
+            setattr(self, name, kept + rows[saved:])
+            setattr(self, marker, len(kept))
+
+    def warm_up(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
+        """Runs a candle through the engine to build its rolling state
+        (indicators, swing points, recent candles) WITHOUT recording any
+        activity or indicator row -- restart recovery and add-symbol use this
+        for history before the part of today that still needs recording."""
+        with self._lock:
+            acts, inds = len(self._buffer), len(self._indicator_buffer)
+            self._process_candle(symbol, exchange_segment, candle)
+            del self._buffer[acts:]
+            del self._indicator_buffer[inds:]
 
     def on_candle_closed(self, symbol: str, exchange_segment: str, candle: Candle) -> List[dict]:
+        """Returns every activity dict newly appended to the buffer during
+        this call (empty list if none fired) — see _process_candle."""
+        with self._lock:
+            return self._process_candle(symbol, exchange_segment, candle)
+
+    def _process_candle(self, symbol: str, exchange_segment: str, candle: Candle) -> List[dict]:
         """Returns every activity dict newly appended to the buffer during
         this call (empty list if none fired) — lets a caller (e.g. a
         prediction tracker) react to just this candle's detections without
@@ -1565,6 +1675,7 @@ class ActivityEngine:
         # defined either way by the time the indicator snapshot is built
         # further down, right before the `if not found` early return.
         rsi = macd_line = macd_signal = stoch_k = stoch_d = atr = ma21 = ma50 = None
+        ema5 = ema14 = ema21 = ema50 = None
 
         try:
             rsi = update_rsi(self._rsi_state[key], candle.close)
@@ -1614,6 +1725,14 @@ class ActivityEngine:
         except Exception:
             logger.exception("Activity engine: ATR update failed for %s (%s)", symbol, exchange_segment)
 
+        try:
+            ema5 = update_ema(self._ema5_state[key], candle.close, period=5)
+            ema14 = update_ema(self._ema14_state[key], candle.close, period=14)
+            ema21 = update_ema(self._ema21_state[key], candle.close, period=21)
+            ema50 = update_ema(self._ema50_state[key], candle.close, period=50)
+        except Exception:
+            logger.exception("Activity engine: EMA update failed for %s (%s)", symbol, exchange_segment)
+
         if len(closes) >= _MA_LONG_PERIOD:
             ma21 = statistics.fmean(list(closes)[-_MA_SHORT_PERIOD:])
             ma50 = statistics.fmean(closes)
@@ -1643,6 +1762,7 @@ class ActivityEngine:
                     "bb_upper": bb.upper if bb else None,
                     "bb_middle": bb.middle if bb else None,
                     "bb_lower": bb.lower if bb else None,
+                    "ema5": ema5, "ema14": ema14, "ema21": ema21, "ema50": ema50,
                 })
             self._frame_rows[key].append({
                 "ts": candle.timestamp, "open": candle.open, "high": candle.high, "low": candle.low,
@@ -1651,6 +1771,7 @@ class ActivityEngine:
                 "stoch_k": stoch_k, "stoch_d": stoch_d, "vwap": vwap, "ma21": ma21, "ma50": ma50, "atr": atr,
                 "bb_upper": bb.upper if bb else None, "bb_middle": bb.middle if bb else None,
                 "bb_lower": bb.lower if bb else None,
+                "ema5": ema5, "ema14": ema14, "ema21": ema21, "ema50": ema50,
             })
         except Exception:
             logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)

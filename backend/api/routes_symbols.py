@@ -109,6 +109,7 @@ def add_symbol():
         },
         broker, current_app.extensions["db_session_factory"],
         current_app.extensions["candle_aggregator"], market_feed,
+        activity_engine=current_app.extensions.get("activity_engine"),
     )
 
     return jsonify(_serialize(row)), status

@@ -24,6 +24,20 @@ def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[Cand
     )
 
 
+def get_for_instrument_range(session, instrument_id: int, timeframe: str, ts_from=None, ts_to=None) -> List[CandleIndicators]:
+    """get_for_instrument, narrowed to a ts window — routes_candles.py's
+    live-chart indicators endpoint uses this (unlike get_for_instrument's
+    unbounded full-history read) since this table isn't pruned the way
+    candles_today is, and a chart only ever needs however much range it's
+    actually showing."""
+    query = session.query(CandleIndicators).filter_by(instrument_id=instrument_id, timeframe=timeframe)
+    if ts_from is not None:
+        query = query.filter(CandleIndicators.ts >= ts_from)
+    if ts_to is not None:
+        query = query.filter(CandleIndicators.ts <= ts_to)
+    return query.order_by(CandleIndicators.ts).all()
+
+
 def persist_bulk(session_factory, rows: List[dict]) -> None:
     """Optimistic bulk insert — same shape as LibActivities.persist_bulk:
     a fresh flush of newly-computed snapshots really is "all new rows,"

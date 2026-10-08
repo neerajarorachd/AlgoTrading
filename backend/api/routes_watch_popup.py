@@ -2,7 +2,7 @@
 own module docstring for the data design."""
 from __future__ import annotations
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 import watch_order_popup
 from db.ops import LibSymbols as ops_symbols
@@ -26,7 +26,10 @@ def get_order_popup(instrument_id):
         except ValueError:
             return jsonify({"error": "ltp must be numeric"}), 400
 
-    data = watch_order_popup.order_popup_data(g.db_session, instrument_id, timeframe, ltp=ltp_param)
+    data = watch_order_popup.order_popup_data(
+        g.db_session, instrument_id, timeframe, ltp=ltp_param,
+        engine=current_app.extensions.get("activity_engine"),
+    )
     if data is None:
         return jsonify({"error": "no directional signal for this instrument yet"}), 404
     return jsonify(data)

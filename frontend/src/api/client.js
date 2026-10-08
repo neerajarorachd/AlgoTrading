@@ -43,6 +43,38 @@ export const getCandles = (symbol, exchangeSegment, timeframe, from, to) => {
   return request(`/api/candles?${params.toString()}`)
 }
 
+// VWAP/BB/RSI/MACD/Stochastic/MA/EMA aligned to each candle -- see
+// backend/api/routes_candles.py's get_candle_indicators. Defaults to
+// today only (no from/to) when the live chart just wants "right now".
+export const getCandleIndicators = (symbol, exchangeSegment, timeframe, from, to) => {
+  const params = new URLSearchParams({ symbol, exchange_segment: exchangeSegment, timeframe })
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  return request(`/api/candles/indicators?${params.toString()}`)
+}
+
+// Classic pivot points (P/R1-3/S1-3) from the prior trading day -- day-
+// level, not timeframe-specific. `pivots` is null when no prior-day
+// candle exists yet (not an error).
+export const getCandlePivots = (symbol, exchangeSegment) => {
+  const params = new URLSearchParams({ symbol, exchange_segment: exchangeSegment })
+  return request(`/api/candles/pivots?${params.toString()}`)
+}
+
+// Today's fired patterns/indicator-crossover signals, shaped for the live
+// chart's price-pane markers -- see backend/api/routes_candles.py's
+// get_candle_markers.
+export const getCandleMarkers = (symbol, exchangeSegment, timeframe, from, to) => {
+  const params = new URLSearchParams({ symbol, exchange_segment: exchangeSegment, timeframe })
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  return request(`/api/candles/markers?${params.toString()}`)
+}
+
+// Live-feed health: {available, connected, connected_at, last_message_at,
+// disconnects, subscribed} -- see backend/api/routes_feed.py.
+export const getFeedStatus = () => request('/api/feed/status')
+
 export const listStrategyElements = () => request('/api/strategy-elements')
 
 export const getStrategyFields = () => request('/api/strategy-fields')

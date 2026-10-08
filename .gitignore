@@ -9,3 +9,5 @@ frontend/dist/
 .claude/
 token_temp.txt
 *.db
+# runtime logs (backend console output, e.g. backend_live.log)
+*.log

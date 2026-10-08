@@ -293,6 +293,14 @@ class CandleIndicators(Base):
     bb_upper: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
     bb_middle: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
     bb_lower: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
+    # Added 2026-10-06 for the live chart's EMA overlay lines (see
+    # memory: live_indicators_phase1_priority) -- same "None until warmed
+    # up" convention as every other column here (indicators.EmaState/
+    # update_ema withholds a value until `period` closes have been seen).
+    ema5: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
+    ema14: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
+    ema21: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
+    ema50: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("instrument_id", "timeframe", "ts", name="uq_candle_indicators"),

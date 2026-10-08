@@ -31,6 +31,20 @@ def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[Inst
     )
 
 
+def get_for_instrument_range(
+    session, instrument_id: int, timeframe: str, ts_from: Optional[datetime] = None, ts_to: Optional[datetime] = None,
+) -> List[InstrumentActivity]:
+    """get_for_instrument, narrowed to a ts window -- routes_candles.py's
+    live-chart markers endpoint uses this rather than the unbounded read,
+    same reasoning as LibCandleIndicators.get_for_instrument_range."""
+    query = session.query(InstrumentActivity).filter_by(instrument_id=instrument_id, timeframe=timeframe)
+    if ts_from is not None:
+        query = query.filter(InstrumentActivity.ts >= ts_from)
+    if ts_to is not None:
+        query = query.filter(InstrumentActivity.ts <= ts_to)
+    return query.order_by(InstrumentActivity.ts).all()
+
+
 def get_daily_counts(session, instrument_id: int, trading_date: date) -> dict:
     """{"candle_pattern": N, "indicator": M} for one instrument/day, read
     straight from the stored rollup (see InstrumentActivityDailyCount's own

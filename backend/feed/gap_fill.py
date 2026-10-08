@@ -9,6 +9,7 @@ from db.ops.LibSymbols import get_active
 from db.session import session_scope
 
 import api.ws_live as ws_live
+from feed.engine_recovery import prepare_instrument
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,8 @@ _in_progress: set[tuple[str, str]] = set()
 _in_progress_lock = threading.Lock()
 
 
-def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator) -> None:
+def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator,
+                             activity_engine=None) -> None:
     """Fetches whatever 1-min candles are missing between the last one we have and
     now, and feeds them through the aggregator so 3-/5-min rollups backfill too.
 
@@ -76,7 +78,8 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
         cached = _last_scanned_through.get(key)
         if cached is not None and cached < market_open:
             cached = None  # stale watermark left over from a previous day
-        candidates = [c for c in (_last_known_ts(session_factory, symbol, exchange_segment), cached) if c is not None]
+        last_known = _last_known_ts(session_factory, symbol, exchange_segment)
+        candidates = [c for c in (last_known, cached) if c is not None]
         from_ts = max(candidates) if candidates else market_open
         to_ts = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         if from_ts >= to_ts:
@@ -86,7 +89,20 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
             symbol, exchange_segment, "started",
             f"Fetching missing candles since {from_ts.isoformat().replace('+00:00', 'Z')}",
         )
-        candles = rest_broker.get_historical_data(symbol, security_id, exchange_segment, "1min", from_ts, to_ts)
+        fetched = rest_broker.get_historical_data(symbol, security_id, exchange_segment, "1min", from_ts, to_ts)
+        # Dhan's intraday endpoint only takes DATE bounds, so it returns the
+        # whole session no matter how small the gap. Found live 2026-10-06:
+        # a ~65-minute gap came back as 242 candles, and re-saving the whole
+        # day (bulk insert fails on the duplicates -> one-by-one upserts over
+        # the tunnel) took ~4.5 min per symbol, so a restart left most
+        # symbols off the live feed for ~an hour. Re-feeding already-seen
+        # minutes through the aggregator also broke its chronological-order
+        # assumption. Keep only minutes that are missing (after the last one
+        # stored) and already closed (before the current, still-forming one).
+        candles = [
+            c for c in fetched
+            if from_ts <= c.timestamp < to_ts and (last_known is None or c.timestamp > last_known)
+        ]
         closed = []  # collect (symbol, exchange_segment, Candle) — 1-min plus any
         # 3-/5-min rollups they trigger — instead of letting each one open its own
         # DB round-trip; a few hundred historical candles at one-round-trip-apiece
@@ -100,8 +116,20 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
         # anyway — it does one full REST re-fetch when it sees the "done"
         # backfill_status below (CandleChart.jsx), which is both faster and
         # a cleaner update than hundreds of incremental ones.
+        #
+        # Every closed candle also goes through the ActivityEngine (2026-10-08)
+        # -- backfilled minutes used to skip it, so patterns/indicators for any
+        # stretch the live feed missed (startup, add-symbol, a WS drop) were
+        # simply never computed. No per-activity broadcast or recommendation
+        # for these: they're historical by the time they're seen, and the UI
+        # re-fetches on the "done" status below.
         def _collect(sym, seg, c):
             closed.append((sym, seg, c))
+            if activity_engine is not None:
+                try:
+                    activity_engine.on_candle_closed(sym, seg, c)
+                except Exception:
+                    logger.exception("Backfill: activity engine failed for %s (%s) at %s", sym, seg, c.timestamp)
 
         for candle in candles:
             aggregator.ingest_historical_1min(symbol, exchange_segment, candle, on_candle_closed=_collect)
@@ -116,15 +144,17 @@ def backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker,
             _in_progress.discard(key)
 
 
-def spawn_backfill(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator) -> None:
+def spawn_backfill(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator,
+                   activity_engine=None) -> None:
     threading.Thread(
         target=backfill_missing_candles,
-        args=(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator),
+        args=(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator, activity_engine),
         daemon=True, name=f"gap-fill-{symbol}",
     ).start()
 
 
-def backfill_then_subscribe(instrument, rest_broker, session_factory, aggregator, market_feed) -> None:
+def backfill_then_subscribe(instrument, rest_broker, session_factory, aggregator, market_feed,
+                            activity_engine=None) -> None:
     """Backfill a symbol's historical candles BEFORE subscribing it to the
     live feed, not after (which is what subscribe-then-backfill used to do).
 
@@ -138,17 +168,25 @@ def backfill_then_subscribe(instrument, rest_broker, session_factory, aggregator
     can possibly arrive is already >= the backfill's own cutoff — no
     interleaving is possible by construction, not by locking.
     """
+    # whole-day patterns/indicators first (warm-up history + today's stored
+    # candles, see feed/engine_recovery.py), then the missing minutes up to
+    # now through the same engine, then live
+    prepare_instrument(
+        instrument["symbol"], instrument["exchange_segment"], instrument["security_id"],
+        rest_broker, session_factory, activity_engine,
+    )
     backfill_missing_candles(
         instrument["symbol"], instrument["exchange_segment"], instrument["security_id"],
-        rest_broker, session_factory, aggregator,
+        rest_broker, session_factory, aggregator, activity_engine,
     )
     market_feed.subscribe(instrument)
 
 
-def spawn_backfill_then_subscribe(instrument, rest_broker, session_factory, aggregator, market_feed) -> None:
+def spawn_backfill_then_subscribe(instrument, rest_broker, session_factory, aggregator, market_feed,
+                                  activity_engine=None) -> None:
     threading.Thread(
         target=backfill_then_subscribe,
-        args=(instrument, rest_broker, session_factory, aggregator, market_feed),
+        args=(instrument, rest_broker, session_factory, aggregator, market_feed, activity_engine),
         daemon=True, name=f"add-symbol-{instrument['symbol']}",
     ).start()
 
@@ -178,6 +216,7 @@ def _todays_market_open() -> datetime:
 
 def start_gap_scanner(
     rest_broker, session_factory, aggregator, interval_seconds: int = _DEFAULT_SCAN_INTERVAL_SECONDS,
+    activity_engine=None,
 ) -> None:
     """Periodically re-checks every active symbol for a gap since its last known
     candle and backfills it, on a recurring background timer.
@@ -191,7 +230,7 @@ def start_gap_scanner(
     """
     def _tick():
         try:
-            scan_for_gaps(rest_broker, session_factory, aggregator)
+            scan_for_gaps(rest_broker, session_factory, aggregator, activity_engine=activity_engine)
         except Exception:
             logger.exception("Gap scanner: unexpected error during a scan cycle")
         finally:
@@ -206,7 +245,8 @@ def start_gap_scanner(
     timer.start()
 
 
-def scan_for_gaps(rest_broker, session_factory, aggregator, now: datetime | None = None) -> None:
+def scan_for_gaps(rest_broker, session_factory, aggregator, now: datetime | None = None,
+                  activity_engine=None) -> None:
     """One scan cycle: skip entirely outside market hours (nothing new to fetch,
     and the broker's historical API has nothing beyond the close anyway), else
     re-run the same backfill check used at subscribe time for every active
@@ -225,7 +265,8 @@ def scan_for_gaps(rest_broker, session_factory, aggregator, now: datetime | None
 
     logger.info("Gap scanner: checking %d active symbol(s) for gaps", len(targets))
     for symbol, exchange_segment, security_id in targets:
-        backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator)
+        backfill_missing_candles(symbol, exchange_segment, security_id, rest_broker, session_factory, aggregator,
+                                 activity_engine)
     logger.info("Gap scanner: cycle complete")
 
 

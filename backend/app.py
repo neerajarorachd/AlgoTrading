@@ -78,6 +78,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     from api.routes_backtests import backtests_bp
     from api.routes_candles import candles_bp
     from api.routes_engine_settings import engine_settings_bp
+    from api.routes_feed import feed_bp
     from api.routes_historical_data import historical_data_bp
     from api.routes_recommendation_systems import recommendation_systems_bp
     from api.routes_recommendations import recommendations_bp
@@ -90,6 +91,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.register_blueprint(symbols_bp)
     app.register_blueprint(candles_bp)
     app.register_blueprint(engine_settings_bp)
+    app.register_blueprint(feed_bp)
     app.register_blueprint(strategies_bp)
     app.register_blueprint(watchlists_bp)
     app.register_blueprint(watch_selection_bp)
@@ -103,12 +105,24 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
 
     app.extensions["socketio"] = ws_live.init_app(app)
 
-    if not app.testing:
-        from feed.bootstrap import start_feed
-        start_feed(
+    # TEMPORARY replay mode (replay_feed.py): a recorded session played back
+    # as if live, instead of the Dhan feed. Only when REPLAY_FILE is set, and
+    # ReplayFeed itself refuses any database but SQLite (never the live DB).
+    replay_file = os.environ.get("REPLAY_FILE")
+    if replay_file:
+        from replay_feed import ReplayFeed
+        replay = ReplayFeed(replay_file, engine, session_factory, aggregator, activity_engine)
+        app.extensions["replay_feed"] = replay
+        replay.start()
+    elif not app.testing:
+        from session_scheduler import start_session_scheduler
+        start_session_scheduler(
             feed_broker, market_feed, session_factory, aggregator,
             rest_broker=rest_broker, activity_engine=activity_engine,
         )
+
+        from eod_service import start_eod_scheduler
+        start_eod_scheduler(session_factory, rest_broker, aggregator)
 
         from scenario_scheduler import start_guiding_scenario_scheduler
         start_guiding_scenario_scheduler(session_factory)
@@ -179,6 +193,13 @@ def _make_on_candle_closed(session_factory, activity_engine: ActivityEngine):
     def _on_candle_closed(symbol: str, exchange_segment: str, candle) -> None:
         persist_candle(session_factory, symbol, exchange_segment, candle)
         new_activities = activity_engine.on_candle_closed(symbol, exchange_segment, candle)
+        # every newly detected pattern/indicator signal, as it happens -- the
+        # Market Watch live events list (and, in replay, the color cards)
+        try:
+            for activity in new_activities:
+                ws_live.broadcast_activity(symbol, exchange_segment, activity)
+        except Exception:
+            logger.exception("broadcasting activities failed for %s (%s)", symbol, exchange_segment)
         # First real live consumer of on_candle_closed's return value
         # (2026-09-16) — recommendation_engine.on_activities is guarded
         # with its own try/except internally, but a second belt-and-

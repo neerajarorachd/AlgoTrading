@@ -51,6 +51,26 @@ def broadcast_backfill_status(symbol: str, exchange_segment: str, status: str, m
     }, room=room_for_exchange_segment(exchange_segment, symbol))
 
 
+def broadcast_activity(symbol: str, exchange_segment: str, activity: dict) -> None:
+    """One newly detected pattern/indicator signal (an ActivityEngine buffer
+    row), as it's detected. `direction` uses the same bull/bear pattern sets
+    as the rest of the app (None = no directional bias, e.g. doji)."""
+    from prediction_tracker import BEARISH_PATTERNS, BULLISH_PATTERNS
+    name = activity["activity"]
+    ts = activity["ts"]
+    ts_str = ts.isoformat().replace("+00:00", "Z") if ts.tzinfo else ts.isoformat() + "Z"
+    socketio.emit("activity", {
+        "type": "activity",
+        "symbol": symbol,
+        "timeframe": activity["timeframe"],
+        "ts": ts_str,
+        "activity_type": activity["activity_type"],
+        "activity": name,
+        "direction": "bull" if name in BULLISH_PATTERNS else "bear" if name in BEARISH_PATTERNS else None,
+        "intensity": float(activity["intensity"]) if activity.get("intensity") is not None else None,
+    }, room=room_for_exchange_segment(exchange_segment, symbol))
+
+
 def broadcast_candle_closed(symbol: str, exchange_segment: str, candle) -> None:
     ts = candle.timestamp
     ts_str = ts.isoformat().replace("+00:00", "Z") if ts.tzinfo else ts.isoformat() + "Z"

@@ -4,7 +4,7 @@ instrument (never one request per row, same lesson already learned from
 EventsCell's own count badges)."""
 from __future__ import annotations
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 import watch_scoring
 from db.ops import LibSymbols as ops_symbols
@@ -27,5 +27,10 @@ def get_watch_scores():
         return jsonify({"error": "window must be positive"}), 400
 
     instruments = ops_symbols.get_active(g.db_session)
-    scores = watch_scoring.score_instruments(g.db_session, [i.id for i in instruments], timeframe, window)
+    # the live engine's unflushed rows count too -- it only writes to the DB
+    # at 15:30 IST, so without it the grid showed yesterday's activity all day
+    scores = watch_scoring.score_instruments(
+        g.db_session, [i.id for i in instruments], timeframe, window,
+        engine=current_app.extensions.get("activity_engine"),
+    )
     return jsonify({"scores": scores, "bucket_colors": watch_scoring.BUCKET_COLORS})

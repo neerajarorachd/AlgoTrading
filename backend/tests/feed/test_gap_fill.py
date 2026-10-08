@@ -107,6 +107,42 @@ def test_backfill_fetches_from_last_known_candle_not_market_open(session_factory
     assert [e[1] for e in spy.events] == ["started", "done"]
 
 
+def test_backfill_keeps_only_missing_closed_minutes_from_a_whole_day_response(session_factory, monkeypatch):
+    # Dhan's intraday endpoint takes DATE bounds only, so a small gap comes
+    # back as the whole session (found live 2026-10-06: 242 candles for a
+    # ~65-minute gap, ~4.5 min per symbol to re-save). Only the minutes after
+    # the last stored one, and before the still-forming current minute, may
+    # be ingested.
+    spy = BroadcastSpy(monkeypatch)
+    open_ = _todays_market_open()
+    last_ts = open_ + timedelta(minutes=30)
+    with session_factory() as session:
+        session.add(CandleToday(
+            symbol=SYMBOL, exchange_segment=SEG, timeframe="1min", ts=last_ts,
+            open_price=100, high_price=101, low_price=99, close_price=100.5, volume=10,
+        ))
+        session.commit()
+
+    now_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    whole_day = [
+        Candle(symbol=SYMBOL, timeframe="1min", timestamp=open_ + timedelta(minutes=i),
+               open=100, high=101, low=99, close=100.5, volume=10)
+        for i in range(int((now_minute - open_).total_seconds() // 60) + 1)  # includes the forming minute
+    ]
+    ingested = []
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+    original = aggregator.ingest_historical_1min
+    monkeypatch.setattr(aggregator, "ingest_historical_1min",
+                        lambda sym, seg, c, on_candle_closed=None: (ingested.append(c.timestamp), original(sym, seg, c, on_candle_closed)))
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, FakeRestBroker(whole_day), session_factory, aggregator)
+
+    assert ingested, "the missing minutes after the last stored candle must still be ingested"
+    assert min(ingested) == last_ts.replace(tzinfo=timezone.utc) + timedelta(minutes=1)
+    assert max(ingested) < now_minute  # never the still-forming minute
+    assert spy.events[-1] == (SYMBOL, "done", f"Backfilled {len(ingested)} candles")
+
+
 def test_backfill_skips_when_already_in_progress_elsewhere(session_factory, monkeypatch):
     # simulates the periodic scanner's tick landing on a symbol whose startup
     # backfill (or another scan cycle) hasn't finished yet — the second caller

@@ -1,0 +1,307 @@
+/* Design tokens + base element styles for AlgoTrading's component kit
+   (Phase 1 — see startup_product_roadmap.md). Continues the palette
+   already proven in this project's own "Formation Verification Chart"
+   artifact (teal accent, IBM Plex) rather than inventing a third
+   direction, extended here with the full semantic token set the whole
+   app needs (buttons, inputs, tables, badges), not just a chart surface.
+
+   THIS FILE IS THE SINGLE SOURCE OF TRUTH for every color/type/spacing
+   token the app uses — components style off these custom properties,
+   never a literal color, and no other file (including any Claude
+   Artifact design preview) should re-embed its own copy of these values.
+   An artifact publishes this file as a linked stylesheet instead; see
+   memory: artifact_vs_real_app_divergence / theme_single_source_of_truth.
+
+   Named-theme registry: each theme is one :root[data-theme="<name>"]
+   block below (today: "light", "dark"). themes.js holds the matching list
+   of valid names/labels that ThemeContext.jsx validates against and
+   ThemeToggle.jsx renders — adding a theme means adding one block here
+   AND one entry there, nothing else. Three-tier resolution per theme
+   (artifact-design convention): bare :root carries the light theme's full
+   palette, since it's what an un-stamped document (the "system" choice,
+   no data-theme attribute) actually renders; @media
+   (prefers-color-scheme: dark), guarded by :root:not([data-theme="light"]),
+   covers system-dark-with-no-explicit-choice; :root[data-theme="dark"]
+   covers the explicit in-app choice. A third named theme would need its
+   own :root[data-theme="X"] block but no media-query tier of its own —
+   prefers-color-scheme only ever resolves light/dark, so a non-light/dark
+   theme is reachable only via an explicit choice, never "system". */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg: #f3f6f8;
+  --surface: #ffffff;
+  --surface-alt: #eaeff3;
+  --surface-raised: #ffffff;
+  --border: #d6dee4;
+  --border-strong: #b9c4cc;
+
+  /* Text */
+  --text: #151b21;
+  --text-dim: #5a6773;
+  --text-faint: #8996a2;
+  --text-on-accent: #ffffff;
+
+  /* Brand / interactive */
+  --accent: #5b4b9e;
+  --accent-hover: #473a7d;
+  --accent-soft: #ece8f7;
+  --accent-text: #5b4b9e;
+
+  /* Semantic (status) -- separate from the categorical/chart palette below,
+     never reused for "series 4" */
+  --good: #1b8a4a;
+  --good-soft: #e3f5ea;
+  --warning: #b8860b;
+  --warning-soft: #fbf1dc;
+  --critical: #c23b3b;
+  --critical-soft: #fbe6e6;
+
+  /* Market semantics (up/down candles, P&L sign) -- same hues as --good/
+     --critical today, kept as separate tokens since "a stock went up" and
+     "a check passed" are different concepts that happen to share a color
+     now and might not always */
+  --up: #1b8a4a;
+  --down: #c23b3b;
+
+  /* Chart-specific (passed into lightweight-charts' own JS config, not
+     just CSS -- same token names the Formation Verification artifact
+     already used) */
+  --chart-bg: #ffffff;
+  --chart-grid: #eef2f5;
+  --chart-text: #5a6773;
+  --chart-border: #d6dee4;
+
+  /* Indicator overlay/sub-panel line identity -- a fixed categorical set,
+     deliberately distinct from --good/--warning/--critical (those stay
+     reserved for candle direction, MACD histogram sign, and bull/bear
+     recommendation state -- real app status, never "series N"). Proven in
+     the live-indicators preview artifact before landing here, see memory:
+     live_indicators_phase1_priority / lightweight_charts_cdn_note. */
+  --ind-vwap: #7c6fd6;
+  --ind-bb: #5b8fc9;
+  --ind-ema5: #2fb8c4;
+  --ind-ema14: #d6708f;
+  --ind-ema21: #3fa66a;
+  --ind-ema50: #c98a3f;
+  --ind-ma21: #8c96a2;
+  --ind-ma50: #5a6773;
+  --ind-rsi: #7c6fd6;
+  --ind-macd: #5b8fc9;
+  --ind-macd-signal: #d6708f;
+  --ind-stoch-k: #2fb8c4;
+  --ind-stoch-d: #c98a3f;
+
+  /* Layout */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(20, 30, 40, 0.06), 0 1px 1px rgba(20, 30, 40, 0.04);
+  --shadow-md: 0 4px 16px rgba(20, 30, 40, 0.10);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Type -- font-sans matches the reference report artifacts' own stack
+     (system-ui, no custom webfont) exactly, per the user's explicit ask;
+     font-mono (IBM Plex Mono) is unchanged -- neither reference used a
+     distinct data/mono face, but this project already relies on it for
+     tabular numeric alignment across tables/KPI tiles/charts. */
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-alt: #202019;
+    --surface-raised: #202019;
+    --border: #263039;
+    --border-strong: #37424c;
+
+    --text: #e7edf2;
+    --text-dim: #9aa7b3;
+    --text-faint: #69757f;
+    --text-on-accent: #04181a;
+
+    --accent: #a594f0;
+    --accent-hover: #bcadf5;
+    --accent-soft: #2a2242;
+    --accent-text: #a594f0;
+
+    --good: #3fce78;
+    --good-soft: #10301f;
+    --warning: #e0b84a;
+    --warning-soft: #332a10;
+    --critical: #f16b66;
+    --critical-soft: #3a1818;
+
+    --up: #3fce78;
+    --down: #f16b66;
+
+    --chart-bg: #1a1a19;
+    --chart-grid: #1c2730;
+    --chart-text: #9aa7b3;
+    --chart-border: #263039;
+
+    --ind-vwap: #a79af0;
+    --ind-bb: #7fa8dd;
+    --ind-ema5: #4fd6e2;
+    --ind-ema14: #ec97b1;
+    --ind-ema21: #5fd48c;
+    --ind-ema50: #e3a860;
+    --ind-ma21: #7e8a96;
+    --ind-ma50: #aab5bf;
+    --ind-rsi: #a79af0;
+    --ind-macd: #7fa8dd;
+    --ind-macd-signal: #ec97b1;
+    --ind-stoch-k: #4fd6e2;
+    --ind-stoch-d: #e3a860;
+
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-alt: #202019;
+  --surface-raised: #202019;
+  --border: #263039;
+  --border-strong: #37424c;
+
+  --text: #e7edf2;
+  --text-dim: #9aa7b3;
+  --text-faint: #69757f;
+  --text-on-accent: #04181a;
+
+  --accent: #a594f0;
+  --accent-hover: #bcadf5;
+  --accent-soft: #2a2242;
+  --accent-text: #a594f0;
+
+  --good: #3fce78;
+  --good-soft: #10301f;
+  --warning: #e0b84a;
+  --warning-soft: #332a10;
+  --critical: #f16b66;
+  --critical-soft: #3a1818;
+
+  --up: #3fce78;
+  --down: #f16b66;
+
+  --chart-bg: #1a1a19;
+  --chart-grid: #1c2730;
+  --chart-text: #9aa7b3;
+  --chart-border: #263039;
+
+  --ind-vwap: #a79af0;
+  --ind-bb: #7fa8dd;
+  --ind-ema5: #4fd6e2;
+  --ind-ema14: #ec97b1;
+  --ind-ema21: #5fd48c;
+  --ind-ema50: #e3a860;
+  --ind-ma21: #7e8a96;
+  --ind-ma50: #aab5bf;
+  --ind-rsi: #a79af0;
+  --ind-macd: #7fa8dd;
+  --ind-macd-signal: #ec97b1;
+  --ind-stoch-k: #4fd6e2;
+  --ind-stoch-d: #e3a860;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--accent-text);
+}
+
+/* Base form-control styling so every raw <input>/<select>/<button> across
+   the app (not yet migrated to a kit component) still reads as part of one
+   designed product instead of the browser's unstyled default -- buttons in
+   particular don't inherit font-family by default, which is why unstyled
+   buttons look visibly "off" next to styled text. */
+button {
+  font-family: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+input::placeholder {
+  color: var(--text-faint);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

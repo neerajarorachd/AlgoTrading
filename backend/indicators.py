@@ -206,6 +206,30 @@ def update_atr(state: AtrState, high: float, low: float, close: float, period: i
     return state.avg_tr
 
 
+# --------------------------------------------------------------------- EMA (standalone, any period)
+
+class EmaState:
+    __slots__ = ("value", "count")
+
+    def __init__(self):
+        self.value: Optional[float] = None
+        self.count = 0
+
+
+def update_ema(state: EmaState, close: float, period: int) -> Optional[float]:
+    """Single-period EMA, updated one close at a time. Seeded at the very
+    first close (standard practice — same seeding MacdState's own internal
+    ema_fast/ema_slow already use), but not RETURNED until `period` closes
+    have been seen, so a freshly-subscribed instrument never shows a
+    barely-seeded EMA50 after two candles — same "None until warmed up"
+    discipline as update_rsi/update_atr/update_macd. One state object per
+    period (a caller wanting EMA5/14/21/50 keeps four of these)."""
+    state.count += 1
+    k = 2 / (period + 1)
+    state.value = close if state.value is None else close * k + state.value * (1 - k)
+    return state.value if state.count >= period else None
+
+
 # --------------------------------------------------------------------- MACD (EMA-based)
 
 MACD_FAST = 12

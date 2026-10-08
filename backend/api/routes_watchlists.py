@@ -177,6 +177,7 @@ def subscribe_watchlist(watchlist_id):
             },
             broker, current_app.extensions["db_session_factory"],
             current_app.extensions["candle_aggregator"], market_feed,
+            activity_engine=current_app.extensions.get("activity_engine"),
         )
         subscribed.append(symbol_row.symbol)
 

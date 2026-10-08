@@ -318,3 +318,91 @@ def test_score_instrument_scales_both_bull_and_bear_by_the_same_volatility_facto
     assert result["bear_score"] == 2.0  # 1 (shooting_star weight) * 2.0
     # direction/bucket comparison is unaffected -- both sides scaled equally, still tied -> choppy
     assert result["bucket"] == "choppy"
+
+
+# ------------------------------------------------------------------ live engine (unflushed) rows
+# Added 2026-10-06: ActivityEngine only flushes to the DB at 15:30 IST, so a
+# DB-only score showed the previous day's activity all session.
+
+class _FakeEngine:
+    def __init__(self, activities=(), indicator_rows=()):
+        self._activities = list(activities)
+        self._indicator_rows = list(indicator_rows)
+
+    def pending_activities(self, instrument_id, timeframe):
+        return [r for r in self._activities if r["instrument_id"] == instrument_id and r["timeframe"] == timeframe]
+
+    def pending_indicator_rows(self, instrument_id, timeframe):
+        return [r for r in self._indicator_rows if r["instrument_id"] == instrument_id and r["timeframe"] == timeframe]
+
+
+def _pending_activity(instrument_id, candle_index, activity, timeframe=TF):
+    return {"instrument_id": instrument_id, "timeframe": timeframe, "activity": activity,
+            "ts": T0 + timedelta(minutes=3 * candle_index)}
+
+
+def test_unflushed_engine_activity_is_scored(session_factory):
+    _seed_patterns(session_factory, ("hammer", "single_candle"))
+    instrument_id = _register(session_factory)
+    engine = _FakeEngine(activities=[_pending_activity(instrument_id, 0, "hammer")])
+    with session_factory() as session:
+        result = score_instrument(session, instrument_id, TF, 10, load_pattern_weights(session), engine=engine)
+    assert result["bull_score"] == 1 and result["bucket"] == "mild_bull"
+
+
+def test_window_is_applied_across_stored_and_unflushed_activity_together(session_factory):
+    # 10 stored candles of activity + 3 newer unflushed ones: the window keeps
+    # the newest 10 distinct candles, so the 3 oldest stored ones drop out
+    _seed_patterns(session_factory, ("hammer", "single_candle"))
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        for i in range(10):
+            session.add(_activity(instrument_id, i, "hammer"))
+        session.commit()
+    engine = _FakeEngine(activities=[_pending_activity(instrument_id, 10 + i, "hammer") for i in range(3)])
+    with session_factory() as session:
+        stored_only = score_instrument(session, instrument_id, TF, 10, load_pattern_weights(session))
+        merged = score_instrument(session, instrument_id, TF, 10, load_pattern_weights(session), engine=engine)
+    assert stored_only["bull_score"] == 10
+    assert merged["bull_score"] == 10  # still exactly 10 candles' worth, not 13
+
+
+def test_a_stored_activity_also_still_pending_is_not_double_counted(session_factory):
+    _seed_patterns(session_factory, ("hammer", "single_candle"))
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        session.add(_activity(instrument_id, 0, "hammer"))
+        session.commit()
+    engine = _FakeEngine(activities=[_pending_activity(instrument_id, 0, "hammer")])
+    with session_factory() as session:
+        result = score_instrument(session, instrument_id, TF, 10, load_pattern_weights(session), engine=engine)
+    assert result["bull_score"] == 1
+
+
+def test_unflushed_indicator_rows_feed_the_volatility_factor(session_factory):
+    instrument_id = _register(session_factory)
+    with session_factory() as session:
+        for i in range(RANGE_BASELINE_CANDLES - 1):
+            session.add(_indicator_row(instrument_id, i, atr=2.0))  # stored baseline
+        session.commit()
+    latest = {"instrument_id": instrument_id, "timeframe": TF, "atr": 6.0, "bb_upper": None, "bb_middle": None,
+              "bb_lower": None, "ts": T0 + timedelta(minutes=3 * RANGE_BASELINE_CANDLES)}
+    with session_factory() as session:
+        assert volatility_factor(session, instrument_id, TF) == 1.0  # stored rows only: flat
+        assert volatility_factor(session, instrument_id, TF, engine=_FakeEngine(indicator_rows=[latest])) > 1.0
+
+
+def test_score_instruments_batches_every_instrument_in_one_call(session_factory):
+    _seed_patterns(session_factory, ("hammer", "single_candle"), ("shooting_star", "single_candle"))
+    a = _register(session_factory, "RELIANCE")
+    b = _register(session_factory, "TCS")
+    c = _register(session_factory, "INFY")  # no activity at all
+    with session_factory() as session:
+        session.add(_activity(a, 0, "hammer"))
+        session.add(_activity(b, 0, "shooting_star"))
+        session.commit()
+    with session_factory() as session:
+        results = {r["instrument_id"]: r for r in score_instruments(session, [a, b, c], TF)}
+    assert results[a]["bull_score"] > 0 and results[a]["bear_score"] == 0
+    assert results[b]["bear_score"] > 0 and results[b]["bull_score"] == 0
+    assert results[c]["bucket"] == "quiet"

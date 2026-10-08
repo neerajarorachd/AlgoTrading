@@ -12,12 +12,13 @@ Dhan's live/sandbox API once network access is available.
 import json
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 sys.path.insert(0, "/home/claude/trading_system/backend")
 
 from brokers.base_broker import BaseBroker
+import brokers.dhan_broker as dhan_broker_module
 from brokers.dhan_broker import DhanBroker
 from brokers.models import (
     BrokerAPIError,
@@ -540,6 +541,176 @@ class TestDhanBrokerFeed(unittest.TestCase):
         broker = DhanBroker(client_id="c1", access_token="t1")
         # should not raise even though no ws connection exists yet
         broker.unsubscribe_feed(instruments=[{"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE"}])
+
+    def test_disconnect_clears_state_even_when_ws_close_raises(self):
+        # The real-world scenario this guards: a market-hours session
+        # scheduler calls disconnect() from a thread other than the one
+        # running run_forever(), where ws.close() can raise (documented,
+        # pre-existing risk). State must still be cleared so the NEXT
+        # connect doesn't reuse a dead websocket object.
+        class RaisingWSClient(FakeWSClient):
+            def close(self):
+                raise RuntimeError("simulated cross-thread close failure")
+
+        fake_ws_holder = {}
+
+        def factory(on_tick):
+            ws = RaisingWSClient(on_tick)
+            fake_ws_holder["ws"] = ws
+            return ws
+
+        broker = DhanBroker(client_id="c1", access_token="t1", ws_client_factory=factory)
+        broker.subscribe_feed(
+            instruments=[{"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE"}],
+            on_tick=lambda tick: None,
+        )
+
+        broker.disconnect()  # must not raise, even though ws.close() does
+
+        self.assertIsNone(broker._ws)
+        self.assertFalse(broker._connected)
+
+    def test_disconnect_is_a_no_op_when_never_connected(self):
+        broker = DhanBroker(client_id="c1", access_token="t1")
+        broker.disconnect()  # should not raise
+        self.assertIsNone(broker._ws)
+        self.assertFalse(broker._connected)
+
+
+class TestDhanBrokerFeedSelfHealing(unittest.TestCase):
+    """Added 2026-10-06: the live feed went silently dead for a whole session
+    because a dropped connection was never reopened or re-subscribed."""
+
+    RELIANCE = {"security_id": "1333", "exchange_segment": "NSE_EQ", "symbol": "RELIANCE"}
+    TCS = {"security_id": "11536", "exchange_segment": "NSE_EQ", "symbol": "TCS"}
+
+    def _broker(self, client_cls=FakeWSClient):
+        holder = {}
+
+        def factory(on_tick):
+            holder["ws"] = client_cls(on_tick)
+            return holder["ws"]
+        return DhanBroker(client_id="c1", access_token="t1", ws_client_factory=factory), holder
+
+    def test_reconnect_resubscribes_every_tracked_instrument(self):
+        broker, holder = self._broker()
+        broker.subscribe_feed([self.RELIANCE], on_tick=lambda t: None)
+        broker.subscribe_feed([self.TCS], on_tick=lambda t: None)
+        ws = holder["ws"]
+        ws.sent_messages.clear()
+
+        broker._on_ws_close("simulated drop")
+        broker._on_ws_open()  # what websocket-client calls once it has reconnected
+
+        self.assertEqual(len(ws.sent_messages), 1)
+        self.assertEqual(ws.sent_messages[0]["RequestCode"], 21)
+        self.assertEqual({i["SecurityId"] for i in ws.sent_messages[0]["InstrumentList"]}, {"1333", "11536"})
+
+    def test_unsubscribed_instruments_are_not_restored_on_reconnect(self):
+        broker, holder = self._broker()
+        broker.subscribe_feed([self.RELIANCE, self.TCS], on_tick=lambda t: None)
+        broker.unsubscribe_feed([self.TCS])
+        holder["ws"].sent_messages.clear()
+
+        broker._on_ws_open()
+
+        self.assertEqual([i["SecurityId"] for i in holder["ws"].sent_messages[0]["InstrumentList"]], ["1333"])
+
+    def test_subscribe_while_socket_is_down_is_tracked_not_raised(self):
+        class DeadWSClient(FakeWSClient):
+            def send(self, message):
+                raise ConnectionError("socket is reconnecting")
+
+        broker, holder = self._broker(DeadWSClient)
+        broker.subscribe_feed([self.RELIANCE], on_tick=lambda t: None)  # must not raise
+
+        holder["ws"].__class__ = FakeWSClient  # link comes back
+        broker._on_ws_open()
+        self.assertEqual(holder["ws"].sent_messages[0]["InstrumentList"][0]["SecurityId"], "1333")
+
+    def test_subscriptions_are_chunked_to_100_per_message(self):
+        broker, holder = self._broker()
+        many = [{"security_id": str(i), "exchange_segment": "NSE_EQ", "symbol": f"S{i}"} for i in range(250)]
+        broker.subscribe_feed(many, on_tick=lambda t: None)
+        self.assertEqual([m["InstrumentCount"] for m in holder["ws"].sent_messages], [100, 100, 50])
+
+    def test_deliberate_disconnect_forgets_subscriptions(self):
+        # The next session's connect must not re-subscribe on open ahead of
+        # hydration's backfill-then-subscribe ordering.
+        broker, _ = self._broker()
+        broker.subscribe_feed([self.RELIANCE], on_tick=lambda t: None)
+        broker.disconnect()
+        self.assertEqual(broker.feed_status()["subscribed"], 0)
+        self.assertEqual(broker.feed_status()["disconnects"], 0)  # a stop isn't a drop
+
+    def test_feed_status_tracks_connect_drop_and_messages(self):
+        broker, holder = self._broker()
+        self.assertFalse(broker.feed_status()["connected"])
+
+        broker.subscribe_feed([self.RELIANCE], on_tick=lambda t: None)
+        broker._on_ws_open()
+        broker._on_ws_message()
+        status = broker.feed_status()
+        self.assertTrue(status["connected"])
+        self.assertEqual(status["subscribed"], 1)
+        self.assertIsNotNone(status["connected_at"])
+        self.assertTrue(status["last_message_at"].endswith("Z"))
+
+        broker._on_ws_close("simulated drop")
+        self.assertFalse(broker.feed_status()["connected"])
+
+        # counted on the re-open: a clean server close reconnects without
+        # firing on_close/on_error at all (verified against the real library)
+        broker._on_ws_open()
+        status = broker.feed_status()
+        self.assertTrue(status["connected"])
+        self.assertEqual(status["disconnects"], 1)
+
+    def _watchdog_broker(self):
+        class ReconnectableWS(FakeWSClient):
+            forced = 0
+
+            def force_reconnect(self):
+                ReconnectableWS.forced += 1
+        broker, holder = self._broker(ReconnectableWS)
+        broker.subscribe_feed([self.RELIANCE], on_tick=lambda t: None)
+        broker._on_ws_open()
+        return broker, holder, ReconnectableWS
+
+    def test_watchdog_never_fires_before_the_first_message_of_a_session(self):
+        # 08:50 connect, 09:15 open: no data yet is expected, not a dead link
+        from datetime import timedelta as _td
+        broker, _, ws_cls = self._watchdog_broker()
+        later = datetime.now(timezone.utc) + _td(minutes=30)
+        self.assertFalse(broker._check_feed_stale(now=later))
+        self.assertEqual(ws_cls.forced, 0)
+
+    def test_watchdog_forces_a_reconnect_when_flowing_data_stops(self):
+        from datetime import timedelta as _td
+        broker, _, ws_cls = self._watchdog_broker()
+        broker._on_ws_message()
+        soon = datetime.now(timezone.utc) + _td(seconds=30)
+        self.assertFalse(broker._check_feed_stale(now=soon))  # a short lull is fine
+        late = datetime.now(timezone.utc) + _td(seconds=dhan_broker_module.FEED_STALE_RECONNECT_SEC + 5)
+        self.assertTrue(broker._check_feed_stale(now=late))
+        self.assertEqual(ws_cls.forced, 1)
+        self.assertFalse(broker.feed_status()["connected"])
+
+    def test_watchdog_stays_quiet_after_a_deliberate_stop(self):
+        from datetime import timedelta as _td
+        broker, _, ws_cls = self._watchdog_broker()
+        broker._on_ws_message()
+        broker.disconnect()
+        late = datetime.now(timezone.utc) + _td(minutes=10)
+        self.assertFalse(broker._check_feed_stale(now=late))
+        self.assertEqual(ws_cls.forced, 0)
+
+    def test_a_clean_drop_with_no_close_callback_still_counts(self):
+        broker, _ = self._broker()
+        broker.subscribe_feed([self.RELIANCE], on_tick=lambda t: None)
+        broker._on_ws_open()
+        broker._on_ws_open()  # reconnect with no on_close in between
+        self.assertEqual(broker.feed_status()["disconnects"], 1)
 
 
 if __name__ == "__main__":

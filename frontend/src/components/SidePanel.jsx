@@ -27,25 +27,29 @@ export default function SidePanel({ panels, collapsed, onToggleCollapsed }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexShrink: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, borderLeft: '1px solid #eee', paddingLeft: 4 }}>
-        {panels.map((panel) => (
-          <button
-            key={panel.id}
-            onClick={() => handleTabClick(panel)}
-            title={panel.label}
-            style={{
-              fontWeight: panel.id === activeId && !collapsed ? 'bold' : 'normal',
-              background: panel.id === activeId && !collapsed ? '#dfe8ff' : undefined,
-              whiteSpace: 'nowrap', textAlign: 'left', cursor: 'pointer',
-            }}
-          >
-            {panel.label}
-          </button>
-        ))}
+    <div style={{ display: 'flex', flex: collapsed ? '0 0 auto' : '1 1 0%', minWidth: collapsed ? 'auto' : 150 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, borderLeft: '1px solid var(--border)', paddingLeft: 8, marginLeft: 4, flexShrink: 0 }}>
+        {panels.map((panel) => {
+          const active = panel.id === activeId && !collapsed
+          return (
+            <button
+              key={panel.id}
+              onClick={() => handleTabClick(panel)}
+              title={panel.label}
+              style={{
+                fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', textAlign: 'left',
+                border: 'none', borderRadius: 'var(--radius-sm)', padding: '5px 10px',
+                color: active ? 'var(--accent-text)' : 'var(--text-dim)',
+                background: active ? 'var(--accent-soft)' : 'transparent',
+              }}
+            >
+              {panel.label}
+            </button>
+          )
+        })}
       </div>
       {!collapsed && active && (
-        <div style={{ minWidth: 200, paddingLeft: 12 }}>{active.content}</div>
+        <div style={{ flex: '1 1 auto', minWidth: 0, paddingLeft: 14 }}>{active.content}</div>
       )}
     </div>
   )

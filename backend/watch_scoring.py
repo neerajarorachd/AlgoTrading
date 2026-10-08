@@ -45,8 +45,11 @@ stays exactly 1.0).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from statistics import mean
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from sqlalchemy import func, select, union_all
 
 from db.models import CandleIndicators, InstrumentActivity, PatternDefinition
 from indicators import TREND_LOOKBACK
@@ -96,64 +99,126 @@ def load_pattern_weights(session) -> Dict[str, float]:
     return {code: WEIGHT_BY_KIND.get(kind, 1) for code, kind in rows}
 
 
-def _recent_window_activities(session, instrument_id: int, timeframe: str, window_candles: int) -> List[InstrumentActivity]:
-    """Every activity row at any of the last `window_candles` DISTINCT
-    candle timestamps that had at least one activity for this instrument/
-    timeframe. An approximation of "last N candles" (derived from WHEN
-    activity happened, not a join against candles_today/candles_historical)
-    -- deliberately simple: sparse activity just means a longer real time
-    span is covered, which is fine for a live snapshot grid, not a backtest."""
-    cutoff_rows = (
-        session.query(InstrumentActivity.ts)
-        .filter(InstrumentActivity.instrument_id == instrument_id, InstrumentActivity.timeframe == timeframe)
-        .distinct().order_by(InstrumentActivity.ts.desc()).limit(window_candles).all()
-    )
-    if not cutoff_rows:
-        return []
-    cutoff = cutoff_rows[-1][0]
-    return (
-        session.query(InstrumentActivity)
-        .filter(
-            InstrumentActivity.instrument_id == instrument_id, InstrumentActivity.timeframe == timeframe,
-            InstrumentActivity.ts >= cutoff,
-        ).all()
-    )
+# ---- data fetch: batched, + the live engine's not-yet-flushed rows --------
+#
+# Both fetches are ONE round trip for every instrument: a UNION ALL of small
+# per-instrument TOP-N index seeks. Measured against the VM 2026-10-06: the
+# old 3-queries-per-instrument loop cost ~140 ms of SSH-tunnel latency per
+# query (~5-7 s for 13 instruments, the "color tiles take 7 s" complaint);
+# this is ~0.3 s per table. A window-function (DENSE_RANK/ROW_NUMBER) batch
+# was tried first and was far WORSE (43 s) -- SQL Server Express on this
+# I/O-capped VM ranks the whole partition instead of seeking the index.
+#
+# `engine` (the running ActivityEngine, optional) contributes today's rows:
+# it only flushes to the DB at 15:30 IST, so without it the grid scored the
+# previous day's activity all session long.
+
+def _naive_utc(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
 
 
-def _recent_indicator_rows(session, instrument_id: int, timeframe: str, n: int) -> List[CandleIndicators]:
-    """Newest first -- index 0 is "the latest candle," the rest are the
-    recent-history baseline to compare it against."""
-    return (
-        session.query(CandleIndicators)
-        .filter_by(instrument_id=instrument_id, timeframe=timeframe)
-        .order_by(CandleIndicators.ts.desc()).limit(n).all()
-    )
+def _one_or_union(selects):
+    return selects[0] if len(selects) == 1 else union_all(*selects)
 
 
-def _bb_width(row: CandleIndicators) -> Optional[float]:
-    if row.bb_upper is None or row.bb_lower is None or not row.bb_middle:
+def _activity_windows(session, instrument_ids: Sequence[int], timeframe: str, window_candles: int,
+                      engine=None) -> Dict[int, List[Tuple[datetime, str]]]:
+    """instrument_id -> [(ts, activity)] for every activity at any of the
+    last `window_candles` DISTINCT candle timestamps that had at least one
+    activity. An approximation of "last N candles" (derived from WHEN
+    activity happened, not a join against candle tables) -- deliberately
+    simple: sparse activity just means a longer real time span is covered,
+    fine for a live snapshot grid, not a backtest."""
+    by_id: Dict[int, List[Tuple[datetime, str]]] = {iid: [] for iid in instrument_ids}
+    if not instrument_ids:
+        return by_id
+    parts = []
+    for iid in instrument_ids:
+        recent_ts = (
+            select(InstrumentActivity.ts)
+            .where(InstrumentActivity.instrument_id == iid, InstrumentActivity.timeframe == timeframe)
+            .distinct().order_by(InstrumentActivity.ts.desc()).limit(window_candles).subquery()
+        )
+        cutoff = select(func.min(recent_ts.c.ts)).scalar_subquery()
+        parts.append(
+            select(InstrumentActivity.instrument_id, InstrumentActivity.ts, InstrumentActivity.activity)
+            .where(InstrumentActivity.instrument_id == iid, InstrumentActivity.timeframe == timeframe,
+                   InstrumentActivity.ts >= cutoff)
+        )
+    for iid, ts, activity in session.execute(_one_or_union(parts)):
+        by_id[iid].append((_naive_utc(ts), activity))
+
+    if engine is not None:
+        for iid in instrument_ids:
+            seen = set(by_id[iid])
+            for row in engine.pending_activities(iid, timeframe):
+                item = (_naive_utc(row["ts"]), row["activity"])
+                if item not in seen:
+                    seen.add(item)
+                    by_id[iid].append(item)
+    # re-apply the window over stored + pending together
+    for iid, items in by_id.items():
+        recent = sorted({ts for ts, _ in items}, reverse=True)[:window_candles]
+        by_id[iid] = [it for it in items if recent and it[0] >= recent[-1]]
+    return by_id
+
+
+_VOLATILITY_FIELDS = ("atr", "bb_upper", "bb_middle", "bb_lower")
+
+
+def _indicator_histories(session, instrument_ids: Sequence[int], timeframe: str, n: int,
+                         engine=None) -> Dict[int, List[dict]]:
+    """instrument_id -> the latest `n` indicator rows, newest first (index 0
+    is "the latest candle," the rest the baseline to compare it against)."""
+    by_id: Dict[int, List[dict]] = {iid: [] for iid in instrument_ids}
+    if not instrument_ids:
+        return by_id
+    cols = (CandleIndicators.instrument_id, CandleIndicators.ts) + tuple(
+        getattr(CandleIndicators, f) for f in _VOLATILITY_FIELDS)
+    parts = [
+        select(*cols).where(CandleIndicators.instrument_id == iid, CandleIndicators.timeframe == timeframe)
+        .order_by(CandleIndicators.ts.desc()).limit(n).subquery()
+        for iid in instrument_ids
+    ]
+    for row in session.execute(_one_or_union([select(p) for p in parts])).mappings():
+        by_id[row["instrument_id"]].append({"ts": _naive_utc(row["ts"]), **{f: row[f] for f in _VOLATILITY_FIELDS}})
+
+    for iid in instrument_ids:
+        rows = by_id[iid]
+        if engine is not None:
+            stored = {r["ts"] for r in rows}
+            for pending in engine.pending_indicator_rows(iid, timeframe):
+                ts = _naive_utc(pending["ts"])
+                if ts not in stored:
+                    rows.append({"ts": ts, **{f: pending.get(f) for f in _VOLATILITY_FIELDS}})
+        rows.sort(key=lambda r: r["ts"], reverse=True)
+        by_id[iid] = rows[:n]
+    return by_id
+
+
+def _bb_width(row: dict) -> Optional[float]:
+    if row["bb_upper"] is None or row["bb_lower"] is None or not row["bb_middle"]:
         return None
-    return (float(row.bb_upper) - float(row.bb_lower)) / float(row.bb_middle)
+    return (float(row["bb_upper"]) - float(row["bb_lower"])) / float(row["bb_middle"])
 
 
-def volatility_factor(session, instrument_id: int, timeframe: str) -> float:
+def _volatility_factor_from(rows: List[dict]) -> float:
     """Latest ATR and BB-width vs. their own RANGE_BASELINE_CANDLES-candle
     average, averaged together and clamped -- see module docstring. Needs
     at least 2 rows (the latest + at least one baseline point) with a real
     value for a given indicator to use it at all; falls back to the
     neutral 1.0 if neither indicator has enough history yet (early in an
     instrument's life, or CandleIndicators simply isn't populated)."""
-    rows = _recent_indicator_rows(session, instrument_id, timeframe, RANGE_BASELINE_CANDLES)
     if len(rows) < 2:
         return 1.0
     latest, history = rows[0], rows[1:]
 
     ratios = []
-    history_atrs = [float(r.atr) for r in history if r.atr is not None]
-    if latest.atr is not None and history_atrs:
+    history_atrs = [float(r["atr"]) for r in history if r["atr"] is not None]
+    if latest["atr"] is not None and history_atrs:
         baseline = mean(history_atrs)
         if baseline:
-            ratios.append(float(latest.atr) / baseline)
+            ratios.append(float(latest["atr"]) / baseline)
 
     latest_width = _bb_width(latest)
     history_widths = [w for w in (_bb_width(r) for r in history) if w is not None]
@@ -167,6 +232,11 @@ def volatility_factor(session, instrument_id: int, timeframe: str) -> float:
     return max(VOLATILITY_FACTOR_MIN, min(VOLATILITY_FACTOR_MAX, mean(ratios)))
 
 
+def volatility_factor(session, instrument_id: int, timeframe: str, engine=None) -> float:
+    rows = _indicator_histories(session, [instrument_id], timeframe, RANGE_BASELINE_CANDLES, engine)[instrument_id]
+    return _volatility_factor_from(rows)
+
+
 def classify_bucket(bull_score: float, bear_score: float) -> str:
     if bull_score == 0 and bear_score == 0:
         return "quiet"
@@ -177,18 +247,16 @@ def classify_bucket(bull_score: float, bear_score: float) -> str:
     return "strong_bear" if bear_score >= STRONG_THRESHOLD else "mild_bear"
 
 
-def score_instrument(session, instrument_id: int, timeframe: str, window_candles: int,
-                      weights: Dict[str, float]) -> dict:
-    """bull_score/bear_score: sum of each DISTINCT pattern's weight, counted
-    ONCE per occurrence within the window (a pattern firing on 3 of the
-    last 10 candles counts 3 times -- each occurrence is a real, separate
-    signal) -- not deduplicated by pattern code, only by (pattern, candle)
-    via the unique constraint already enforced on instrument_activity
-    itself."""
-    activities = _recent_window_activities(session, instrument_id, timeframe, window_candles)
-    bull_score = sum(weights.get(a.activity, 1) for a in activities if a.activity in BULLISH_PATTERNS)
-    bear_score = sum(weights.get(a.activity, 1) for a in activities if a.activity in BEARISH_PATTERNS)
-    factor = volatility_factor(session, instrument_id, timeframe)
+def _score(instrument_id: int, activities: List[Tuple[datetime, str]], indicator_rows: List[dict],
+           weights: Dict[str, float]) -> dict:
+    """bull_score/bear_score: sum of each pattern's weight, counted ONCE per
+    occurrence within the window (a pattern firing on 3 of the last 10
+    candles counts 3 times -- each occurrence is a real, separate signal)
+    -- not deduplicated by pattern code, only by (pattern, candle) via the
+    unique constraint already enforced on instrument_activity itself."""
+    bull_score = sum(weights.get(a, 1) for _, a in activities if a in BULLISH_PATTERNS)
+    bear_score = sum(weights.get(a, 1) for _, a in activities if a in BEARISH_PATTERNS)
+    factor = _volatility_factor_from(indicator_rows)
     bull_score *= factor
     bear_score *= factor
     return {
@@ -200,7 +268,15 @@ def score_instrument(session, instrument_id: int, timeframe: str, window_candles
     }
 
 
+def score_instrument(session, instrument_id: int, timeframe: str, window_candles: int,
+                      weights: Dict[str, float], engine=None) -> dict:
+    return score_instruments(session, [instrument_id], timeframe, window_candles, engine, weights)[0]
+
+
 def score_instruments(session, instrument_ids: Sequence[int], timeframe: str,
-                       window_candles: int = WINDOW_CANDLES) -> List[dict]:
-    weights = load_pattern_weights(session)
-    return [score_instrument(session, iid, timeframe, window_candles, weights) for iid in instrument_ids]
+                       window_candles: int = WINDOW_CANDLES, engine=None,
+                       weights: Optional[Dict[str, float]] = None) -> List[dict]:
+    weights = weights if weights is not None else load_pattern_weights(session)
+    activities = _activity_windows(session, instrument_ids, timeframe, window_candles, engine)
+    indicators = _indicator_histories(session, instrument_ids, timeframe, RANGE_BASELINE_CANDLES, engine)
+    return [_score(iid, activities[iid], indicators[iid], weights) for iid in instrument_ids]

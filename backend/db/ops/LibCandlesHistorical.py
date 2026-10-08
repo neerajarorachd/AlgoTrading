@@ -99,6 +99,45 @@ def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Can
             session.rollback()
 
 
+def get_latest_day_range(
+    session, symbol: str, exchange_segment: str, timeframe: str,
+) -> List[CandleHistorical]:
+    """All candles for the most recent calendar date that has any data for
+    this symbol/timeframe -- used by routes_candles.py as a fallback when
+    candles_today is empty (no live ticks yet today, e.g. before market
+    open or on a non-trading day), so the live chart always has something
+    to show instead of a blank canvas.
+    """
+    last_ts = get_last_ts(session, symbol, exchange_segment, timeframe)
+    if last_ts is None:
+        return []
+    day_start = last_ts.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = last_ts.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return get_range(session, symbol, exchange_segment, timeframe, ts_from=day_start, ts_to=day_end)
+
+
+def get_previous_day_ohlc(
+    session, symbol: str, exchange_segment: str, before: datetime,
+) -> Optional[Tuple[float, float, float]]:
+    """(high, low, close) of the most recent "1day" candle strictly before
+    `before` -- the previous COMPLETE trading session, for classic pivot
+    points (pivot_points.py). Reads the "1day" timeframe specifically
+    (one row per session) rather than aggregating 1-min rows, matching
+    this project's own "always fetch the full timeframe set, including
+    1day" convention. None if no prior-day row exists yet (a freshly
+    subscribed symbol with no historical backfill)."""
+    row = (
+        session.query(CandleHistorical)
+        .filter_by(symbol=symbol, exchange_segment=exchange_segment, timeframe="1day")
+        .filter(CandleHistorical.ts < before)
+        .order_by(CandleHistorical.ts.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    return float(row.high_price), float(row.low_price), float(row.close_price)
+
+
 def get_coverage(
     session, symbol: str, exchange_segment: str, timeframe: str,
 ) -> Optional[Tuple[datetime, datetime]]:

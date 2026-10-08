@@ -48,7 +48,17 @@ def _level_values(level) -> Optional[tuple]:
         quantity = getattr(level, "quantity", None)
     if price is None or quantity is None:
         return None
-    return float(price), int(quantity)
+    price, quantity = float(price), int(quantity)
+    # Dhan's Full-packet depth block always sends exactly 5 levels per side,
+    # zero-padded (price=0.0, quantity=0) whenever fewer than 5 real orders
+    # exist at that side -- a thin/illiquid stock, or a quiet moment, commonly
+    # has 1-2 real levels and 3-4 padding ones. Treating a padding level as a
+    # real ₹0 bid/ask corrupted best_bid/best_ask to 0 and, downstream,
+    # nearest_bid/ask_percentage to 100 -- confirmed live 2026-10-05
+    # (ASHOKLEY showing Best bid 0 / Nearest bid % 100).
+    if price <= 0 or quantity <= 0:
+        return None
+    return price, quantity
 
 
 def _percentage(value: float, total: float) -> float:

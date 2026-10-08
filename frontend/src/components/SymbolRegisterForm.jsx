@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { addSymbol, searchInstruments } from '../api/client.js'
+import Button from './kit/Button.jsx'
 
 const SEARCH_DEBOUNCE_MS = 150
 const MIN_QUERY_LENGTH = 2
@@ -96,8 +97,9 @@ export default function SymbolRegisterForm({ onRegistered, children }) {
           <ul
             ref={listRef}
             style={{
-              position: 'absolute', top: '100%', left: 0, zIndex: 10, margin: 0, padding: 4,
-              listStyle: 'none', background: 'white', border: '1px solid #ccc', width: 320,
+              position: 'absolute', top: '100%', left: 0, zIndex: 10, margin: '4px 0 0', padding: 4,
+              listStyle: 'none', background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-md)', width: 320,
               maxHeight: 220, overflowY: 'auto',
             }}
           >
@@ -107,16 +109,16 @@ export default function SymbolRegisterForm({ onRegistered, children }) {
                 onMouseDown={() => selectSuggestion(match)}
                 onMouseEnter={() => setHighlightedIndex(index)}
                 style={{
-                  padding: '4px 6px', cursor: 'pointer',
-                  background: index === highlightedIndex ? '#eef' : undefined,
+                  padding: '6px 8px', cursor: 'pointer', borderRadius: 'var(--radius-sm)',
+                  background: index === highlightedIndex ? 'var(--accent-soft)' : undefined,
                 }}
               >
-                <strong>{match.symbol}</strong>
+                <strong style={{ color: 'var(--text)' }}>{match.symbol}</strong>
                 {match.custom_symbol && match.custom_symbol !== match.symbol && (
-                  <span style={{ color: '#888' }}> ({match.custom_symbol})</span>
+                  <span style={{ color: 'var(--text-faint)' }}> ({match.custom_symbol})</span>
                 )}
                 {match.company_name && (
-                  <div style={{ fontSize: 12, color: '#888' }}>{match.company_name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>{match.company_name}</div>
                 )}
               </li>
             ))}
@@ -131,8 +133,8 @@ export default function SymbolRegisterForm({ onRegistered, children }) {
         <option value="EQUITY">EQUITY</option>
         <option value="INDEX">INDEX</option>
       </select>
-      <button type="submit" disabled={submitting}>Add</button>
-      {error && <span style={{ color: 'crimson' }}>{error}</span>}
+      <Button type="submit" disabled={submitting}>Add</Button>
+      {error && <span style={{ color: 'var(--critical)', fontSize: 13 }}>{error}</span>}
       {children}
     </form>
   )

@@ -126,7 +126,14 @@ class FakeBrokerWithHistory(FakeBroker):
         return []
 
 
-def test_hydrate_backfills_every_symbol_on_one_sequential_background_thread():
+def test_hydrate_backfills_every_symbol_on_one_sequential_background_thread(monkeypatch):
+    # no Socket.IO server in this test -- the backfill's status broadcast
+    # would raise before the history fetch (this only passed when an earlier
+    # test had happened to initialize socketio)
+    monkeypatch.setattr("feed.gap_fill.ws_live.broadcast_backfill_status", lambda *a, **k: None)
+    # and a "scanned through" time another test left for one of these
+    # symbols would make its backfill skip the fetch
+    monkeypatch.setattr("feed.gap_fill._last_scanned_through", {})
     # a real cross-thread-safe engine, not the shared session_factory fixture —
     # plain in-memory SQLite is pinned to a single thread (SingletonThreadPool),
     # which this test's background worker thread would otherwise hit; real

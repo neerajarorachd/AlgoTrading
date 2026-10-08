@@ -112,7 +112,8 @@ def _resolve_ltp(session, instrument, ltp: Optional[float]) -> Optional[float]:
     return float(candles[-1].close_price) if candles else None
 
 
-def order_popup_data(session, instrument_id: int, timeframe: str = "3min", ltp: Optional[float] = None) -> Optional[dict]:
+def order_popup_data(session, instrument_id: int, timeframe: str = "3min", ltp: Optional[float] = None,
+                     engine=None) -> Optional[dict]:
     """None when this instrument has no directional signal to show a
     buy/sell suggestion for at all -- the caller (route) turns that into a
     404/empty response, not a half-filled popup.
@@ -133,8 +134,12 @@ def order_popup_data(session, instrument_id: int, timeframe: str = "3min", ltp: 
     if instrument is None:
         return None
 
+    # `engine`: same live (unflushed) activity the grid's button scores
+    # with, so the popup's direction can't disagree with the button that
+    # opened it (see routes_watch_scores.py)
     score = watch_scoring.score_instrument(
-        session, instrument_id, timeframe, watch_scoring.WINDOW_CANDLES, watch_scoring.load_pattern_weights(session))
+        session, instrument_id, timeframe, watch_scoring.WINDOW_CANDLES, watch_scoring.load_pattern_weights(session),
+        engine=engine)
     if score["bull_score"] == score["bear_score"]:
         return None
     direction = "bull" if score["bull_score"] > score["bear_score"] else "bear"

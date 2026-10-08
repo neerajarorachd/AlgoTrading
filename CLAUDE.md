@@ -1,5 +1,12 @@
 # AlgoTrading — Project Guide
 
+> **Product name, 2026-10-05**: the app is user-facing-branded **AlgoParakh**
+> ("Algo" + "Parakh", Hindi/Sanskrit for judge/test/discern) — see
+> `frontend/index.html`'s `<title>` and `AppShell.jsx`'s sidebar wordmark.
+> This is a display-name change only; the repo, project directory, and
+> every reference below stay "AlgoTrading" (the codebase/infra name is a
+> separate thing from the product's marketing name).
+
 ## Status (as of 2026-09-10)
 
 AlgoTrading is the parallel system under active local development. The existing
