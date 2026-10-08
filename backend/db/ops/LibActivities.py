@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple
 
 from sqlalchemy import func
@@ -177,6 +177,39 @@ def seed_pattern_definitions(session_factory, catalog: Sequence[Tuple[str, str, 
                 row.active = True
 
 
+def _naive_utc(ts):
+    return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
+
+
+def _only_new(session_factory, model, rows, key_fields):
+    """Rows not already stored (and not repeated within the batch), found
+    with one range SELECT per instrument/timeframe -- so a conflicting row
+    never sends the whole batch down the per-row fallback, which over the
+    SSH tunnel to the I/O-capped VM runs at ~1 row/second (found live
+    2026-10-08: one duplicate turned a 5,000-row flush into an hour)."""
+    groups = defaultdict(list)
+    for row in rows:
+        groups[(row["instrument_id"], row["timeframe"])].append(row)
+    new = []
+    with session_scope(session_factory) as session:
+        for (instrument_id, timeframe), items in groups.items():
+            stamps = [_naive_utc(r["ts"]) for r in items]
+            cols = [getattr(model, f) for f in key_fields]
+            seen = {
+                (_naive_utc(found[0]),) + tuple(found[1:])
+                for found in session.query(model.ts, *cols).filter(
+                    model.instrument_id == instrument_id, model.timeframe == timeframe,
+                    model.ts >= min(stamps), model.ts <= max(stamps),
+                )
+            }
+            for row, ts in zip(items, stamps):
+                key = (ts,) + tuple(row[f] for f in key_fields)
+                if key not in seen:
+                    seen.add(key)
+                    new.append(row)
+    return new
+
+
 def persist_bulk(session_factory, rows: List[dict]) -> None:
     """Optimistic bulk insert — the common case (a fresh flush of newly
     detected activities) really is "all new rows," so skip the per-row
@@ -184,6 +217,7 @@ def persist_bulk(session_factory, rows: List[dict]) -> None:
     as db.ops.LibCandles.persist_bulk, for the same reason: hundreds of
     individual SELECT-then-INSERT round trips was the actual cost, not the
     write itself."""
+    rows = _only_new(session_factory, InstrumentActivity, rows, ('activity',))
     try:
         with session_scope(session_factory) as session:
             session.add_all([InstrumentActivity(**row) for row in rows])

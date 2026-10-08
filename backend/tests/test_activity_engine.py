@@ -1192,13 +1192,42 @@ def test_engine_is_idempotent_within_one_flush(session_factory):
     engine = ActivityEngine(session_factory)
     doji = _candle(0, open=100.0, high=101.0, low=99.0, close=100.05)
     engine.on_candle_closed(SYMBOL, SEG, doji)
-    engine.on_candle_closed(SYMBOL, SEG, doji)  # same candle, buffered twice before any flush
-    assert engine.buffered_count() == 2
+    engine.on_candle_closed(SYMBOL, SEG, doji)  # same candle again (backfill + live feed race)
+    assert engine.buffered_count() == 1  # the engine ignores a candle it already processed
     engine.flush()
 
     with session_factory() as session:
         rows = session.query(InstrumentActivity).all()
     assert len(rows) == 1  # the intra-batch duplicate was resolved, not both inserted
+
+
+def test_persist_bulk_skips_rows_already_stored_or_repeated_in_the_batch(session_factory):
+    """Save-side guard on its own: a duplicate must never push the whole
+    flush onto the per-row fallback (about 1 row/second against the VM)."""
+    from db.ops import LibActivities
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+        instrument_id = session.query(SubscribedSymbol).one().id
+    row = lambda minute, name: {
+        "instrument_id": instrument_id, "timeframe": "1min", "ts": _candle(minute, 1, 1, 1, 1).timestamp,
+        "activity_type": "candle_pattern", "activity": name, "intensity": None,
+        "open_price": 1, "high_price": 1, "low_price": 1, "close_price": 1,
+    }
+    LibActivities.persist_bulk(session_factory, [row(0, "doji")])
+    calls = []
+    original = LibActivities.persist_one
+    LibActivities.persist_one = lambda *a, **k: calls.append(a) or original(*a, **k)
+    try:
+        LibActivities.persist_bulk(session_factory, [row(0, "doji"), row(1, "hammer"), row(1, "hammer")])
+    finally:
+        LibActivities.persist_one = original
+    assert calls == []  # no per-row fallback
+    with session_factory() as session:
+        assert sorted(r.activity for r in session.query(InstrumentActivity).all()) == ["doji", "hammer"]
 
 
 def test_engine_skips_silently_when_symbol_not_registered(session_factory):

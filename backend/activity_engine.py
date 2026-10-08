@@ -1343,6 +1343,7 @@ class ActivityEngine:
         self._flush_lock = threading.Lock()
         self._saved_activities = 0
         self._saved_indicators = 0
+        self._last_processed_ts: Dict[InstrumentKey, datetime] = {}
         self._buffer: List[dict] = []
         # per-candle indicator-value snapshots (RSI/MACD/Stochastic/VWAP/
         # MA/ATR/Bollinger Bands) — the "walkthrough engine" groundwork,
@@ -1546,6 +1547,15 @@ class ActivityEngine:
         history for why this stays minimal."""
         buffer_start = len(self._buffer)
         key: InstrumentKey = (symbol, exchange_segment, candle.timeframe)
+        # Each candle exactly once, in order (found live 2026-10-08): the
+        # 5-min gap scan can fetch a just-closed minute from the broker before
+        # the live feed closes that same minute, and both now reach the
+        # engine -- the second pass duplicated every pattern for it (and
+        # double-counted it into the rolling indicator state).
+        last = self._last_processed_ts.get(key)
+        if last is not None and candle.timestamp <= last:
+            return []
+        self._last_processed_ts[key] = candle.timestamp
         buffer = self._recent[key]
         buffer.append(candle)
         self._ed_candle_count[key] += 1
