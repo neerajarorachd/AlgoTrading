@@ -377,8 +377,11 @@ function checkTrue(name, cond, note) {
       await page.waitForTimeout(3500);
       checkTrue('[chart] opens with several sessions (days= requested)', candleCalls.some((u) => /[?&]days=\d+/.test(u)), candleCalls);
       const chart = page.locator('.chart-grid').first();
+      // live answers the 20-session history a few seconds after the candles
+      await eventually(async () => await chart.locator('[data-day-separators] div').count() >= 2, 20000);
       const dayLabels = await chart.locator('[data-day-separators] div').count();
       checkTrue('[chart] day-boundary lines drawn for earlier sessions', dayLabels >= 2, dayLabels);
+      checkTrue('[chart] opening does not load older sessions by itself', !candleCalls.some((u) => u.includes('before=')), candleCalls.filter((u) => u.includes('before=')));
 
       // hover across the price pane until a marker's names show
       const canvas = chart.locator('canvas').first();
@@ -400,6 +403,7 @@ function checkTrue(name, cond, note) {
         const m = await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json();
         return new Set(m.markers.map((r) => r.ts)).size;
       }, symbol);
+      await eventually(async () => await dotCount() === expectedDots, 25000);
       check('[ALGO-25] one dot per candle with events', await dotCount(), expectedDots);
       // 2. hover lists every event of that candle
       const tipRows = await chart.locator('[data-marker-tooltip] [data-event-row]').count();
@@ -438,6 +442,33 @@ function checkTrue(name, cond, note) {
       check('[ALGO-25] toolbar has Depth, Indicators, Events, Diagrams, RSI, MACD, Stoch', tools.map((t) => t.tool), ['depth', 'indicators', 'events', 'diagrams', 'rsi', 'macd', 'stoch']);
       checkTrue('[ALGO-25] every tool is an icon with a tooltip and an on/off state',
         tools.every((t) => t.title && (t.pressed === 'true' || t.pressed === 'false') && !/[a-z]{3,}/i.test(t.text)), tools);
+      // ---- ALGO-26: wheel over the price axis zooms height, not width ----
+      const view = async () => layer.evaluate((el) => { const d = el.measureView(); return { bars: Number(d.barsVisible), span: Number(d.priceSpan), zoom: Number(d.priceZoom) } });
+      const paneBox = await layer.boundingBox(); // the whole price pane incl. its right-hand axis
+      const axisX = paneBox.x + paneBox.width - 25; // inside the right price axis
+      const midY = box.y + box.height / 2;
+      const v0 = await view();
+      await page.mouse.move(axisX, midY);
+      for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, -120); await page.waitForTimeout(80); }
+      await page.waitForTimeout(250);
+      const v1 = await view();
+      checkTrue('[ALGO-26] wheel up over the price axis makes the graph taller (narrower price range)', v1.span < v0.span * 0.8 && v1.zoom < 1, { v0, v1 });
+      // the price labels' width can shift the plot by a bar; a time zoom changes it by far more
+      checkTrue('[ALGO-26] ...and leaves the horizontal zoom alone', Math.abs(v1.bars - v0.bars) / v0.bars < 0.02, { v0, v1 });
+      for (let i = 0; i < 8; i++) { await page.mouse.wheel(0, 120); await page.waitForTimeout(80); }
+      await page.waitForTimeout(250);
+      const v2 = await view();
+      checkTrue('[ALGO-26] wheel down over the price axis shrinks it again (wider range)', v2.span > v1.span * 1.3 && v2.zoom > 1, { v1, v2 });
+      await page.mouse.dblclick(axisX, midY);
+      await page.waitForTimeout(250);
+      check('[ALGO-26] double-click on the price axis resets the height zoom', (await view()).zoom, 1);
+      const v3 = await view();
+      await page.mouse.move(box.x + box.width / 2, midY);
+      for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, -120); await page.waitForTimeout(80); }
+      await page.waitForTimeout(250);
+      const v4 = await view();
+      checkTrue('[ALGO-26] wheel over the chart area still zooms width only', Math.abs(v4.bars - v3.bars) / v3.bars > 0.05 && v4.zoom === 1, { v3, v4 });
+
       const rsiPane = chart.locator('[data-pane]').first();
       await tool('rsi').click(); await page.waitForTimeout(150);
       checkTrue('[ALGO-25] RSI icon hides the RSI panel', await rsiPane.evaluate((el) => el.hidden) && await tool('rsi').getAttribute('aria-pressed') === 'false');

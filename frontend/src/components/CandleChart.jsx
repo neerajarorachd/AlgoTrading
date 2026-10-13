@@ -185,6 +185,8 @@ export default function CandleChart({
   const daySepRef = useRef(null)
   const diagramRef = useRef(null)
   const tooltipRef = useRef(null)
+  const priceZoomRef = useRef(0) // ALGO-26 vertical zoom in whole wheel steps; 0 = auto-fit (factor 0.9^steps)
+  const userPaneRef = useRef({ chart: null, at: 0 }) // the sub-pane the viewer is scrolling right now (see the pane sync)
   const [readout, setReadout] = useState({}) // latest value per picker row, shown beside each checkbox
 
   const [timeframe, setTimeframe] = useState('1min')
@@ -232,6 +234,49 @@ export default function CandleChart({
     c.ma50 = c.main.addLineSeries({ color: tok('--ind-ma50'), lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, visible: false })
     c.pivotLines = {}
 
+    // ALGO-26: the mouse wheel over the price axis zooms the price range
+    // (the graph's height); over the chart it keeps zooming time (width).
+    // priceZoomRef < 1 = taller candles. Double-click the axis to reset.
+    const overlaySeries = [c.bbFillUpper, c.bbFillLower, c.vwap, c.bbUpper, c.bbMiddle, c.bbLower, c.ema5, c.ema14, c.ema21, c.ema50, c.ma21, c.ma50]
+    function applyPriceZoom() {
+      const z = priceZoomRef.current === 0 ? 1 : 0.9 ** priceZoomRef.current
+      c.candle.applyOptions({
+        autoscaleInfoProvider: (original) => {
+          const res = original()
+          if (!res || z === 1 || !res.priceRange) return res
+          const { minValue, maxValue } = res.priceRange
+          const mid = (minValue + maxValue) / 2
+          const half = ((maxValue - minValue) / 2) * z
+          return { ...res, priceRange: { minValue: mid - half, maxValue: mid + half } }
+        },
+      })
+      // with a manual zoom only the candles set the range -- the overlays
+      // (BB, EMAs, VWAP) would otherwise widen it straight back out
+      overlaySeries.forEach((s) => s.applyOptions({ autoscaleInfoProvider: (original) => (z === 1 ? original() : null) }))
+      c.main.priceScale('right').applyOptions({ autoScale: true })
+      requestAnimationFrame(() => { recordView(); drawDiagrams(); drawDaySeparators() })
+    }
+    function overPriceAxis(e) {
+      const rect = containerRef.current.getBoundingClientRect()
+      return e.clientX >= rect.right - c.main.priceScale('right').width() && e.clientX <= rect.right
+    }
+    function onAxisWheel(e) {
+      if (!overPriceAxis(e)) return
+      e.preventDefault()
+      e.stopPropagation() // keep the chart's own wheel (time zoom) out of it
+      priceZoomRef.current = Math.min(Math.max(priceZoomRef.current + (e.deltaY < 0 ? 1 : -1), -28), 28)
+      applyPriceZoom()
+    }
+    function onAxisDblClick(e) {
+      if (!overPriceAxis(e)) return
+      priceZoomRef.current = 0
+      applyPriceZoom()
+    }
+    const host = containerRef.current
+    host.addEventListener('wheel', onAxisWheel, { capture: true, passive: false })
+    host.addEventListener('dblclick', onAxisDblClick, { capture: true })
+    applyPriceZoom()
+
     c.rsi = createChart(rsiElRef.current, { ...sharedChartOptions(), height: SUB_HEIGHT })
     c.rsiLine = c.rsi.addLineSeries({ color: tok('--ind-rsi'), lineWidth: 2, priceLineVisible: false, lastValueVisible: false })
     c.rsiOversold30 = c.rsi.addLineSeries({ color: tok('--chart-border'), lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
@@ -255,10 +300,26 @@ export default function CandleChart({
 
     // keep every pane's visible time range in lockstep
     const allPanes = [c.main, c.rsi, c.macd, c.stoch]
+    // A sub-pane drives the others only while the viewer is scrolling it --
+    // otherwise its own setData (indicator rows arriving seconds after the
+    // candles on live) re-synced the price pane to the sub-pane's default
+    // range, jumping the view and loading older sessions on open (ALGO-25).
+    // The price pane always drives; resyncSubPanes() realigns after data.
+    const subEls = [[rsiElRef, c.rsi], [macdElRef, c.macd], [stochElRef, c.stoch]]
+    const markUser = (chart) => () => { userPaneRef.current = { chart, at: Date.now() } }
+    const listeners = subEls.map(([ref, chart]) => {
+      const fn = markUser(chart)
+      ;['pointerdown', 'pointermove', 'wheel', 'touchstart', 'touchmove'].forEach((ev) => ref.current?.addEventListener(ev, fn, { passive: true }))
+      return [ref.current, fn]
+    })
     let syncing = false
     allPanes.forEach((chart) => {
       chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (!range || syncing) return
+        if (chart !== c.main) {
+          const u = userPaneRef.current
+          if (u.chart !== chart || Date.now() - u.at > 1000) return
+        }
         syncing = true
         allPanes.forEach((other) => { if (other !== chart) other.timeScale().setVisibleLogicalRange(range) })
         syncing = false
@@ -266,6 +327,7 @@ export default function CandleChart({
     })
 
     c.main.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      recordView()
       drawDaySeparators()
       if (range && range.from < LOAD_MORE_EDGE_BARS) loadOlderRef.current?.()
     })
@@ -304,6 +366,9 @@ export default function CandleChart({
 
     return () => {
       resizeObserver.disconnect()
+      host.removeEventListener('wheel', onAxisWheel, { capture: true })
+      host.removeEventListener('dblclick', onAxisDblClick, { capture: true })
+      listeners.forEach(([el, fn]) => ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'touchmove'].forEach((ev) => el?.removeEventListener(ev, fn)))
       railObserver.disconnect()
       Object.values(c).forEach((v) => { if (v && typeof v.remove === 'function') v.remove() })
       charts.current = {}
@@ -421,6 +486,17 @@ export default function CandleChart({
     c.volume.setData(candles.map(toVolumeBar))
     c.spacers.forEach((s) => s.setData(toWhitespace(candles)))
     drawDaySeparators()
+    resyncSubPanes()
+  }
+
+  // after new data, line the sub-panes up with the price pane again (they no
+  // longer pull the price pane along -- see the pane sync in the build effect)
+  function resyncSubPanes() {
+    requestAnimationFrame(() => {
+      const c = charts.current
+      const range = c.main?.timeScale().getVisibleLogicalRange()
+      if (range) [c.rsi, c.macd, c.stoch].forEach((chart) => chart?.timeScale().setVisibleLogicalRange(range))
+    })
   }
 
   async function refreshIndicatorsAndMarkers(isCancelled) {
@@ -475,6 +551,21 @@ export default function CandleChart({
   }
   loadOlderRef.current = loadOlder
 
+  // the view as data attributes on the diagram layer -- read by the UI suite
+  // (lightweight-charts draws its axes on canvas, so there is nothing else to read)
+  function recordView() {
+    const c = charts.current
+    const layer = diagramRef.current
+    if (!layer || !c.main || !c.candle) return
+    const range = c.main.timeScale().getVisibleLogicalRange()
+    if (range) layer.dataset.barsVisible = (range.to - range.from).toFixed(1)
+    const top = c.candle.coordinateToPrice(0)
+    const bottom = c.candle.coordinateToPrice(layer.clientHeight)
+    if (top != null && bottom != null) layer.dataset.priceSpan = (top - bottom).toFixed(3)
+    layer.dataset.priceZoom = String(priceZoomRef.current === 0 ? 1 : 0.9 ** priceZoomRef.current)
+    layer.measureView = () => { recordView(); return { ...layer.dataset } } // fresh read for the UI suite
+  }
+
   // faint vertical line + date at the first bar of each IST day
   function drawDaySeparators() {
     const layer = daySepRef.current
@@ -496,6 +587,7 @@ export default function CandleChart({
 
   function applyIndicatorRows(rows) {
     const c = charts.current
+    if (!c.main) return
     c.vwap.setData(toLineSeries(rows, 'vwap'))
     c.bbUpper.setData(toLineSeries(rows, 'bb_upper'))
     c.bbMiddle.setData(toLineSeries(rows, 'bb_middle'))
