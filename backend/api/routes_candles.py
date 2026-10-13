@@ -305,11 +305,15 @@ def _naive_utc(ts: datetime) -> datetime:
 def _serialize_marker(row) -> dict:
     activity = _field(row, "activity")
     direction = "bull" if activity in BULLISH_PATTERNS else "bear" if activity in BEARISH_PATTERNS else None
+    # neckline: double/triple top/bottom only -- drawn by the chart's
+    # click-to-show diagrams (ALGO-25). Engine dicts may lack the key.
+    neckline = row.get("neckline_price") if isinstance(row, dict) else getattr(row, "neckline_price", None)
     return {
         "ts": _naive_utc(_field(row, "ts")).isoformat() + "Z",
         "activity_type": _field(row, "activity_type"),
         "activity": activity,
         "direction": direction,
+        "neckline": _num(neckline),
     }
 
 

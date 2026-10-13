@@ -83,7 +83,7 @@ function checkTrue(name, cond, note) {
     // old binary Depth toggle must still work exactly as before -- this is
     // the whole point of keeping CandleChart's depthOpen/onToggleDepth path
     // untouched while depthMode/onCycleDepth is additive
-    const depthBtn = page.locator('.chart-grid button', { hasText: 'Depth' }).first();
+    const depthBtn = page.locator('.chart-grid [data-chart-tool="depth"]').first();
     if (await depthBtn.count() > 0) {
       await depthBtn.click();
       await page.waitForTimeout(300);
@@ -281,7 +281,7 @@ function checkTrue(name, cond, note) {
     const canvasWidth = await page.locator('.chart-grid canvas').first().evaluate((el) => el.clientWidth).catch(() => 0);
     checkTrue('[new] chart canvas has real width', canvasWidth > 0, canvasWidth);
 
-    const depthBtn = page.locator('.chart-grid button', { hasText: 'Depth' }).first();
+    const depthBtn = page.locator('.chart-grid [data-chart-tool="depth"]').first();
     checkTrue('[new] below-grid Depth button present', await depthBtn.count() > 0);
 
     // DepthPanel renders "No depth data yet." until a live depth payload
@@ -308,10 +308,10 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] depth cycle click 3 hides the depth panel again', hiddenAgain === 0);
 
     // ---- chart Indicators picker: every row has a readout column ----
-    await page.locator('.chart-grid button', { hasText: 'Indicators' }).first().click();
+    await page.locator('.chart-grid [data-chart-tool="indicators"]').first().click();
     await page.waitForTimeout(400);
     check('[new] Indicators picker shows a readout for all 15 rows', await page.locator('.chart-grid [data-readout]').count(), 15);
-    await page.locator('.chart-grid button', { hasText: 'Indicators' }).first().click();
+    await page.locator('.chart-grid [data-chart-tool="indicators"]').first().click();
     await page.waitForTimeout(200);
 
     // ---- fullscreen ----
@@ -389,6 +389,60 @@ function checkTrue(name, cond, note) {
         tipText = await chart.locator('[data-marker-tooltip]').evaluate((el) => (el.style.display === 'block' ? el.textContent : ''));
       }
       checkTrue('[chart] marker names show on hover (no labels drawn on the chart)', tipText.length > 0, tipText);
+
+      // ---- ALGO-25: event dots, diagrams, icon toolbar ----
+      const layer = chart.locator('[data-diagrams]');
+      const dotCount = async () => Number(await layer.getAttribute('data-dot-count'));
+      const diagramCount = async () => Number(await layer.getAttribute('data-diagram-count') ?? 0);
+      // 1. exactly one dot per candle that has events (all event types)
+      const expectedDots = await page.evaluate(async (sym) => {
+        const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
+        const m = await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json();
+        return new Set(m.markers.map((r) => r.ts)).size;
+      }, symbol);
+      check('[ALGO-25] one dot per candle with events', await dotCount(), expectedDots);
+      // 2. hover lists every event of that candle
+      const tipRows = await chart.locator('[data-marker-tooltip] [data-event-row]').count();
+      const tipHead = await chart.locator('[data-marker-tooltip] div').first().innerText();
+      checkTrue('[ALGO-25] hover lists all of the candle\'s events', tipRows > 0 && tipHead.toLowerCase().startsWith(`${tipRows} event`), { tipRows, tipHead });
+      // 3. click a dot with a drawable event: diagrams appear, then clear after ~5 s
+      let drawn = 0;
+      for (let x = box.x + box.width - 80; x > box.x + 20 && !drawn; x -= 4) {
+        await page.mouse.move(x, box.y + box.height / 2);
+        const kinds = await chart.locator('[data-marker-tooltip]').evaluate((el) => (el.style.display === 'block' ? el.textContent : ''));
+        if (!/candle pattern|structure|graph formation|price action/.test(kinds)) continue;
+        await page.mouse.click(x, box.y + box.height / 2);
+        await page.waitForTimeout(200);
+        drawn = await diagramCount();
+      }
+      const shapesSvg = await layer.innerHTML();
+      checkTrue('[ALGO-25] clicking a dot draws its diagrams (circle/rectangle/outline)', drawn > 0 && /<(ellipse|rect|polyline)/.test(shapesSvg), { drawn });
+      await page.waitForTimeout(5300);
+      check('[ALGO-25] clicked diagrams clear after about 5 seconds', await diagramCount(), 0);
+      // 4. Diagrams toggle draws all in view, off clears
+      const tool = (name) => chart.locator(`[data-chart-tool="${name}"]`);
+      await tool('diagrams').click(); await page.waitForTimeout(300);
+      const allDrawn = await diagramCount();
+      checkTrue('[ALGO-25] Diagrams toggle draws all diagrams in view', allDrawn > drawn, { allDrawn, drawn });
+      await tool('diagrams').click(); await page.waitForTimeout(200);
+      check('[ALGO-25] Diagrams toggle off clears them', await diagramCount(), 0);
+      // 5. Event marking toggle hides and shows the dots
+      await tool('events').click(); await page.waitForTimeout(200);
+      check('[ALGO-25] Event marking off hides every dot', await dotCount(), 0);
+      await tool('events').click(); await page.waitForTimeout(200);
+      check('[ALGO-25] Event marking on shows the dots again', await dotCount(), expectedDots);
+      // 6. icon toolbar: seven tools, each with a tooltip and an on/off state
+      const tools = await chart.locator('[data-chart-toolbar] [data-chart-tool]').evaluateAll((els) => els.map((e) => ({
+        tool: e.dataset.chartTool, title: e.getAttribute('title'), pressed: e.getAttribute('aria-pressed'), text: e.innerText.trim(),
+      })));
+      check('[ALGO-25] toolbar has Depth, Indicators, Events, Diagrams, RSI, MACD, Stoch', tools.map((t) => t.tool), ['depth', 'indicators', 'events', 'diagrams', 'rsi', 'macd', 'stoch']);
+      checkTrue('[ALGO-25] every tool is an icon with a tooltip and an on/off state',
+        tools.every((t) => t.title && (t.pressed === 'true' || t.pressed === 'false') && !/[a-z]{3,}/i.test(t.text)), tools);
+      const rsiPane = chart.locator('[data-pane]').first();
+      await tool('rsi').click(); await page.waitForTimeout(150);
+      checkTrue('[ALGO-25] RSI icon hides the RSI panel', await rsiPane.evaluate((el) => el.hidden) && await tool('rsi').getAttribute('aria-pressed') === 'false');
+      await tool('rsi').click(); await page.waitForTimeout(150);
+      checkTrue('[ALGO-25] RSI icon shows it again', !(await rsiPane.evaluate((el) => el.hidden)) && await tool('rsi').getAttribute('aria-pressed') === 'true');
 
       // scroll back: drag the chart right until older sessions are requested
       const before = candleCalls.length;

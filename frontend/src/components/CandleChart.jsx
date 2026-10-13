@@ -34,6 +34,8 @@ import {
 } from '../api/client.js'
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
+import ChartToolButton from './ChartToolButton.jsx'
+import { humanize, indexData, shapesForEvents, shapesToSvg, toUnix as eventUnix } from './chartDiagrams.js'
 
 const TIMEFRAMES = ['1min', '3min', '5min']
 const MAIN_HEIGHT = 260
@@ -41,6 +43,7 @@ const SUB_HEIGHT = 70
 const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const INITIAL_DAYS = 21 // previous 20 sessions + today (ALGO-3)
 const MORE_DAYS = 10
+const DIAGRAM_SECONDS = 5 // a clicked dot's diagrams stay this long (ALGO-25)
 const LOAD_MORE_EDGE_BARS = 30 // load older sessions when the view's left edge is this close to the first bar
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -128,15 +131,6 @@ function sharedChartOptions() {
   }
 }
 
-function pillButtonStyle(active) {
-  return {
-    fontSize: 12.5, fontWeight: 700, border: '1.5px solid var(--border)', borderRadius: 'var(--radius-md)',
-    padding: '6px 16px', color: active ? 'var(--accent-text)' : 'var(--text-dim)',
-    background: active ? 'var(--accent-soft)' : 'transparent',
-    borderColor: active ? 'var(--accent)' : 'var(--border)',
-  }
-}
-
 const OVERLAY_DEFS = [
   { key: 'volume', label: 'Volume', defaultOn: true },
   { key: 'vwap', label: 'VWAP', defaultOn: true },
@@ -154,8 +148,10 @@ const PANEL_DEFS = [
   { key: 'macd', label: 'MACD (12, 26, 9)' },
   { key: 'stoch', label: 'Stochastic (14, 3)' },
 ]
+// Event dots cover every event type (ALGO-25: "any event"); price action and
+// structure were not marked before.
 const MARKER_DEFS = [
-  { key: 'patterns', label: 'Chart patterns', types: ['candle_pattern', 'graph_formation'] },
+  { key: 'patterns', label: 'Patterns, price action & structure', types: ['candle_pattern', 'graph_formation', 'price_action', 'structure'] },
   { key: 'signals', label: 'Strategy signals', types: ['indicator'] },
 ]
 
@@ -172,7 +168,6 @@ export default function CandleChart({
   const depthBtnRef = useRef(null)
   const tfToggleRef = useRef(null)
   const charts = useRef({}) // every chart/series instance, keyed by name -- see the build effect below
-  const markersRef = useRef({ patterns: [], signals: [] })
   const toggleState = useRef({}) // key -> bool, read by the toggle*/refresh* functions below
   const lastPivots = useRef(null) // the raw pivots object, so re-enabling the toggle after turning it off doesn't need a re-fetch
   const lastCandles = useRef([]) // so a theme change can recolor the volume bars (their up/down color is baked in per-bar, not a series-level option)
@@ -184,8 +179,11 @@ export default function CandleChart({
   const readyForMoreRef = useRef(false) // scroll-back only after the chart has opened on the current session
   const loadTokenRef = useRef(0) // bumped per full load, so a scroll-back response for an old instrument/timeframe is dropped
   const loadOlderRef = useRef(null) // latest loadOlder closure, called from the chart's range subscription
-  const markerNamesRef = useRef(new Map()) // bar time -> marker names, for the hover tooltip
+  const markerEventsRef = useRef(new Map()) // bar time -> that candle's shown events (one dot each), for hover/click
+  const allEventsRef = useRef([]) // every loaded event row -- diagrams need swing points even when their dots are filtered out
+  const activeDotRef = useRef({ time: null, timer: null }) // the clicked dot whose diagrams are drawn
   const daySepRef = useRef(null)
+  const diagramRef = useRef(null)
   const tooltipRef = useRef(null)
   const [readout, setReadout] = useState({}) // latest value per picker row, shown beside each checkbox
 
@@ -271,12 +269,17 @@ export default function CandleChart({
       drawDaySeparators()
       if (range && range.from < LOAD_MORE_EDGE_BARS) loadOlderRef.current?.()
     })
+    c.main.timeScale().subscribeVisibleLogicalRangeChange(() => drawDiagrams())
+    c.main.subscribeClick((param) => {
+      if (param.time == null || !markerEventsRef.current.get(param.time)?.length) return
+      showDotDiagrams(param.time)
+    })
     c.main.subscribeCrosshairMove((param) => {
       const tip = tooltipRef.current
       if (!tip) return
-      const names = param.time != null && param.point ? markerNamesRef.current.get(param.time) : null
-      if (!names || !names.length) { tip.style.display = 'none'; return }
-      tip.textContent = names.join(' · ')
+      const events = param.time != null && param.point ? markerEventsRef.current.get(param.time) : null
+      if (!events || !events.length) { tip.style.display = 'none'; return }
+      renderEventList(tip, events)
       tip.style.display = 'block'
       const width = containerRef.current?.clientWidth ?? 0
       tip.style.left = `${Math.min(Math.max(param.point.x + 12, 0), Math.max(width - tip.offsetWidth - 70, 0))}px`
@@ -294,6 +297,7 @@ export default function CandleChart({
       c.main.resize(width, fillHeight ? (containerRef.current.clientHeight || MAIN_HEIGHT) : MAIN_HEIGHT)
       ;[c.rsi, c.macd, c.stoch].forEach((chart) => chart.resize(width, SUB_HEIGHT))
       drawDaySeparators()
+      drawDiagrams()
     }
     syncRailHeight()
     updateTimeAxisVisibility()
@@ -369,8 +373,22 @@ export default function CandleChart({
       setAsOfDate(candlesRes.live ? null : candlesRes.as_of_date)
       hasMoreRef.current = Boolean(candlesRes.has_more)
       sessionStartRef.current = candles.length ? istDayStartIso(candles[candles.length - 1].ts) : null
-      // Older sessions' indicators/markers once; the current session's in
-      // refreshIndicatorsAndMarkers (also re-run on every closed candle).
+      // Scroll to today as soon as the candles are in -- not after the
+      // indicator/event fetches, which can be slow (a fresh dev page queues
+      // them behind its module loads), and until then the chart sat on its
+      // default view (found while verifying ALGO-25).
+      showCurrentSession(candles)
+      // Arm scroll-back only once the panes have settled: the sub-panes' own
+      // setData fires range-sync events a frame later that briefly pull the
+      // view toward the first bar, which used to load older sessions on open.
+      setTimeout(() => {
+        if (cancelled || token !== loadTokenRef.current) return
+        showCurrentSession(candles)
+        readyForMoreRef.current = true
+      }, 300)
+      // Today's indicators/markers first (small, and re-fetched per closed
+      // candle), then the older sessions' once (large).
+      await refreshIndicatorsAndMarkers(() => cancelled)
       const start = sessionStartRef.current
       if (start && candles.length && candles[0].ts < start) {
         const to = new Date(new Date(start).getTime() - 1000).toISOString()
@@ -378,13 +396,11 @@ export default function CandleChart({
           getCandleIndicators(instrument.symbol, instrument.exchange_segment, timeframe, candles[0].ts, to).catch(() => null),
           getCandleMarkers(instrument.symbol, instrument.exchange_segment, timeframe, candles[0].ts, to).catch(() => null),
         ])
-        if (cancelled) return
+        if (cancelled || token !== loadTokenRef.current) return
         histRows.current = { indicators: ind?.indicators ?? [], markers: mk?.markers ?? [] }
+        applyIndicatorRows([...histRows.current.indicators, ...currentRows.current.indicators])
+        applyMarkers([...histRows.current.markers, ...currentRows.current.markers])
       }
-      await refreshIndicatorsAndMarkers(() => cancelled)
-      if (cancelled || token !== loadTokenRef.current) return
-      showCurrentSession(candles)
-      readyForMoreRef.current = true
     }
   }, [instrument, timeframe, reloadKey])
 
@@ -423,6 +439,10 @@ export default function CandleChart({
   // scroll-back: prepend MORE_DAYS older sessions, keeping the view where it was
   async function loadOlder() {
     if (!readyForMoreRef.current || loadingOlderRef.current || !hasMoreRef.current || !lastCandles.current.length || !instrument) return
+    // the range event that called us can be stale (setData queues one from
+    // before showCurrentSession moved the view) -- check where the view is now
+    const now = charts.current.main?.timeScale().getVisibleLogicalRange()
+    if (!now || now.from >= LOAD_MORE_EDGE_BARS) return
     loadingOlderRef.current = true
     const token = loadTokenRef.current
     const stale = () => token !== loadTokenRef.current
@@ -542,10 +562,7 @@ export default function CandleChart({
   }
 
   function applyMarkers(rows) {
-    markersRef.current = {
-      patterns: rows.filter((r) => MARKER_DEFS[0].types.includes(r.activity_type)).map(markerFor),
-      signals: rows.filter((r) => MARKER_DEFS[1].types.includes(r.activity_type)).map(markerFor),
-    }
+    allEventsRef.current = rows
     // readout counts: the current session only
     const current = currentRows.current.markers
     setReadout((prev) => ({
@@ -556,31 +573,99 @@ export default function CandleChart({
     refreshMarkers()
   }
 
-  function markerFor(row) {
-    const bull = row.direction === 'bull'
-    const bear = row.direction === 'bear'
-    const color = bull ? tok('--good') : bear ? tok('--critical') : tok('--text-faint')
-    const isSignal = row.activity_type === 'indicator'
-    return {
-      time: Math.floor(new Date(row.ts).getTime() / 1000),
-      position: bear ? 'aboveBar' : 'belowBar',
-      color,
-      shape: isSignal ? (bear ? 'arrowDown' : 'arrowUp') : 'circle',
-      // no label on the chart (dozens per session made it unreadable,
-      // 2026-10-08) -- the names show in a tooltip on hover instead
-      name: row.activity,
+  // ONE dot per candle with any shown event (ALGO-25), coloured by the net
+  // direction of its events; names and details live in the hover list.
+  function refreshMarkers() {
+    const shownTypes = MARKER_DEFS.filter((d) => isOn(d.key, true)).flatMap((d) => d.types)
+    const byTime = new Map()
+    for (const r of allEventsRef.current) {
+      if (!shownTypes.includes(r.activity_type)) continue
+      const t = eventUnix(r.ts)
+      byTime.set(t, [...(byTime.get(t) ?? []), r])
     }
+    markerEventsRef.current = byTime
+    const dots = []
+    if (isOn('events', true)) {
+      for (const [time, events] of byTime) {
+        const net = events.reduce((n, e) => n + (e.direction === 'bull' ? 1 : e.direction === 'bear' ? -1 : 0), 0)
+        dots.push({
+          time, position: 'aboveBar', shape: 'circle', size: 0.7,
+          color: net > 0 ? tok('--good') : net < 0 ? tok('--critical') : tok('--accent'),
+        })
+      }
+      dots.sort((x, y) => x.time - y.time)
+    }
+    charts.current.candle?.setMarkers(dots)
+    const layer = diagramRef.current
+    if (layer) layer.dataset.dotCount = String(dots.length)
+    drawDiagrams()
   }
 
-  function refreshMarkers() {
-    const active = []
-    if (toggleState.current.patterns !== false) active.push(...markersRef.current.patterns)
-    if (toggleState.current.signals !== false) active.push(...markersRef.current.signals)
-    active.sort((a, b) => a.time - b.time)
-    const names = new Map()
-    active.forEach((m) => names.set(m.time, [...(names.get(m.time) ?? []), m.name]))
-    markerNamesRef.current = names
-    charts.current.candle?.setMarkers(active.map(({ name, ...marker }) => marker))
+  function renderEventList(tip, events) {
+    tip.replaceChildren()
+    const head = document.createElement('div')
+    head.textContent = `${events.length} event${events.length > 1 ? 's' : ''} · ${formatIST(eventUnix(events[0].ts))}`
+    head.style.cssText = 'font-size:10.5px;font-weight:700;color:var(--text-faint);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em'
+    tip.append(head)
+    for (const e of events) {
+      const row = document.createElement('div')
+      row.setAttribute('data-event-row', '')
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;white-space:nowrap'
+      const dot = document.createElement('span')
+      dot.style.cssText = `width:7px;height:7px;border-radius:50%;flex:none;background:${e.direction === 'bull' ? 'var(--good)' : e.direction === 'bear' ? 'var(--critical)' : 'var(--text-faint)'}`
+      const name = document.createElement('span')
+      name.textContent = humanize(e.activity)
+      const kind = document.createElement('span')
+      kind.textContent = humanize(e.activity_type)
+      kind.style.cssText = 'color:var(--text-faint);font-weight:500;margin-left:auto;padding-left:10px'
+      row.append(dot, name, kind)
+      tip.append(row)
+    }
+    const hint = document.createElement('div')
+    hint.textContent = 'Click to draw'
+    hint.style.cssText = 'font-size:10.5px;font-weight:500;color:var(--text-faint);margin-top:3px'
+    tip.append(hint)
+  }
+
+  // click a dot: draw its diagrams for DIAGRAM_SECONDS, or until another dot is clicked
+  function showDotDiagrams(time) {
+    const active = activeDotRef.current
+    clearTimeout(active.timer)
+    active.time = time
+    active.timer = setTimeout(() => { active.time = null; drawDiagrams() }, DIAGRAM_SECONDS * 1000)
+    drawDiagrams()
+  }
+
+  // The diagram layer: the clicked dot's shapes, plus -- with the Diagrams
+  // toggle on -- every shown event's shapes in the visible range.
+  function drawDiagrams() {
+    const layer = diagramRef.current
+    const c = charts.current
+    if (!layer || !c.main || !c.candle) return
+    const candles = lastCandles.current
+    const byTime = markerEventsRef.current
+    const events = []
+    if (isOn('diagrams', false)) {
+      const range = c.main.timeScale().getVisibleRange()
+      if (range) for (const [t, evs] of byTime) if (t >= range.from && t <= range.to) events.push(...evs)
+    } else {
+      const active = activeDotRef.current.time
+      if (active != null && byTime.has(active)) events.push(...byTime.get(active))
+    }
+    layer.dataset.diagramCount = '0'
+    if (!events.length || !candles.length) { layer.innerHTML = ''; return }
+    const shapes = shapesForEvents(events, indexData(candles, allEventsRef.current))
+    layer.dataset.diagramCount = String(shapes.length)
+    const ts = c.main.timeScale()
+    layer.innerHTML = shapesToSvg(
+      shapes,
+      (t) => ts.timeToCoordinate(t),
+      (p) => c.candle.priceToCoordinate(p),
+      layer.clientWidth, layer.clientHeight,
+      { bull: tok('--good'), bear: tok('--critical'), neutral: tok('--accent') },
+      ts.options().barSpacing ?? 6,
+      isOn('diagrams', false),
+    )
   }
 
   // ---- live updates: incremental candle+volume, full re-fetch for the rest
@@ -662,6 +747,17 @@ export default function CandleChart({
     refreshMarkers()
     forceRender((n) => n + 1)
   }
+  // toolbar toggles (ALGO-25): event dots on/off, all diagrams on/off
+  function toggleEvents() {
+    toggleState.current.events = !isOn('events', true)
+    refreshMarkers()
+    forceRender((n) => n + 1)
+  }
+  function toggleDiagrams() {
+    toggleState.current.diagrams = !isOn('diagrams', false)
+    drawDiagrams()
+    forceRender((n) => n + 1)
+  }
   function updateTimeAxisVisibility() {
     const c = charts.current
     const entries = [
@@ -694,18 +790,26 @@ export default function CandleChart({
           </span>
         ) : <span />}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {onCycleDepth ? (
-            <button
-              ref={depthBtnRef} onClick={onCycleDepth}
-              title={depthMode === 'right' ? 'Depth: shown beside the chart (click to move below)' : depthMode === 'below' ? 'Depth: shown below the chart (click to hide)' : 'Depth: hidden (click to show beside the chart)'}
-              style={pillButtonStyle(depthMode !== 'hidden')}
-            >
-              Depth{depthMode === 'right' ? ' →' : depthMode === 'below' ? ' ↓' : ''}
-            </button>
-          ) : onToggleDepth ? (
-            <button ref={depthBtnRef} onClick={onToggleDepth} style={pillButtonStyle(depthOpen)}>Depth</button>
-          ) : null}
-          <button onClick={() => setIndicatorsOpen((v) => !v)} style={pillButtonStyle(indicatorsOpen)}>Indicators</button>
+          {/* Icon toolbar (ALGO-25): each icon has a tooltip and shows its on/off state. */}
+          <div role="toolbar" aria-label="Chart tools" data-chart-toolbar style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {onCycleDepth ? (
+              <ChartToolButton
+                ref={depthBtnRef} tool="depth" onClick={onCycleDepth} on={depthMode !== 'hidden'}
+                badge={depthMode === 'right' ? '→' : depthMode === 'below' ? '↓' : null}
+                label={depthMode === 'right' ? 'Depth: shown beside the chart (click to move below)' : depthMode === 'below' ? 'Depth: shown below the chart (click to hide)' : 'Depth: hidden (click to show beside the chart)'}
+              />
+            ) : onToggleDepth ? (
+              <ChartToolButton ref={depthBtnRef} tool="depth" onClick={onToggleDepth} on={!!depthOpen} label={depthOpen ? 'Depth: shown (click to hide)' : 'Depth: hidden (click to show)'} />
+            ) : null}
+            <ChartToolButton tool="indicators" onClick={() => setIndicatorsOpen((v) => !v)} on={indicatorsOpen} label={indicatorsOpen ? 'Indicators window: open (click to close)' : 'Indicators window: closed (click to open)'} />
+            <span aria-hidden="true" style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 2px' }} />
+            <ChartToolButton tool="events" onClick={toggleEvents} on={isOn('events', true)} label={isOn('events', true) ? 'Event marking: on (click to hide the dots)' : 'Event marking: off (click to show the dots)'} />
+            <ChartToolButton tool="diagrams" onClick={toggleDiagrams} on={isOn('diagrams', false)} label={isOn('diagrams', false) ? 'Diagrams: all shown (click to hide)' : 'Diagrams: show all (or click a dot to draw just its own)'} />
+            <span aria-hidden="true" style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 2px' }} />
+            {PANEL_DEFS.map((d) => (
+              <ChartToolButton key={d.key} tool={d.key} onClick={() => togglePanel(d.key)} on={isOn(d.key, true)} label={`${d.label} panel: ${isOn(d.key, true) ? 'shown (click to hide)' : 'hidden (click to show)'}`} />
+            ))}
+          </div>
           <div ref={tfToggleRef} style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
             {TIMEFRAMES.map((tf) => (
               <button
@@ -728,10 +832,11 @@ export default function CandleChart({
                 fullscreen never grew (caught by ui_test_suite.cjs). */}
             <div ref={containerRef} style={{ width: '100%', height: fillHeight ? '100%' : undefined, overflow: fillHeight ? 'hidden' : undefined }} />
             <div ref={daySepRef} data-day-separators aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none', overflow: 'hidden' }} />
+            <div ref={diagramRef} data-diagrams aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none', overflow: 'hidden' }} />
             <div
               ref={tooltipRef} data-marker-tooltip role="tooltip"
               style={{
-                display: 'none', position: 'absolute', pointerEvents: 'none', zIndex: 4, maxWidth: 320,
+                display: 'none', position: 'absolute', pointerEvents: 'none', zIndex: 4, maxWidth: 360, lineHeight: 1.5,
                 fontSize: 11.5, fontWeight: 600, color: 'var(--text)', background: 'var(--surface)',
                 border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-sm)', padding: '4px 8px',
               }}
