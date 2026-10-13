@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from flask import Blueprint, current_app, g, jsonify, request
 
@@ -112,9 +113,13 @@ def _current_session(symbol: str, exchange_segment: str, timeframe: str):
     candles_today_latest_day = (
         [row for row in rows if _ist_date(row.ts) == latest_date] if rows else []
     )
+    # 3/5-min rolled up from 1-min, as in _sessions_before (stored 3/5-min
+    # history is incomplete)
     historical_latest_day = ops_candles_historical.get_latest_day_range(
-        g.db_session, symbol, exchange_segment, timeframe,
+        g.db_session, symbol, exchange_segment, "1min",
     )
+    if timeframe != "1min":
+        historical_latest_day = _roll_up(historical_latest_day, int(timeframe[0]))
     chosen_rows = (
         historical_latest_day
         if len(historical_latest_day) > len(candles_today_latest_day)
@@ -135,23 +140,60 @@ def _sessions_before(symbol: str, exchange_segment: str, timeframe: str, before:
     """Candles of the last `days` sessions strictly before `before` (naive
     UTC), oldest first, and whether any older candle exists. From
     candles_historical, plus earlier-day rows candles_today still holds
-    (no EOD archiver yet); historical wins on overlap."""
+    (no EOD archiver yet); historical wins on overlap.
+
+    3/5-min are ROLLED UP from the 1-min history here, not read from their
+    own stored rows (ALGO-25, found 2026-10-13): the warm-up fetch stores only
+    1-min, so stored 3/5-min history stopped weeks back and the leftovers in
+    candles_today have gaps -- about 30% of the past days' 3/5-min events
+    (computed by the engine from rolled-up 1-min) had no candle to sit on.
+    Same rule as everywhere else in this project: 3/5-min come from 1-min."""
     if days < 1:
-        return [], _has_candles_before(symbol, exchange_segment, timeframe, before)
+        return [], _has_candles_before(symbol, exchange_segment, "1min", before)
     # calendar span wide enough for `days` sessions across weekends/holidays
     since = before - timedelta(days=days * 2 + 7)
     until = before - timedelta(microseconds=1)
     by_ts = {}
     for ops in (ops_candles, ops_candles_historical):
-        for row in ops.get_range(g.db_session, symbol, exchange_segment, timeframe, ts_from=since, ts_to=until):
+        for row in ops.get_range(g.db_session, symbol, exchange_segment, "1min", ts_from=since, ts_to=until):
             by_ts[row.ts.replace(tzinfo=None) if row.ts.tzinfo else row.ts] = row
     rows = [by_ts[ts] for ts in sorted(by_ts)]
+    if timeframe != "1min":
+        rows = _roll_up(rows, int(timeframe[0]))
     wanted = sorted({_ist_date(row.ts) for row in rows})[-days:]
     if not wanted:
         return [], False
     first_day = wanted[0]
     kept = [row for row in rows if _ist_date(row.ts) >= first_day]
-    return kept, _has_candles_before(symbol, exchange_segment, timeframe, _ist_day_start(kept[0].ts))
+    return kept, _has_candles_before(symbol, exchange_segment, "1min", _ist_day_start(kept[0].ts))
+
+
+_MARKET_OPEN_MINUTE = 9 * 60 + 15  # 09:15 IST -- 3/5-min buckets start here, like the live aggregator
+
+
+def _roll_up(rows: list, minutes: int) -> list:
+    """1-min rows -> `minutes`-min candles on the 09:15 IST grid (open of the
+    first, max high, min low, close of the last, summed volume)."""
+    out, cur, key = [], None, None
+    for row in rows:
+        ts = row.ts.replace(tzinfo=None) if row.ts.tzinfo else row.ts
+        ist = ts + _IST_OFFSET
+        offset = (ist.hour * 60 + ist.minute - _MARKET_OPEN_MINUTE) // minutes * minutes
+        bucket = ist.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=_MARKET_OPEN_MINUTE + offset) - _IST_OFFSET
+        if bucket != key:
+            if cur is not None:
+                out.append(cur)
+            key = bucket
+            cur = SimpleNamespace(ts=bucket, open_price=row.open_price, high_price=row.high_price,
+                                  low_price=row.low_price, close_price=row.close_price, volume=row.volume or 0)
+        else:
+            cur.high_price = max(cur.high_price, row.high_price)
+            cur.low_price = min(cur.low_price, row.low_price)
+            cur.close_price = row.close_price
+            cur.volume = (cur.volume or 0) + (row.volume or 0)
+    if cur is not None:
+        out.append(cur)
+    return out
 
 
 def _has_candles_before(symbol: str, exchange_segment: str, timeframe: str, ts: datetime) -> bool:

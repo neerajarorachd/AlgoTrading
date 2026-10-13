@@ -32,6 +32,31 @@ export function toUnix(ts) {
   return Math.floor(new Date(ts).getTime() / 1000)
 }
 
+// the bar an event is drawn on: `bar` when the chart snapped it to the
+// nearest candle (snapToCandles), else its own time
+export function eventTime(ev) {
+  return ev.bar ?? toUnix(ev.ts)
+}
+
+/**
+ * Events placed on the nearest candle (user rule 2026-10-13: "if an event is
+ * fired on a time with no candle, show it on the nearest one"). Returns
+ * copies with `bar` set; `candles` must be sorted.
+ */
+export function snapToCandles(events, candles) {
+  const times = candles.map((c) => toUnix(c.ts))
+  if (!times.length) return []
+  return events.map((ev) => {
+    const t = toUnix(ev.ts)
+    let lo = 0; let hi = times.length - 1
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (times[mid] <= t) lo = mid; else hi = mid - 1 }
+    let bar = times[lo]
+    if (bar > t) bar = times[0]
+    else if (lo + 1 < times.length && times[lo + 1] - t < t - bar) bar = times[lo + 1]
+    return bar === t ? ev : { ...ev, bar }
+  })
+}
+
 export function humanize(activity) {
   return activity.replace(/_/g, ' ')
 }
@@ -43,7 +68,7 @@ export function indexData(candles, events) {
   const swings = events
     .filter((e) => e.activity === 'swing_high' || e.activity === 'swing_low')
     .map((e) => {
-      const t = toUnix(e.ts)
+      const t = eventTime(e)
       const i = byTime.get(t)
       const c = i != null ? candles[i] : null
       return c ? { t, kind: e.activity === 'swing_high' ? 'high' : 'low', price: e.activity === 'swing_high' ? c.high : c.low } : null
@@ -68,7 +93,7 @@ function swingsBefore(data, t, kind) {
 
 /** Shapes for one event; [] when it has nothing to draw. */
 export function shapesForEvent(ev, data) {
-  const t = toUnix(ev.ts)
+  const t = eventTime(ev)
   const i = data.byTime.get(t)
   if (i == null) return []
   const label = humanize(ev.activity)

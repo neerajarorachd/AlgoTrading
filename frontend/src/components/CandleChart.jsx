@@ -35,7 +35,7 @@ import {
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
-import { humanize, indexData, shapesForEvents, shapesToSvg, toUnix as eventUnix } from './chartDiagrams.js'
+import { eventTime, humanize, indexData, shapesForEvents, shapesToSvg, snapToCandles } from './chartDiagrams.js'
 
 const TIMEFRAMES = ['1min', '3min', '5min']
 const MAIN_HEIGHT = 260
@@ -181,6 +181,7 @@ export default function CandleChart({
   const loadOlderRef = useRef(null) // latest loadOlder closure, called from the chart's range subscription
   const markerEventsRef = useRef(new Map()) // bar time -> that candle's shown events (one dot each), for hover/click
   const allEventsRef = useRef([]) // every loaded event row -- diagrams need swing points even when their dots are filtered out
+  const snappedEventsRef = useRef([]) // allEventsRef placed on the nearest candle (see refreshMarkers)
   const activeDotRef = useRef({ time: null, timer: null }) // the clicked dot whose diagrams are drawn
   const daySepRef = useRef(null)
   const diagramRef = useRef(null)
@@ -669,10 +670,13 @@ export default function CandleChart({
   // direction of its events; names and details live in the hover list.
   function refreshMarkers() {
     const shownTypes = MARKER_DEFS.filter((d) => isOn(d.key, true)).flatMap((d) => d.types)
+    // every event on the nearest candle of this timeframe (a 3/5-min event
+    // can fall where no candle exists); re-snapped whenever candles change
+    snappedEventsRef.current = snapToCandles(allEventsRef.current, lastCandles.current)
     const byTime = new Map()
-    for (const r of allEventsRef.current) {
+    for (const r of snappedEventsRef.current) {
       if (!shownTypes.includes(r.activity_type)) continue
-      const t = eventUnix(r.ts)
+      const t = eventTime(r)
       byTime.set(t, [...(byTime.get(t) ?? []), r])
     }
     markerEventsRef.current = byTime
@@ -696,7 +700,7 @@ export default function CandleChart({
   function renderEventList(tip, events) {
     tip.replaceChildren()
     const head = document.createElement('div')
-    head.textContent = `${events.length} event${events.length > 1 ? 's' : ''} · ${formatIST(eventUnix(events[0].ts))}`
+    head.textContent = `${events.length} event${events.length > 1 ? 's' : ''} · ${formatIST(eventTime(events[0]))}`
     head.style.cssText = 'font-size:10.5px;font-weight:700;color:var(--text-faint);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em'
     tip.append(head)
     for (const e of events) {
@@ -746,7 +750,7 @@ export default function CandleChart({
     }
     layer.dataset.diagramCount = '0'
     if (!events.length || !candles.length) { layer.innerHTML = ''; return }
-    const shapes = shapesForEvents(events, indexData(candles, allEventsRef.current))
+    const shapes = shapesForEvents(events, indexData(candles, snappedEventsRef.current))
     layer.dataset.diagramCount = String(shapes.length)
     const ts = c.main.timeScale()
     layer.innerHTML = shapesToSvg(

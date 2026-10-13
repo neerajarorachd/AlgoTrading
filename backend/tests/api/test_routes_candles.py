@@ -414,11 +414,20 @@ def test_get_candles_before_returns_older_sessions_only(client, session_factory)
     assert "live" not in body
 
 
-def test_get_candles_days_keeps_the_timeframe(client, session_factory):
-    _seed_hist(session_factory, _past_session(1), close=90.0, timeframe="5min")
-    _seed_hist(session_factory, _past_session(1, minute=5), close=91.0, timeframe="1min")
+def test_get_candles_days_rolls_past_3_5_min_up_from_1_min(client, session_factory):
+    """ALGO-25: past days' 3/5-min come from the 1-min history on the 09:15 IST
+    grid (stored 3/5-min history is incomplete), never from stored 5-min rows."""
+    d = _ist_today() - timedelta(days=1)
+    open_utc = datetime(d.year, d.month, d.day, 3, 45, tzinfo=timezone.utc)  # 09:15 IST
+    _seed_hist(session_factory, open_utc, close=999.0, timeframe="5min")  # stale stored row: ignored
+    for i, close in enumerate([100, 101, 103, 102, 104, 105, 106]):  # 09:15 .. 09:21 IST
+        _seed_hist(session_factory, open_utc + timedelta(minutes=i), close=float(close))
     body = client.get("/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=5min&days=2").get_json()
-    assert [c["close"] for c in body["candles"]] == [90.0]
+    candles = body["candles"]
+    assert [c["ts"][11:16] for c in candles] == ["03:45", "03:50"]  # 09:15 and 09:20 IST
+    first = candles[0]
+    assert (first["open"], first["high"], first["low"], first["close"], first["volume"]) == (99.0, 105.0, 98.0, 104.0, 500)
+    assert candles[1]["close"] == 106.0 and candles[1]["volume"] == 200
 
 
 def test_get_candles_without_days_is_unchanged_single_session(client, session_factory):
