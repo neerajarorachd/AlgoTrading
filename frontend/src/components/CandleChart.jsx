@@ -21,7 +21,7 @@
 // (validated in the preview) needs GraphWindow restructuring -- out of
 // scope here, which focused on the chart's actual data being real.
 //
-// Multi-day (2026-10-08, step 4): opens on the last INITIAL_DAYS sessions
+// Multi-day (2026-10-08, step 4; ALGO-3): opens on the last INITIAL_DAYS sessions
 // (scrolled to the current one) and loads MORE_DAYS older sessions each time
 // the view nears the left edge. Past days' indicators/markers come from the
 // DB (filled by backend/feed/chart_history_fill.py); the current session's
@@ -39,8 +39,8 @@ const TIMEFRAMES = ['1min', '3min', '5min']
 const MAIN_HEIGHT = 260
 const SUB_HEIGHT = 70
 const IST_OFFSET_SECONDS = 5.5 * 60 * 60
-const INITIAL_DAYS = 5
-const MORE_DAYS = 5
+const INITIAL_DAYS = 21 // previous 20 sessions + today (ALGO-3)
+const MORE_DAYS = 10
 const LOAD_MORE_EDGE_BARS = 30 // load older sessions when the view's left edge is this close to the first bar
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 

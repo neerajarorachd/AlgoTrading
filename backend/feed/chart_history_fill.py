@@ -25,14 +25,15 @@ from activity_engine import ActivityEngine
 from db.ops import LibCandleIndicators, LibSymbols
 from db.session import session_scope
 from feed.candle_aggregator import CandleAggregator
-from feed.engine_recovery import TIMEFRAMES, _history_1min, _utc, today_start_utc
+from feed.engine_recovery import TIMEFRAMES, WARMUP_DAYS, _history_1min, _utc, today_start_utc
 
 logger = logging.getLogger(__name__)
 
-FILL_DAYS = 20
-# extra history before the window, only to warm the indicators up (EMA50
-# on 5-min needs ~250 one-minute candles, under a day's worth)
-WARMUP_EXTRA_DAYS = 4
+# the chart shows the previous 20 SESSIONS plus today (ALGO-3) -- sessions,
+# not calendar days: weekends and holidays don't count. History is read over
+# engine_recovery.WARMUP_DAYS calendar days (enough for 20 sessions plus a
+# few earlier ones that only warm the indicators up).
+FILL_SESSIONS = 20
 # a day counts as stored when it has indicator rows for at least this share
 # of its candles -- a part-day (a restart mid-session before step 1 existed)
 # gets filled in; the existing rows are skipped by the save
@@ -53,11 +54,10 @@ def _stored_days(session_factory, instrument_id: int, timeframe: str, since: dat
 
 
 def fill_instrument(symbol: str, exchange_segment: str, session_factory, now: datetime | None = None) -> dict:
-    """Stores indicator rows and patterns for each past day in the last
-    FILL_DAYS that lacks them. Returns a summary. Never touches today."""
+    """Stores indicator rows and patterns for each of the last FILL_SESSIONS
+    sessions that lacks them. Returns a summary. Never touches today."""
     now = _utc(now or datetime.now(timezone.utc))
     day_start = today_start_utc(now)
-    window_start = day_start - timedelta(days=FILL_DAYS)
     summary = {"days_filled": {}, "activities": 0, "candles": 0}
 
     with session_scope(session_factory) as session:
@@ -65,12 +65,14 @@ def fill_instrument(symbol: str, exchange_segment: str, session_factory, now: da
     if instrument_id is None:
         return summary
 
-    history = _history_1min(session_factory, symbol, exchange_segment, day_start,
-                            days=FILL_DAYS + WARMUP_EXTRA_DAYS)
+    history = _history_1min(session_factory, symbol, exchange_segment, day_start, days=WARMUP_DAYS)
     summary["candles"] = len(history)
     if not history:
         return summary
 
+    # the last FILL_SESSIONS sessions; anything earlier only warms up
+    sessions = sorted({_ist_day(c.timestamp) for c in history})[-FILL_SESSIONS:]
+    window_start = datetime.combine(sessions[0], datetime.min.time(), tzinfo=timezone.utc) - _IST
     # candles per (timeframe, day), from the 1-min count -- 3/5-min are rolled up
     one_min_per_day = Counter(_ist_day(c.timestamp) for c in history if c.timestamp >= window_start)
     missing = {}

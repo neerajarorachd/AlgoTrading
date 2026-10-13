@@ -35,7 +35,9 @@ from historical_data_service import ensure_data_available
 
 logger = logging.getLogger(__name__)
 
-WARMUP_DAYS = 20
+# calendar days of 1-min history fetched/kept for warm-up -- 35 covers the
+# chart's previous 20 sessions (ALGO-3) plus a few warm-up sessions
+WARMUP_DAYS = 35
 TIMEFRAMES = ("1min", "3min", "5min")
 _IST = timedelta(hours=5, minutes=30)
 

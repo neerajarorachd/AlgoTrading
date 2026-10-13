@@ -127,3 +127,24 @@ def test_one_row_per_candle_per_timeframe(session_factory):
     with session_factory() as session:
         per_tf = Counter(r.timeframe for r in session.query(CandleIndicators).all())
     assert per_tf == {"1min": 4 * 375, "3min": 4 * 125, "5min": 4 * 75}
+
+
+def test_fill_covers_the_last_20_sessions_only(session_factory):
+    """ALGO-3: the chart shows the previous 20 sessions; older history only warms up."""
+    _register(session_factory)
+    now = datetime.now(timezone.utc)
+    rng = random.Random(5)
+    today0 = today_start_utc(now)
+    candles, price = [], 100.0
+    for back in range(25, 0, -1):
+        day, price = _session_1min(_market_open(today0 - timedelta(days=back)), 60, price, rng)
+        candles += day
+    _store(session_factory, candles)
+
+    summary = fill_instrument(SYMBOL, SEG, session_factory, now=now)
+
+    expected = sorted({_ist_day(c.timestamp).isoformat() for c in candles})[-20:]
+    assert summary["days_filled"]["1min"] == expected
+    with session_factory() as session:
+        stored_days = {_ist_day(r.ts) for r in session.query(CandleIndicators).filter_by(timeframe="1min")}
+    assert sorted(d.isoformat() for d in stored_days) == expected
