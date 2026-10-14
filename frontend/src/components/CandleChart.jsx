@@ -159,7 +159,7 @@ const MARKER_DEFS = [
 
 export default function CandleChart({
   instrument, fillHeight = false, depthOpen, onToggleDepth, onControlsWidthChange,
-  depthMode, onCycleDepth,
+  depthMode, onCycleDepth, screenTimeframe,
 }) {
   const containerRef = useRef(null)
   const stackRef = useRef(null)
@@ -194,7 +194,15 @@ export default function CandleChart({
   const userPaneRef = useRef({ chart: null, at: 0 }) // the sub-pane the viewer is scrolling right now (see the pane sync)
   const [readout, setReadout] = useState({}) // latest value per picker row, shown beside each checkbox
 
-  const [timeframe, setTimeframe] = useState('1min')
+  const [timeframe, setTimeframe] = useState(TIMEFRAMES.includes(screenTimeframe) ? screenTimeframe : '1min')
+  // Sync with the screen's timeframe bar (2026-10-14): on by default where a
+  // screen timeframe exists; picking a timeframe on the chart itself turns it
+  // off. "All" on the screen leaves the chart where it is.
+  const [syncTf, setSyncTf] = useState(true)
+  const canSync = screenTimeframe !== undefined
+  useEffect(() => {
+    if (canSync && syncTf && TIMEFRAMES.includes(screenTimeframe)) setTimeframe(screenTimeframe)
+  }, [canSync, syncTf, screenTimeframe])
   const [asOfDate, setAsOfDate] = useState(null)
   const [indicatorsOpen, setIndicatorsOpen] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -913,15 +921,24 @@ export default function CandleChart({
               <ChartToolButton key={d.key} tool={d.key} onClick={() => togglePanel(d.key)} on={isOn(d.key, true)} label={`${d.label} panel: ${isOn(d.key, true) ? 'shown (click to hide)' : 'hidden (click to show)'}`} />
             ))}
           </div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {canSync && (
+            <ChartToolButton
+              tool="sync" on={syncTf} onClick={() => setSyncTf((v) => !v)}
+              label={syncTf ? 'Timeframe synced with the screen (click to choose it here instead)' : 'Timeframe set on this chart (click to follow the screen timeframe)'}
+            />
+          )}
           <div ref={tfToggleRef} style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
             {TIMEFRAMES.map((tf) => (
               <button
-                key={tf} onClick={() => setTimeframe(tf)}
+                key={tf} onClick={() => { setTimeframe(tf); if (canSync && tf !== screenTimeframe) setSyncTf(false) }}
+                data-chart-tf={tf} aria-pressed={tf === timeframe}
                 style={{ border: 'none', fontSize: 12, fontWeight: 600, padding: '5px 10px', color: tf === timeframe ? 'var(--text-on-accent)' : 'var(--text-dim)', background: tf === timeframe ? 'var(--accent)' : 'transparent' }}
               >
                 {tf}
               </button>
             ))}
+          </div>
           </div>
         </div>
       </div>

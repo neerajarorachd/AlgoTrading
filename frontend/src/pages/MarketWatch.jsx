@@ -5,13 +5,14 @@ import {
 import { getSocket, roomFor, subscribeRooms, unsubscribeRooms } from '../api/ws.js'
 import AddInstrumentButton from '../components/AddInstrumentButton.jsx'
 import FeedStatusBadge, { useFeedStatus } from '../components/FeedStatusBadge.jsx'
-import LiveEventsPanel, { isIndicatorSignal } from '../components/LiveEventsPanel.jsx'
+import LiveEventsPanel from '../components/LiveEventsPanel.jsx'
 import InstrumentGrid from '../components/InstrumentGrid.jsx'
 import InstrumentDetail from '../components/InstrumentDetail.jsx'
 import PageTabBar from '../components/PageTabBar.jsx'
 import PageTitleBar from '../components/PageTitleBar.jsx'
 import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
+import TimeframeBar from '../components/TimeframeBar.jsx'
 import GraphWindow from '../components/GraphWindow.jsx'
 import Button from '../components/kit/Button.jsx'
 
@@ -33,13 +34,9 @@ function nullsLast(a, b) {
   return (a == null) - (b == null)
 }
 
-// Bull-bucket sorts by bull_score desc, bear-bucket by bear_score desc,
-// choppy by total activity desc -- "quiet" has nothing to sort by (every
-// row is 0-0), so it's left in the table's own existing order.
+// Within a colour, strongest top pattern first (ALGO-33).
 function scoreSortKey(bucket, row) {
-  if (bucket === 'choppy') return row.bull_score + row.bear_score
-  if (bucket?.endsWith('bear')) return row.bear_score
-  return row.bull_score
+  return row?.top_score ?? 0
 }
 
 const MAX_OPEN_CHARTS = 4
@@ -52,6 +49,16 @@ const MAX_OPEN_CHARTS = 4
 // an already-open row toggled it closed instead of opening it.
 const OPEN_SYMBOL_IDS_KEY = 'marketWatch.new.openSymbolIds'
 const OPEN_TAB_IDS_KEY = 'marketWatch.openTabIds'
+const SCREEN_TIMEFRAME_KEY = 'workspace.screenTimeframe'
+
+function loadScreenTimeframe() {
+  try {
+    const v = localStorage.getItem(SCREEN_TIMEFRAME_KEY)
+    return ['1min', '3min', '5min', 'all'].includes(v) ? v : '3min'
+  } catch {
+    return '3min'
+  }
+}
 
 function loadStoredIds(key) {
   try {
@@ -70,6 +77,7 @@ export default function MarketWatch() {
   const [scores, setScores] = useState([])
   const [bucketColors, setBucketColors] = useState({})
   const [selectedBucket, setSelectedBucket] = useState(null)
+  const [screenTimeframe, setScreenTimeframe] = useState(loadScreenTimeframe) // 1min/3min/5min/all, above the grid
   const [liveTicks, setLiveTicks] = useState({}) // symbol -> tick payload
   const [liveDepth, setLiveDepth] = useState({}) // symbol -> depth payload
   const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
@@ -90,11 +98,9 @@ export default function MarketWatch() {
   const [tabs, setTabs] = useState([])
   const [activeTabId, setActiveTabId] = useState(null) // null = the Market Watch grid tab
   const feed = useFeedStatus()
-  const replayMode = feed?.mode === 'replay'
   const [liveEvents, setLiveEvents] = useState([]) // newest first, from the `activity` WS event
   // TEMPORARY (replay): each detected pattern adds 1 to a RANDOM color card --
   // the user's own placeholder until the pattern->color rule is decided
-  const [randomCardCounts, setRandomCardCounts] = useState({})
   const lastScoresFetch = useRef(0)
   const joinedRooms = useRef(new Set())
   const restoredOpenSymbols = useRef(false)
@@ -136,8 +142,16 @@ export default function MarketWatch() {
 
   const refreshScores = useCallback(() => {
     lastScoresFetch.current = Date.now()
-    getWatchScores().then((res) => { setScores(res.scores); setBucketColors(res.bucket_colors) }).catch(() => {})
-  }, [])
+    getWatchScores(screenTimeframe).then((res) => {
+      if (res.timeframe && res.timeframe !== screenTimeframe) return // a reply for the previous choice
+      setScores(res.scores); setBucketColors(res.bucket_colors)
+    }).catch(() => {})
+  }, [screenTimeframe])
+
+  function handleScreenTimeframe(tf) {
+    setScreenTimeframe(tf)
+    try { localStorage.setItem(SCREEN_TIMEFRAME_KEY, tf) } catch { /* per-viewer convenience only */ }
+  }
 
   useEffect(() => {
     refreshScores()
@@ -147,10 +161,6 @@ export default function MarketWatch() {
     const socket = getSocket()
     function onActivity(event) {
       setLiveEvents((prev) => [event, ...prev].slice(0, MAX_LIVE_EVENTS))
-      if (!isIndicatorSignal(event)) {
-        const bucket = BUCKET_ORDER[Math.floor(Math.random() * BUCKET_ORDER.length)]
-        setRandomCardCounts((prev) => ({ ...prev, [bucket]: (prev[bucket] ?? 0) + 1 }))
-      }
       // buckets (and so the Buy/Sell/Hold buttons) follow new activity
       if (Date.now() - lastScoresFetch.current > SCORES_REFRESH_MS) refreshScores()
     }
@@ -429,6 +439,9 @@ export default function MarketWatch() {
               tiles, grid, "Showing X of N · Show all" footer. No
               overflow:hidden on purpose -- the "+" popover is absolutely
               positioned and would be clipped. */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-2)' }}>
+            <TimeframeBar value={screenTimeframe} onChange={handleScreenTimeframe} />
+          </div>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-5)' }}>
             <div style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
@@ -462,10 +475,8 @@ export default function MarketWatch() {
                 {scores.length > 0 && (
                   <div style={{ padding: 'var(--space-3) var(--space-3) 0' }}>
                     <ScoreGrid
-                      scores={scores} bucketColors={bucketColors}
+                      scores={scores} bucketColors={bucketColors} timeframe={screenTimeframe}
                       selectedBucket={selectedBucket} onSelectBucket={setSelectedBucket}
-                      countsOverride={replayMode ? randomCardCounts : undefined}
-                      overrideNote={replayMode ? 'replay placeholder: pattern counts assigned to random colors' : undefined}
                     />
                   </div>
                 )}
@@ -526,6 +537,7 @@ export default function MarketWatch() {
                   onDrop={() => handleDrop(index)}
                   onDragEnd={() => setDragIndex(null)}
                   onClose={() => handleToggleOpen(instrument)}
+                  screenTimeframe={screenTimeframe}
                 />
               ))}
             </div>
@@ -540,7 +552,7 @@ export default function MarketWatch() {
 // One below-grid chart card -- owns its own GraphWindow ref so its
 // fullscreen button can trigger that specific instance (refs can't be
 // created inside the .map() above, hooks don't allow that).
-function ChartGridCard({ instrument, index, depth, depthMode, onDepthModeChange, dragIndex, onDragStart, onDrop, onDragEnd, onClose }) {
+function ChartGridCard({ instrument, index, depth, depthMode, onDepthModeChange, dragIndex, onDragStart, onDrop, onDragEnd, onClose, screenTimeframe }) {
   const graphRef = useRef(null)
   return (
     <div
@@ -576,6 +588,7 @@ function ChartGridCard({ instrument, index, depth, depthMode, onDepthModeChange,
       <GraphWindow
         ref={graphRef} instrument={instrument} depth={depth}
         depthMode={depthMode} onDepthModeChange={onDepthModeChange}
+        screenTimeframe={screenTimeframe}
       />
     </div>
   )

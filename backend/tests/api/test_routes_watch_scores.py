@@ -5,7 +5,7 @@ def _register(client, symbol="RELIANCE"):
 def test_returns_one_row_per_active_instrument(client):
     a = _register(client, "RELIANCE")
     b = _register(client, "TCS")
-    resp = client.get("/api/watch-scores")
+    resp = client.get("/api/watch-scores?mode=legacy")
     assert resp.status_code == 200
     body = resp.get_json()
     ids = {r["instrument_id"] for r in body["scores"]}
@@ -16,7 +16,7 @@ def test_returns_one_row_per_active_instrument(client):
 
 def test_a_fresh_instrument_with_no_activity_is_quiet(client):
     instrument_id = _register(client)
-    resp = client.get("/api/watch-scores")
+    resp = client.get("/api/watch-scores?mode=legacy")
     row = next(r for r in resp.get_json()["scores"] if r["instrument_id"] == instrument_id)
     assert row == {
         "instrument_id": instrument_id, "bull_score": 0, "bear_score": 0, "bucket": "quiet", "volatility_factor": 1.0,
@@ -40,5 +40,5 @@ def test_rejects_a_non_positive_window(client):
 
 def test_accepts_a_custom_timeframe_and_window(client):
     _register(client)
-    resp = client.get("/api/watch-scores?timeframe=1min&window=5")
+    resp = client.get("/api/watch-scores?mode=legacy&timeframe=1min&window=5")
     assert resp.status_code == 200

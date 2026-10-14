@@ -187,7 +187,7 @@ function checkTrue(name, cond, note) {
     const tiles = page.locator('button[title*="click to filter"]');
     // /api/watch-scores is ~0.6s against the VM since batching (was ~7s) -- still wait for it, not a fixed sleep
     await tiles.first().waitFor({ timeout: 25000 }).catch(() => {});
-    check('[new] all 6 color tiles render', await tiles.count(), 6);
+    check('[ALGO-33] all 7 colour tiles render (dark green ... red)', await tiles.count(), 7);
 
     // ---- "Showing X of N" footer + Show all ----
     const footer = page.locator('text=/^Showing \\d+ of \\d+$/');
@@ -241,17 +241,58 @@ function checkTrue(name, cond, note) {
         fetch('/api/symbols').then((r) => r.json()),
         fetch('/api/watch-scores?timeframe=3min').then((r) => r.json()),
       ]);
-      const bucketBySymbol = Object.fromEntries(symbols.map((s) => [s.symbol, scores.scores.find((x) => x.instrument_id === s.id)?.bucket]));
-      const expected = (b) => ({ strong_bull: 'buy', strong_bear: 'sell', mild_bull: 'hold', mild_bear: 'hold' }[b] ?? null);
+      const scoreBySymbol = Object.fromEntries(symbols.map((s) => [s.symbol, scores.scores.find((x) => x.instrument_id === s.id)]));
+      const bucketBySymbol = Object.fromEntries(Object.entries(scoreBySymbol).map(([k, v]) => [k, v?.bucket]));
+      // ALGO-33: green -> Buy/Sell by direction, orange/yellow -> Hold, white/pink/red -> none
+      const expectedFor = (sc) => {
+        if (!sc) return null;
+        if (sc.bucket === 'dark_green' || sc.bucket === 'light_green') return sc.direction === 'bull' ? 'buy' : sc.direction === 'bear' ? 'sell' : null;
+        if (sc.bucket === 'orange' || sc.bucket === 'yellow') return 'hold';
+        return null;
+      };
+      const expected = (b, symbol) => expectedFor(scoreBySymbol[symbol]);
       const mismatches = [];
       for (const tr of document.querySelectorAll('table tbody tr')) {
         const symbol = tr.cells[0].innerText.split('\n')[0];
         const shown = tr.querySelector('[data-row-action]')?.dataset.rowAction ?? null;
-        if (shown !== expected(bucketBySymbol[symbol])) mismatches.push({ symbol, bucket: bucketBySymbol[symbol], shown });
+        if (shown !== expected(bucketBySymbol[symbol], symbol)) mismatches.push({ symbol, bucket: bucketBySymbol[symbol], shown });
       }
       return mismatches;
     });
-    checkTrue('[new] every row\'s action follows the bucket rule (strong=Buy/Sell, mild=Hold, else none)', actionCheck.length === 0, actionCheck);
+    checkTrue('[ALGO-33] every row\'s action follows the colour rule (green=Buy/Sell by direction, orange/yellow=Hold, else none)', actionCheck.length === 0, actionCheck);
+    // ---- screen timeframe bar (2026-10-14) ----
+    const tfBar = page.locator('[data-timeframe-bar]');
+    checkTrue('[TF] timeframe bar shows 1m / 3m / 5m / All', await tfBar.locator('[data-timeframe]').allInnerTexts().then((t) => t.join(',') === '1m,3m,5m,All'));
+    const barBox = await tfBar.boundingBox();
+    const gridBox = await page.locator('[data-instrument-grid]').boundingBox();
+    checkTrue('[TF] timeframe bar sits above the grid', barBox && gridBox && barBox.y + barBox.height <= gridBox.y, { barBox, gridBox });
+    checkTrue('[TF] 3m is selected by default', await tfBar.locator('[data-timeframe="3min"]').getAttribute('aria-checked') === 'true');
+    const scoreCalls = [];
+    const onScoreReq = (req) => { if (req.url().includes('/api/watch-scores')) scoreCalls.push(req.url()); };
+    page.on('request', onScoreReq);
+    await tfBar.locator('[data-timeframe="1min"]').click();
+    checkTrue('[TF] picking 1m re-fetches the colours for 1min', await eventually(async () => scoreCalls.some((u) => u.includes('timeframe=1min'))), scoreCalls);
+    const tileTotal1 = await eventually(async () => {
+      const [n, rows] = await Promise.all([
+        page.$$eval('[data-bucket]', (els) => els.reduce((s, e) => s + Number(e.innerText.trim() || 0), 0)),
+        page.locator('[data-instrument-grid] tbody tr').count(),
+      ]);
+      return n > 0 && n === (await page.evaluate(() => fetch('/api/symbols').then((r) => r.json()).then((s) => s.length)));
+    });
+    checkTrue('[TF] on 1m every instrument is counted in exactly one colour tile', tileTotal1);
+    await tfBar.locator('[data-timeframe="all"]').click();
+    checkTrue('[TF] on All every colour tile shows three counts (1m · 3m · 5m)', await eventually(async () => {
+      const texts = await page.$$eval('[data-bucket]', (els) => els.map((e) => e.innerText.trim()));
+      return texts.length === 7 && texts.every((t) => /^\d+ · \d+ · \d+$/.test(t));
+    }));
+    checkTrue('[TF] All asks the API for timeframe=all', scoreCalls.some((u) => u.includes('timeframe=all')), scoreCalls);
+    await tfBar.locator('[data-timeframe="3min"]').click();
+    checkTrue('[TF] back on 3m the tiles show single counts again', await eventually(async () => {
+      const texts = await page.$$eval('[data-bucket]', (els) => els.map((e) => e.innerText.trim()));
+      return texts.length === 7 && texts.every((t) => /^\d+$/.test(t));
+    }));
+    page.off('request', onScoreReq);
+
     checkTrue('[new] no "Remove" text left; every row has a × remove button',
       await eventually(async () => await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
         && await page.locator('[data-instrument-grid] tbody button[aria-label^="Remove "]').count() === await page.locator('[data-instrument-grid] tbody tr').count()));
@@ -280,6 +321,32 @@ function checkTrue(name, cond, note) {
     checkTrue('[new] chart-grid appears after clicking a row', chartGridVisible > 0);
     const canvasWidth = await page.locator('.chart-grid canvas').first().evaluate((el) => el.clientWidth).catch(() => 0);
     checkTrue('[new] chart canvas has real width', canvasWidth > 0, canvasWidth);
+
+    // ---- chart follows the screen timeframe while its sync toggle is on (2026-10-14) ----
+    {
+      const card = page.locator('.chart-grid').first();
+      const pressedTf = () => card.locator('[data-chart-tf][aria-pressed="true"]').first().getAttribute('data-chart-tf');
+      const syncBtn = card.locator('[data-chart-tool="sync"]').first();
+      const screenBtn = (tf) => page.locator(`[data-timeframe-bar] [data-timeframe="${tf}"]`);
+      checkTrue('[TF] chart has a sync toggle, on by default', await syncBtn.getAttribute('aria-pressed') === 'true');
+      checkTrue('[TF] synced chart opens on the screen timeframe (3min)', await pressedTf() === '3min');
+      await screenBtn('5min').click();
+      checkTrue('[TF] screen 5m switches the synced chart to 5min', await eventually(async () => await pressedTf() === '5min'));
+      await screenBtn('all').click();
+      await page.waitForTimeout(300);
+      checkTrue('[TF] screen All leaves the chart where it was', await pressedTf() === '5min');
+      await syncBtn.click();
+      await screenBtn('1min').click();
+      await page.waitForTimeout(300);
+      checkTrue('[TF] with sync off the chart keeps its own timeframe', await pressedTf() === '5min' && await syncBtn.getAttribute('aria-pressed') === 'false');
+      await syncBtn.click();
+      checkTrue('[TF] turning sync back on jumps to the screen timeframe', await eventually(async () => await pressedTf() === '1min'));
+      await card.locator('[data-chart-tf="3min"]').click();
+      checkTrue('[TF] picking a timeframe on the chart turns sync off', await eventually(async () => await syncBtn.getAttribute('aria-pressed') === 'false'));
+      await syncBtn.click();
+      await screenBtn('3min').click();
+      await eventually(async () => await pressedTf() === '3min');
+    }
 
     const depthBtn = page.locator('.chart-grid [data-chart-tool="depth"]').first();
     checkTrue('[new] below-grid Depth button present', await depthBtn.count() > 0);
@@ -412,11 +479,18 @@ function checkTrue(name, cond, note) {
       const layer = chart.locator('[data-diagrams]');
       const dotCount = async () => Number(await layer.getAttribute('data-dot-count'));
       const diagramCount = async () => Number(await layer.getAttribute('data-diagram-count') ?? 0);
-      // 1. exactly one dot per candle that has events (all event types)
+      // 1. exactly one dot per candle that has events (all event types) -- on
+      // 1min: a synced chart opens on the screen's timeframe (3m by default)
+      const tf1 = chart.locator('[data-chart-tf="1min"]');
+      if (await tf1.count() > 0 && await tf1.getAttribute('aria-pressed') !== 'true') {
+        await tf1.click();
+        await page.waitForTimeout(2500);
+      }
       const expectedDots = await page.evaluate(async (sym) => {
         const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
         const m = await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json();
-        return new Set(m.markers.map((r) => r.ts)).size;
+        // pattern hits (ALGO-32) aren't drawn as raw dots yet -- ALGO-34 (5.5) adds them
+        return new Set(m.markers.filter((r) => r.activity_type !== 'pattern').map((r) => r.ts)).size;
       }, symbol);
       await eventually(async () => await dotCount() === expectedDots, 25000);
       check('[ALGO-25] one dot per candle with events', await dotCount(), expectedDots);

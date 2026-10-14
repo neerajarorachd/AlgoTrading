@@ -18,6 +18,8 @@ const ICONS = {
   macd: <><rect x="2" y="8" width="2" height="5" /><rect x="5.2" y="6" width="2" height="7" /><rect x="8.4" y="9" width="2" height="4" /><rect x="11.6" y="7" width="2" height="6" /><path d="M1.5 6.5 5 3.5 9 5 14.5 2.5" stroke="currentColor" strokeWidth="1.3" fill="none" /></>,
   // two crossing lines (%K / %D)
   stoch: <><path d="M1.5 12 5 5 8.5 9 14.5 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinejoin="round" /><path d="M1.5 6 5 9.5 9 4.5 14.5 10" stroke="currentColor" strokeWidth="1.1" fill="none" opacity=".7" /></>,
+  // two linked rings (follow the screen's timeframe)
+  sync: <><rect x="1.5" y="5" width="7.5" height="6" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="7" y="5" width="7.5" height="6" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" /></>,
 }
 
 const ChartToolButton = forwardRef(function ChartToolButton({ tool, label, on, onClick, badge }, ref) {

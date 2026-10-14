@@ -8,16 +8,25 @@ const MAX_OPEN_CHARTS = 4
 
 const BUCKET_DOT_FALLBACK = 'var(--text-faint)'
 const BUCKET_LABEL = {
+  dark_green: 'Dark green: strong setup', light_green: 'Light green: good setup', orange: 'Orange: fair setup',
+  yellow: 'Yellow: weak setup', white: 'White: nothing formed', pink: 'Pink: caution -- avoid', red: 'Red: avoid',
+  // legacy scoring (?mode=legacy)
   strong_bull: 'Strong bull', mild_bull: 'Mild bull', quiet: 'Quiet',
   choppy: 'Choppy', mild_bear: 'Mild bear', strong_bear: 'Strong bear',
 }
 
-// One action per row, driven entirely by the bucket -- as finalized in the
-// preview: the bucket IS the recommendation. Strong -> Buy/Sell (opens the
-// order popup), mild -> Hold (informational only), choppy/quiet/no data ->
-// no button. Replaced 2026-10-06 the earlier "whichever score is higher"
-// rule, which showed Buy/Sell even on choppy rows (both sides active).
-function rowActionFor(bucket) {
+// One action per row, from the pattern colour (ALGO-33): dark/light green ->
+// Buy or Sell by the top pattern's direction (opens the order popup); orange
+// or yellow -> Hold (informational); white, pink, red -> no button (pink and
+// red mean avoid). Colour is strength, the direction comes separately.
+function rowActionFor(score) {
+  const bucket = score?.bucket
+  if (bucket === 'dark_green' || bucket === 'light_green') {
+    if (score.direction === 'bull') return { label: 'Buy', kind: 'buy' }
+    if (score.direction === 'bear') return { label: 'Sell', kind: 'sell' }
+  }
+  if (bucket === 'orange' || bucket === 'yellow') return { label: 'Hold', kind: 'hold' }
+  // legacy buckets
   if (bucket === 'strong_bull') return { label: 'Buy', kind: 'buy' }
   if (bucket === 'strong_bear') return { label: 'Sell', kind: 'sell' }
   if (bucket === 'mild_bull' || bucket === 'mild_bear') return { label: 'Hold', kind: 'hold' }
@@ -188,7 +197,7 @@ export default function InstrumentGrid({
             const atCapacity = !isOpen && openSymbols.length >= MAX_OPEN_CHARTS
             const status = backfillStatus[row.symbol]
             const score = scoreByInstrument[row.id]
-            const action = rowActionFor(score?.bucket)
+            const action = rowActionFor(score)
             const dotColor = score?.bucket ? (bucketColors[score.bucket] ?? BUCKET_DOT_FALLBACK) : BUCKET_DOT_FALLBACK
             return (
               <tr
