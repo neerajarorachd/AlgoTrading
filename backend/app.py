@@ -19,6 +19,8 @@ from db.ops.LibRecommendationSystems import ensure_parent_strategies
 from db.ops.LibRecommendationSystems import seed_defaults as seed_recommendation_systems
 from db.ops.LibStrategyElements import seed_strategy_elements
 from db.ops.LibSystemSettings import seed_defaults as seed_system_settings
+from db.ops.LibPatterns import seed_system_patterns
+from patterns_catalog import PATTERN_SETTING_SEED, SYSTEM_PATTERNS
 from db.session import build_engine, build_session_factory
 from feed.candle_aggregator import CandleAggregator
 from pattern_defaults import ensure_fallback_defaults
@@ -51,6 +53,8 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     seed_pattern_definitions(session_factory)
     seed_strategy_elements(session_factory, PATTERN_CATALOG)
     seed_system_settings(session_factory, SYSTEM_SETTING_SEED)
+    seed_system_settings(session_factory, PATTERN_SETTING_SEED)
+    seed_system_patterns(session_factory, SYSTEM_PATTERNS)
     seed_recommendation_systems(session_factory, RECOMMENDATION_SYSTEM_SEED)
     ensure_parent_strategies(session_factory)
     ensure_fallback_defaults(session_factory)
@@ -81,6 +85,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     from api.routes_feed import feed_bp
     from api.routes_historical_data import historical_data_bp
     from api.routes_recommendation_systems import recommendation_systems_bp
+    from api.routes_patterns import patterns_bp
     from api.routes_recommendations import recommendations_bp
     from api.routes_strategies import strategies_bp
     from api.routes_symbols import symbols_bp
@@ -102,6 +107,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.register_blueprint(backtests_bp)
     app.register_blueprint(recommendations_bp)
     app.register_blueprint(recommendation_systems_bp)
+    app.register_blueprint(patterns_bp)
 
     app.extensions["socketio"] = ws_live.init_app(app)
 

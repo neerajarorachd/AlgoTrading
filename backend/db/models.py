@@ -1828,3 +1828,88 @@ class InstrumentWatchExclusion(Base):
         UniqueConstraint("instrument_id", "item_type", "item_code", name="uq_watch_exclusion"),
         Index("ix_watch_exclusions_instrument", "instrument_id"),
     )
+
+
+class Pattern(Base):
+    """A named set of conditions with a weightage (ALGO-5 / ALGO-31): says
+    whether a setup is present on a candle and how strong it is. Conditions
+    are formulas in the shared condition language (condition_evaluator.py);
+    walkthroughs, patterns and strategies all speak it.
+
+    Not to be confused with PatternDefinition above, which catalogs the raw
+    event types the activity engine detects (hammer, macd_bullish_cross...).
+    A Pattern can reference those through EVENT(name).
+
+    origin "system" rows ship with the app (patterns_catalog.py) and are read
+    -only to users; a user edits a COPY (origin "user", parent_id -> the
+    system row). owner_id is the user (NULL for system rows) -- there is no
+    users table yet, so it is a plain int like other owner fields here."""
+
+    __tablename__ = "patterns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)  # the keyword: PATTERN(key)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    pattern_type: Mapped[str] = mapped_column(String(16), nullable=False)  # bullish | bearish | caution | avoid
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="combined")
+    origin: Mapped[str] = mapped_column(String(8), nullable=False, default="user")  # system | user
+    owner_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    parent_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    lookback: Mapped[int] = mapped_column(Integer, nullable=False, default=10)  # RECENTLY's default n
+    cooldown: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # candles before it may be marked again
+    active_for: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # candles a formation keeps counting
+    manual_weight: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False, default=3)
+    backtest_weight: Mapped[Optional[float]] = mapped_column(Numeric(4, 2), nullable=True)
+    use_manual_weight: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # backtest stats -- filled by the pattern backtest, shown read-only
+    win_rate: Mapped[Optional[float]] = mapped_column(Numeric(6, 4), nullable=True)
+    avg_move_pct: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
+    sample_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_backtested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("key", "owner_id", name="uq_pattern_key_owner"),
+    )
+
+
+class PatternCondition(Base):
+    """One condition of a Pattern -- a formula that is true or false per
+    candle. A pattern's match % = conditions met / conditions (formed at 80%
+    or more). `weight` is reserved for per-condition weightage (ALGO-28);
+    1 for every condition until then, so match % is a plain count."""
+
+    __tablename__ = "pattern_conditions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pattern_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    formula: Mapped[str] = mapped_column(String(512), nullable=False)
+    note: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    weight: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False, default=1)
+
+    __table_args__ = (Index("ix_pattern_conditions_pattern", "pattern_id"),)
+
+
+class PatternStockWeight(Base):
+    """Per-stock weightage for a pattern -- a pattern can be a 4 on one stock
+    and a 2 on another, found by backtest. Used only when the system setting
+    use_per_stock_weightage is on; the pattern's own weight is always the
+    fallback (LibPatterns.effective_weight)."""
+
+    __tablename__ = "pattern_stock_weights"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pattern_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    instrument_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    owner_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    weight: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="backtest")  # backtest | manual
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("pattern_id", "instrument_id", "owner_id", name="uq_pattern_stock_weight"),
+    )
