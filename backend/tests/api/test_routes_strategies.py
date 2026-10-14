@@ -163,7 +163,7 @@ def test_create_strategy_with_formula_leaves_round_trips(client):
 
 def test_create_strategy_rejects_a_bad_formula(client):
     for bad in ({"left_formula": "nope > 1"}, {"left_formula": "rsi", "operator": ">"},
-                {"left_formula": "abs(close) > 1"}, {"left_formula": "rsi + 1"}):
+                {"left_formula": "sqrt(close) > 1"}, {"left_formula": "rsi + 1"}):
         tree = {"operator": "AND", "groups": [], "conditions": [bad]}
         resp = client.post("/api/strategies", json={"name": "F", "strategy_type": "entry", "tree": tree})
         assert resp.status_code == 400, bad

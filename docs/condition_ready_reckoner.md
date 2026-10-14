@@ -71,7 +71,11 @@ Offsets never reach into the previous day, so at the open `CLOSE[-1]` is empty.
 | `mean(F, n)` | ✓ | Average of the last n candles | `VOLUME > 1.5 * mean(VOLUME, 20)` |
 | `CROSSED_UP(a, b)` | ✓ | a crossed above b on this candle | `CROSSED_UP(MACD_LINE, MACD_SIGNAL)` |
 | `CROSSED_DOWN(a, b)` | ✓ | a crossed below b on this candle | `CROSSED_DOWN(STOCH_K, STOCH_D)` |
-| `EVENT(name)` | ✓ | A raw event fired on this candle | `EVENT(hammer)`, `EVENT(bb_squeeze)` |
+| `EVENT(name)` | ✓ | A raw event fired on this candle **and is strong enough** (section 6a) | `EVENT(hammer)`, `EVENT(bb_squeeze)` |
+| `EVENT(name, measure=min)` | ✓ | Same, with your own minimum for this pattern | `EVENT(hammer, range_pct=0.1, volume_ratio=1.2)` |
+| `EVENT_ANY(name)` | ✓ | The event fired, however weak | `EVENT_ANY(doji)` |
+| `abs(X)` | ✓ | Absolute value | `abs(CLOSE - VWAP) / CLOSE * 100 < 0.1` |
+| `median(F, n)` | ✓ | Median of the last n candles | `BODY > 2 * median(BODY, 10)` |
 | `HIGHEST(F, n)` `LOWEST(F, n)` | ✓ | Highest/lowest of the last n | `CLOSE > HIGHEST(HIGH[-1], 20)`: breakout |
 | `PATTERN(key)` | ◐ | A pattern is active (strategies only) | `PATTERN(bullish_momentum)` |
 
@@ -90,6 +94,33 @@ Offsets never reach into the previous day, so at the open `CLOSE[-1]` is empty.
 | `THEN(a, b, n)` | a happened, then b within n candles | `THEN(EVENT(hammer), CROSSED_UP(STOCH_K, STOCH_D), 5)` |
 
 ---
+
+## 6a. Signal strength
+
+Every formation is recorded, but `EVENT(name)` only counts the **strong** ones.
+Each signal has strength measures; a formation qualifies when it meets every
+minimum.
+
+| Signal | Measures |
+|---|---|
+| hammer / shooting_star | `range_pct`, `wick_ratio`, `volume_ratio` |
+| doji | `range_pct`, `volume_ratio` |
+| bullish/bearish_engulfing | `body_pct`, `engulf_ratio`, `volume_ratio` |
+| piercing_line / dark_cloud_cover | `body_pct`, `volume_ratio` |
+| tweezer_top / tweezer_bottom | `range_pct`, `volume_ratio` |
+| morning_star / evening_star | `move_pct` |
+| three_white_soldiers / three_black_crows | `move_pct`, `median_body_pct` |
+| macd_bullish/bearish_cross | `separation_pct` |
+| stoch_bullish/bearish_cross | `gap` |
+| bb_widening / bb_squeeze | `width_change` |
+
+- `_pct` measures are **% of price**; minimums are set for **1-min** and
+  multiplied for 3-min and 5-min (measured: ×1.79 and ×2.36). Ratios and the
+  Stochastic gap are the same on every timeframe.
+- Minimums are calibrated from history so about 40% of each signal qualifies.
+  All of it is configurable: the minimums, the multipliers and the target share.
+- A measure that can't be computed yet (the 20-candle volume average in the
+  first minutes of a session) doesn't block a formation.
 
 ## 6. Worked examples
 

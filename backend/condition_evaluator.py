@@ -60,6 +60,8 @@ from typing import Optional
 
 import pandas as pd
 
+from signal_strength import STRENGTH_MEASURES
+
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
@@ -270,7 +272,7 @@ def _bars_since(cond: pd.Series, df: pd.DataFrame) -> pd.Series:
 
 
 def _arity(node: ast.Call, name: str, allowed) -> list:
-    if node.keywords or len(node.args) not in allowed:
+    if (node.keywords and name != "event") or len(node.args) not in allowed:
         counts = " or ".join(str(n) for n in sorted(allowed))
         raise FormulaError(f"{name.upper()}(...) takes {counts} argument(s)")
     return node.args
@@ -283,10 +285,57 @@ def _positive_int(node: ast.AST, what: str) -> int:
     return n
 
 
+def _number(node: ast.AST, what: str) -> float:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant):
+        return -float(node.operand.value)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    raise FormulaError(f"{what} must be a number")
+
+
+def _eval_event(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[dict]) -> pd.Series:
+    """EVENT(name[, measure=minimum, ...]) -- the event fired on this candle
+    AND it is strong enough (ALGO-6): every measure with a minimum (the
+    strength rules passed in context["strength_rules"], or a keyword override
+    here) meets it. EVENT_ANY(name) ignores strength. With no rules in
+    context and no overrides, EVENT is presence only."""
+    label = name.upper()
+    if len(node.args) != 1 or not isinstance(node.args[0], ast.Name):
+        raise FormulaError(f"{label}(...) takes an event name, e.g. {label}(hammer)")
+    if name == "event_any" and node.keywords:
+        raise FormulaError("EVENT_ANY(...) ignores strength, so it takes no minimums")
+    signal = node.args[0].id.lower()
+    measures = STRENGTH_MEASURES.get(signal, {})
+    for kw in node.keywords:
+        if kw.arg not in measures:
+            known = ", ".join(sorted(measures)) or "none"
+            raise FormulaError(f"EVENT({signal}, ...): unknown strength measure {kw.arg!r} -- {signal} has: {known}")
+    if EVENTS_COLUMN not in df.columns:
+        raise FormulaError(f"{label}(...) needs the candles' events, which this run did not load")
+    present = df[EVENTS_COLUMN].apply(lambda s: bool(s) and signal in s).astype(bool)
+    if name == "event_any":
+        return present
+    minimums = dict(((context or {}).get("strength_rules") or {}).get(signal, {}))
+    for kw in node.keywords:
+        minimums[kw.arg] = _number(kw.value, f"EVENT({signal}, {kw.arg}=...)'s minimum")
+    qualified = present
+    for measure, minimum in minimums.items():
+        if measure in measures:
+            value = _as_series(_eval_node(ast.parse(_normalize(measures[measure]), mode="eval"), df, context), df)
+            # a measure that can't be computed yet (e.g. the volume average in the
+            # session's first minutes) doesn't block; the measurable ones decide
+            qualified = qualified & ((value >= minimum) | value.isna())
+    return qualified
+
+
 def _eval_call(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[dict]):
     """The whitelisted functions -- still one evaluator, just known names."""
     ev = lambda n: _eval_node(n, df, context)  # noqa: E731
-    if name in ("slope", "mean"):
+    if name == "abs":
+        (x,) = _arity(node, name, {1})
+        value = ev(x)
+        return value.abs() if isinstance(value, pd.Series) else abs(value)
+    if name in ("slope", "mean", "median"):
         field_node, n_node = _arity(node, name, {2})
         if not isinstance(field_node, ast.Name):
             raise FormulaError(f"{name}(...)'s first argument must be a bare field name, e.g. {name}(rsi, 3)")
@@ -294,6 +343,8 @@ def _eval_call(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[di
         field_name = _resolve_field_token(field_node.id)
         if name == "mean":
             return _rolling_mean(df, _Column(field_name, 0), n)
+        if name == "median":
+            return _rolling(_series_for(df, _Column(field_name, 0)), df, n, "median", n)
         return (_series_for(df, _Column(field_name, 0)) - _series_for(df, _Column(field_name, n))) / n
     if name in ("highest", "lowest"):
         expr, n_node = _arity(node, name, {2})
@@ -304,14 +355,8 @@ def _eval_call(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[di
         a, b = _as_series(ev(a_node), df), _as_series(ev(b_node), df)
         a1, b1 = _shift(a, df, 1), _shift(b, df, 1)
         return (a > b) & (a1 <= b1) if name == "crossed_up" else (a < b) & (a1 >= b1)
-    if name == "event":
-        (arg,) = _arity(node, name, {1})
-        if not isinstance(arg, ast.Name):
-            raise FormulaError("EVENT(...) takes an event name, e.g. EVENT(hammer)")
-        if EVENTS_COLUMN not in df.columns:
-            raise FormulaError("EVENT(...) needs the candles' events, which this run did not load")
-        event = arg.id.lower()
-        return df[EVENTS_COLUMN].apply(lambda s: bool(s) and event in s).astype(bool)
+    if name in ("event", "event_any"):
+        return _eval_event(node, name, df, context)
     if name == "recently":
         args = _arity(node, name, {1, 2})
         default = (context or {}).get("lookback", DEFAULT_RECENTLY_CANDLES)
@@ -513,7 +558,10 @@ FUNCTIONS = (
     {"name": "lowest", "signature": "LOWEST(X, N)", "description": "lowest X over the last N candles"},
     {"name": "crossed_up", "signature": "CROSSED_UP(A, B)", "description": "A crossed above B on this candle"},
     {"name": "crossed_down", "signature": "CROSSED_DOWN(A, B)", "description": "A crossed below B on this candle"},
-    {"name": "event", "signature": "EVENT(name)", "description": "a raw event fired on this candle, e.g. EVENT(hammer)"},
+    {"name": "event", "signature": "EVENT(name[, measure=min])", "description": "a raw event fired on this candle and strong enough (signal strength table, or your own minimums), e.g. EVENT(hammer, range_pct=0.3)"},
+    {"name": "event_any", "signature": "EVENT_ANY(name)", "description": "a raw event fired on this candle, however weak"},
+    {"name": "abs", "signature": "abs(X)", "description": "absolute value"},
+    {"name": "median", "signature": "median(FIELD, N)", "description": "median of FIELD over the last N candles"},
     {"name": "recently", "signature": "RECENTLY(cond[, N])", "description": "cond true at least once in the last N candles (N = the pattern's lookback, default 10)"},
     {"name": "for", "signature": "FOR(cond, N)", "description": "cond true on every one of the last N candles"},
     {"name": "count", "signature": "COUNT(cond, N)", "description": "how many of the last N candles cond was true on"},
@@ -592,6 +640,11 @@ def required_lookback(formula: str, default_recently: int = DEFAULT_RECENTLY_CAN
                     return max(depth(args[1]), _parse_int_literal(args[2], "lookback") + depth(args[0]))
                 if name in ("crossed_up", "crossed_down"):
                     return inner + 1
+                if name in ("event", "event_any") and args and isinstance(args[0], ast.Name):
+                    measures = STRENGTH_MEASURES.get(args[0].id.lower(), {})
+                    return max([1] + [required_lookback(f) for f in measures.values()])
+                if name == "median" and len(args) == 2:
+                    return _parse_int_literal(args[1], "lookback")
                 if name == "bars_since":
                     return SESSION_CANDLES
                 return inner

@@ -182,7 +182,9 @@ def test_required_lookback_counts_the_wrappers():
     assert required_lookback("RECENTLY(CROSSED_UP(MACD_LINE, MACD_SIGNAL), 10)") == 11
     assert required_lookback("RECENTLY(RSI > 45)") == 10
     assert required_lookback("FOR(BB_WIDTH > BB_WIDTH[-1], 4)") == 5
-    assert required_lookback("THEN(EVENT(hammer), RSI > 45, 5)") == 6
+    # EVENT(hammer) checks strength, whose volume_ratio reads mean(VOLUME, 20): 5 + 20
+    assert required_lookback("THEN(EVENT(hammer), RSI > 45, 5)") == 25
+    assert required_lookback("THEN(EVENT_ANY(rsi_cross_above_60), RSI > 45, 5)") == 6
 
 
 def test_grammar_lists_new_functions_and_derived_fields():

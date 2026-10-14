@@ -113,7 +113,7 @@ def test_unknown_field_is_rejected(df):
 
 def test_function_calls_are_rejected(df):
     with pytest.raises(FormulaError, match="unknown function"):
-        parse_and_evaluate("abs(close)", df)
+        parse_and_evaluate("sqrt(close)", df)
 
 
 def test_chained_comparisons_are_rejected(df):

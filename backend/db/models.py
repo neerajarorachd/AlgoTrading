@@ -1913,3 +1913,24 @@ class PatternStockWeight(Base):
     __table_args__ = (
         UniqueConstraint("pattern_id", "instrument_id", "owner_id", name="uq_pattern_stock_weight"),
     )
+
+
+class SignalStrengthRule(Base):
+    """Minimum strength for a raw signal (ALGO-6): one row per signal x
+    measure, e.g. hammer / range_pct >= 0.23. The measures themselves are
+    formulas in signal_strength.STRENGTH_MEASURES; this table only holds the
+    minimums. System defaults (owner_id NULL) come from history (60th
+    percentile); a user's own row overrides the system one. Not per stock."""
+
+    __tablename__ = "signal_strength_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal: Mapped[str] = mapped_column(String(64), nullable=False)
+    measure: Mapped[str] = mapped_column(String(32), nullable=False)
+    min_value: Mapped[float] = mapped_column(Numeric(10, 4), nullable=False)
+    owner_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("signal", "measure", "owner_id", name="uq_signal_strength_rule"),
+    )
