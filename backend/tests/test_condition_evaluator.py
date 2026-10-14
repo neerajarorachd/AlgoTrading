@@ -23,7 +23,8 @@ def test_field_enum_values_are_the_dataframe_column_names(df):
     for field in Field:
         assert field.value in df.columns or field.value in ("macd_line", "macd_signal", "stoch_d",
                                                               "ma21", "ma50", "atr", "bb_upper",
-                                                              "bb_middle", "bb_lower", "volume")
+                                                              "bb_middle", "bb_lower", "volume",
+                                                              "ema5", "ema14", "ema21", "ema50")
 
 
 def test_bare_field_reads_the_current_candle(df):
@@ -111,7 +112,7 @@ def test_unknown_field_is_rejected(df):
 
 
 def test_function_calls_are_rejected(df):
-    with pytest.raises(FormulaError, match="only the built-in slope"):
+    with pytest.raises(FormulaError, match="unknown function"):
         parse_and_evaluate("abs(close)", df)
 
 

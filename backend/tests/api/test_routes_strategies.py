@@ -174,7 +174,8 @@ def test_strategy_fields_endpoint_serves_the_grammar(client):
     values = {f["value"] for f in body["fields"]}
     assert {"close", "volume", "rsi", "bb_upper"} <= values
     assert next(f for f in body["fields"] if f["value"] == "stoch_k")["aliases"] == ["sk"]
-    assert {f["name"] for f in body["functions"]} == {"slope", "mean"}
+    assert {"slope", "mean", "recently", "crossed_up", "event", "for", "then"} <= {f["name"] for f in body["functions"]}
+    assert "bb_width" in {f["value"] for f in body["derived_fields"]}
     assert "order_size" in body["constants"]
 
 
