@@ -311,6 +311,21 @@ function checkTrue(name, cond, note) {
     await page.locator('.chart-grid [data-chart-tool="indicators"]').first().click();
     await page.waitForTimeout(400);
     check('[new] Indicators picker shows a readout for all 15 rows', await page.locator('.chart-grid [data-readout]').count(), 15);
+    // ALGO-34: three tabs -- Indicators (as before), Patterns, Strategies
+    const rail = page.locator('.chart-grid [data-indicator-tabs]').first();
+    check('[ALGO-34] Indicators panel has 3 tabs', await rail.locator('[data-panel-tab]').allInnerTexts().then((t) => t.map((x) => x.replace(/\d+$/, '').trim())), ['Indicators', 'Patterns', 'Strategies']);
+    await rail.locator('[data-panel-tab="patterns"]').click();
+    // the test stack can queue this request ~15-20 s behind its resetting socket.io polls
+    await eventually(async () => await rail.locator('[data-pattern-option]').count() > 0, 30000);
+    const patternKeys = await rail.locator('[data-pattern-option]').evaluateAll((els) => els.map((e) => e.dataset.patternOption));
+    checkTrue('[ALGO-34] Patterns tab lists the system patterns by type', patternKeys.includes('macd_departure_bull') && patternKeys.includes('bb_squeeze_tight'), patternKeys.length);
+    await rail.locator('[data-pattern-option="macd_departure_bull"] input').check();
+    await rail.locator('[data-panel-tab="strategies"]').click();
+    checkTrue('[ALGO-34] Strategies tab shows the strategy list', await rail.locator('[data-strategy-picker], [data-panel="strategies"]').count() > 0);
+    await rail.locator('[data-panel-tab="patterns"]').click();
+    checkTrue('[ALGO-34] a ticked pattern stays ticked when switching tabs', await rail.locator('[data-pattern-option="macd_departure_bull"] input').isChecked());
+    await rail.locator('[data-pattern-option="macd_departure_bull"] input').uncheck();
+    await rail.locator('[data-panel-tab="indicators"]').click();
     await page.locator('.chart-grid [data-chart-tool="indicators"]').first().click();
     await page.waitForTimeout(200);
 

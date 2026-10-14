@@ -35,6 +35,8 @@ import {
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
+import IndicatorPanelTabs from './IndicatorPanelTabs.jsx'
+import { prefetchPatterns, prefetchStrategies } from './patternData.js'
 import { eventTime, humanize, indexData, shapesForEvents, shapesToSvg, snapToCandles } from './chartDiagrams.js'
 
 const TIMEFRAMES = ['1min', '3min', '5min']
@@ -187,6 +189,8 @@ export default function CandleChart({
   const diagramRef = useRef(null)
   const tooltipRef = useRef(null)
   const priceZoomRef = useRef(0) // ALGO-26 vertical zoom in whole wheel steps; 0 = auto-fit (factor 0.9^steps)
+  const selectedPatternsRef = useRef([]) // pattern keys ticked on the Patterns tab -- marked once pattern hits exist (ALGO-32)
+  const selectedStrategiesRef = useRef([]) // strategy ids ticked on the Strategies tab
   const userPaneRef = useRef({ chart: null, at: 0 }) // the sub-pane the viewer is scrolling right now (see the pane sync)
   const [readout, setReadout] = useState({}) // latest value per picker row, shown beside each checkbox
 
@@ -208,6 +212,9 @@ export default function CandleChart({
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
   }, [onControlsWidthChange, depthOpen, depthMode])
+
+  // the Patterns/Strategies tabs' lists load with the chart, not when the panel opens
+  useEffect(() => { prefetchPatterns(); prefetchStrategies() }, [])
 
   // ---- build every chart/series once, on mount ----
   useEffect(() => {
@@ -951,9 +958,12 @@ export default function CandleChart({
               borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)', padding: 12,
             }}
           >
-            <IndicatorGroup title="Overlays" defs={OVERLAY_DEFS} isOn={isOn} onToggle={toggleOverlay} values={readout} />
-            <IndicatorGroup title="Sub-panels" defs={PANEL_DEFS} isOn={(k) => isOn(k, true)} onToggle={togglePanel} values={readout} />
-            <IndicatorGroup title="Patterns & signals" defs={MARKER_DEFS} isOn={(k) => isOn(k, true)} onToggle={toggleMarkerGroup} values={readout} />
+            {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
+            <IndicatorPanelTabs onPatternsChange={(keys) => { selectedPatternsRef.current = keys }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
+              <IndicatorGroup title="Overlays" defs={OVERLAY_DEFS} isOn={isOn} onToggle={toggleOverlay} values={readout} />
+              <IndicatorGroup title="Sub-panels" defs={PANEL_DEFS} isOn={(k) => isOn(k, true)} onToggle={togglePanel} values={readout} />
+              <IndicatorGroup title="Raw events" defs={MARKER_DEFS} isOn={(k) => isOn(k, true)} onToggle={toggleMarkerGroup} values={readout} />
+            </IndicatorPanelTabs>
           </div>
         )}
       </div>

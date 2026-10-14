@@ -102,6 +102,9 @@ export const updateRecommendationSystem = (id, fields) =>
 
 export const listStrategies = () => request('/api/strategies')
 
+// Pattern table (ALGO-31): system + the user's own patterns -> {patterns: [...]}
+export const listPatterns = () => request('/api/patterns')
+
 export const getStrategy = (id) => request(`/api/strategies/${id}`)
 
 export const createStrategy = (strategy) =>
