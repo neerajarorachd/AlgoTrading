@@ -102,10 +102,17 @@ function checkTrue(name, cond, note) {
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
+    // ALGO-36: live updates over one WebSocket, no long-polling
+    const socketWs = [];
+    let pollRequests = 0;
+    page.on('websocket', (w) => { if (w.url().includes('/socket.io/')) socketWs.push(w.url()); });
+    page.on('request', (r) => { if (r.url().includes('/socket.io/') && r.url().includes('transport=polling')) pollRequests += 1; });
 
     await page.goto(`${BASE}/`, { waitUntil: 'load' });
     await page.waitForTimeout(4000);
     checkTrue('[new] no page errors on load', errors.length === 0, errors);
+    check('[ALGO-36] live updates use exactly one WebSocket', socketWs.length, 1);
+    check('[ALGO-36] no long-polling requests', pollRequests, 0);
 
     const h1 = await page.locator('h1').innerText();
     check('[new] grid tab heading', h1.toLowerCase(), 'workspace');
