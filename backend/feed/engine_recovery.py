@@ -152,7 +152,8 @@ def prepare_instrument(
             mark = watermark.get(tf)
             for candle in today_candles[tf]:
                 if mark is not None and candle.timestamp <= mark:
-                    activity_engine.warm_up(symbol, exchange_segment, candle)
+                    # today's already-recorded part: advance pattern state too (ALGO-32)
+                    activity_engine.warm_up(symbol, exchange_segment, candle, evaluate_patterns=True)
                     summary["replayed_warm"] += 1
                 else:
                     activity_engine.on_candle_closed(symbol, exchange_segment, candle)

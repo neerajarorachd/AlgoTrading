@@ -63,6 +63,9 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     ensure_parent_strategies(session_factory)
     ensure_fallback_defaults(session_factory)
     activity_engine = ActivityEngine(session_factory)
+    # patterns evaluated on every candle close (ALGO-32); single user until login exists
+    from pattern_engine import PatternEvaluator
+    activity_engine.pattern_evaluator = PatternEvaluator(session_factory, owner_id=1)
     aggregator = CandleAggregator(on_candle_closed=_make_on_candle_closed(session_factory, activity_engine))
     market_feed = MarketFeed(
         feed_broker,

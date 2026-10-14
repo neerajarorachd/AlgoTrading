@@ -1341,6 +1341,13 @@ class ActivityEngine:
         # _flush_lock keeps the 15-min and 15:30 flushes from overlapping.
         self._lock = threading.RLock()
         self._flush_lock = threading.Lock()
+        # Pattern evaluation (ALGO-32): set by the app; None in scripts/tests
+        # that only need raw activities. _evaluate_patterns is False during a
+        # history warm-up -- patterns are day-bounded, so only today's candles
+        # need evaluating to resume correctly (and 35 days of them would make
+        # startup slow).
+        self.pattern_evaluator = None
+        self._evaluate_patterns = True
         self._saved_activities = 0
         self._saved_indicators = 0
         self._last_processed_ts: Dict[InstrumentKey, datetime] = {}
@@ -1520,14 +1527,21 @@ class ActivityEngine:
             setattr(self, name, kept + rows[saved:])
             setattr(self, marker, len(kept))
 
-    def warm_up(self, symbol: str, exchange_segment: str, candle: Candle) -> None:
+    def warm_up(self, symbol: str, exchange_segment: str, candle: Candle, evaluate_patterns: bool = False) -> None:
         """Runs a candle through the engine to build its rolling state
         (indicators, swing points, recent candles) WITHOUT recording any
         activity or indicator row -- restart recovery and add-symbol use this
-        for history before the part of today that still needs recording."""
+        for history before the part of today that still needs recording.
+        evaluate_patterns: advance pattern state too (today's already-recorded
+        candles, so a pattern already formed isn't recorded again)."""
         with self._lock:
             acts, inds = len(self._buffer), len(self._indicator_buffer)
-            self._process_candle(symbol, exchange_segment, candle)
+            previous = self._evaluate_patterns
+            self._evaluate_patterns = evaluate_patterns
+            try:
+                self._process_candle(symbol, exchange_segment, candle)
+            finally:
+                self._evaluate_patterns = previous
             del self._buffer[acts:]
             del self._indicator_buffer[inds:]
 
@@ -1782,6 +1796,7 @@ class ActivityEngine:
                 "bb_upper": bb.upper if bb else None, "bb_middle": bb.middle if bb else None,
                 "bb_lower": bb.lower if bb else None,
                 "ema5": ema5, "ema14": ema14, "ema21": ema21, "ema50": ema50,
+                "_events": set(),  # this candle's raw events, filled in _finish_candle (EVENT() in patterns)
             })
         except Exception:
             logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)
@@ -1984,11 +1999,11 @@ class ActivityEngine:
             logger.exception("Activity engine: swing detection failed for %s (%s)", symbol, exchange_segment)
 
         if not found:
-            return self._buffer[buffer_start:]
+            return self._finish_candle(symbol, exchange_segment, candle, buffer_start)
 
         instrument_id = self._lookup_instrument_id(symbol, exchange_segment)
         if instrument_id is None:
-            return self._buffer[buffer_start:]
+            return self._finish_candle(symbol, exchange_segment, candle, buffer_start)
 
         for activity_type, activity, intensity in found:
             self._buffer.append({
@@ -1998,6 +2013,41 @@ class ActivityEngine:
                 "low_price": candle.low, "close_price": candle.close,
             })
 
+        return self._finish_candle(symbol, exchange_segment, candle, buffer_start)
+
+    def _finish_candle(self, symbol: str, exchange_segment: str, candle: Candle, buffer_start: int) -> List[dict]:
+        """Last step of every candle (ALGO-32): note this candle's raw events
+        on its frame row (a swing lands on its own, earlier, candle's row),
+        then evaluate the patterns and record any that just formed as
+        activity rows of type "pattern"."""
+        key: InstrumentKey = (symbol, exchange_segment, candle.timeframe)
+        rows = self._frame_rows.get(key)
+        new = self._buffer[buffer_start:]
+        if rows and new:
+            by_ts = {}
+            for row in rows:
+                by_ts[_as_utc(row["ts"])] = row
+            for act in new:
+                row = by_ts.get(_as_utc(act["ts"]))
+                if row is not None:
+                    row.setdefault("_events", set()).add(act["activity"])
+        evaluator = self.pattern_evaluator
+        if evaluator is not None and self._evaluate_patterns and rows and _as_utc(rows[-1]["ts"]) == _as_utc(candle.timestamp):
+            try:
+                hits = evaluator.on_candle(key, rows, candle.timeframe)
+            except Exception:
+                logger.exception("Pattern evaluation failed for %s (%s) %s", symbol, exchange_segment, candle.timeframe)
+                hits = []
+            instrument_id = self._lookup_instrument_id(symbol, exchange_segment) if hits else None
+            for hit in hits:
+                if instrument_id is None:
+                    break
+                self._buffer.append({
+                    "instrument_id": instrument_id, "timeframe": candle.timeframe, "ts": candle.timestamp,
+                    "activity_type": "pattern", "activity": hit["key"], "intensity": hit["score"],
+                    "open_price": candle.open, "high_price": candle.high,
+                    "low_price": candle.low, "close_price": candle.close,
+                })
         return self._buffer[buffer_start:]
 
     def get_atr(self, symbol: str, exchange_segment: str, timeframe: str) -> Optional[float]:
