@@ -187,14 +187,18 @@ def _series_for(df: pd.DataFrame, column: _Column) -> pd.Series:
     dataframes that don't carry that column (e.g. this module's own
     tests, which use small synthetic single-day frames where it makes no
     difference) rather than making it a hard requirement everywhere."""
-    if column.name not in df.columns and column.name in DERIVED_FIELDS:
+    if column.name in DERIVED_FIELDS and column.name not in df.columns:
+        # computed fresh every time, never cached on the caller's frame: a
+        # cached column goes stale when the frame is copied and changed
+        # (found by the MACD-departure test, 2026-10-14)
         try:
-            df[column.name] = DERIVED_FIELDS[column.name](df)  # computed once, cached on the frame
+            series = DERIVED_FIELDS[column.name](df)
         except KeyError as exc:
             raise FormulaError(f"field {column.name!r} needs {exc} in this run's indicator dataframe") from exc
-    if column.name not in df.columns:
+    elif column.name not in df.columns:
         raise FormulaError(f"field {column.name!r} has no data in this run's indicator dataframe")
-    series = df[column.name]
+    else:
+        series = df[column.name]
     if not column.offset:
         return series
     if TRADING_DATE_COLUMN in df.columns:

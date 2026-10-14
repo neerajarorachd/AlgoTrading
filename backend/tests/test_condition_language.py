@@ -191,3 +191,19 @@ def test_grammar_lists_new_functions_and_derived_fields():
     assert {"recently", "for", "count", "bars_since", "then", "crossed_up", "event", "highest"} <= names
     assert {"bb_width", "body", "lower_wick", "macd_hist"} <= {f["value"] for f in g["derived_fields"]}
     assert "ema21" in {f["value"] for f in g["fields"]}
+
+
+def test_macd_departure_pattern():
+    """User's pattern (2026-10-14): MACD crossed up recently, lines moving apart
+    for 3 candles, BB gap over 1%."""
+    from patterns_catalog import SYSTEM_PATTERNS
+    conditions = next(p[8] for p in SYSTEM_PATTERNS if p[0] == "macd_departure_bull")
+    df = frame(
+        # cross up on candle 1; gap widens on 2, 3, 4; shrinks on 5
+        macd_line=[0.0, 0.6, 0.9, 1.3, 1.8, 1.9], macd_signal=[0.5, 0.5, 0.6, 0.7, 0.8, 1.2],
+        bb_upper=[101.2] * 6, bb_middle=[100.0] * 6, bb_lower=[98.8] * 6,  # 2.4% wide
+    )
+    met = pd.concat([parse_and_evaluate(c, df) for c in conditions], axis=1).all(axis=1)
+    assert as_list(met) == [False, False, False, True, True, False]
+    narrow = df.assign(bb_upper=[100.4] * 6, bb_lower=[99.6] * 6)  # 0.8% wide: no
+    assert not pd.concat([parse_and_evaluate(c, narrow) for c in conditions], axis=1).all(axis=1).any()
