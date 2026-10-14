@@ -20,6 +20,8 @@ AVG_VOLUME = "mean(VOLUME, 20)"
 AVG_BODY = "mean(BODY, 10)"
 
 # (key, name, type, category, weight, lookback, cooldown, description, [conditions])
+# Weights (user, 2026-10-14): MACD crossover + lines moving apart matters most
+# (5); MACD + Stochastic crosses together are common, so they weigh little (2).
 SYSTEM_PATTERNS = (
     # ---- bullish ----
     ("strong_hammer", "Strong hammer", "bullish", "candle", 3, 10, 5,
@@ -36,11 +38,11 @@ SYSTEM_PATTERNS = (
      "RSI above 45 and rising, a recent MACD cross up with the histogram expanding, and Bollinger Bands widening past 1%.",
      ["RSI > 45", "RSI > RSI[-1]", "RECENTLY(CROSSED_UP(MACD_LINE, MACD_SIGNAL))",
       "MACD_HIST > MACD_HIST[-1]", "BB_WIDTH > BB_WIDTH[-1]", "BB_WIDTH > 1"]),
-    ("macd_stoch_bull_confluence", "MACD + Stochastic bullish confluence", "bullish", "indicator", 5, 10, 5,
+    ("macd_stoch_bull_confluence", "MACD + Stochastic bullish confluence", "bullish", "indicator", 2, 10, 5,
      "MACD and Stochastic both crossed up recently, with RSI above 50 and price above VWAP.",
      ["RECENTLY(CROSSED_UP(MACD_LINE, MACD_SIGNAL))", "RECENTLY(CROSSED_UP(STOCH_K, STOCH_D))",
       "RSI > 50", "CLOSE > VWAP", f"VOLUME > {AVG_VOLUME}"]),
-    ("macd_departure_bull", "MACD departure (bullish)", "bullish", "indicator", 4, 10, 5,
+    ("macd_departure_bull", "MACD departure (bullish)", "bullish", "indicator", 5, 10, 5,
      "MACD crossed up recently, the lines have moved apart for 3 candles in a row, and the Bollinger gap is over 1%. (User's pattern, 2026-10-14.)",
      ["RECENTLY(CROSSED_UP(MACD_LINE, MACD_SIGNAL))", "FOR(MACD_HIST > MACD_HIST[-1], 3)", "BB_WIDTH > 1"]),
     ("vwap_reclaim", "VWAP reclaim", "bullish", "price_action", 3, 10, 5,
@@ -61,11 +63,11 @@ SYSTEM_PATTERNS = (
      "RSI below 55 and falling, a recent MACD cross down with the histogram expanding, and Bollinger Bands widening past 1%.",
      ["RSI < 55", "RSI < RSI[-1]", "RECENTLY(CROSSED_DOWN(MACD_LINE, MACD_SIGNAL))",
       "MACD_HIST < MACD_HIST[-1]", "BB_WIDTH > BB_WIDTH[-1]", "BB_WIDTH > 1"]),
-    ("macd_stoch_bear_confluence", "MACD + Stochastic bearish confluence", "bearish", "indicator", 5, 10, 5,
+    ("macd_stoch_bear_confluence", "MACD + Stochastic bearish confluence", "bearish", "indicator", 2, 10, 5,
      "MACD and Stochastic both crossed down recently, with RSI below 50 and price below VWAP.",
      ["RECENTLY(CROSSED_DOWN(MACD_LINE, MACD_SIGNAL))", "RECENTLY(CROSSED_DOWN(STOCH_K, STOCH_D))",
       "RSI < 50", "CLOSE < VWAP", f"VOLUME > {AVG_VOLUME}"]),
-    ("macd_departure_bear", "MACD departure (bearish)", "bearish", "indicator", 4, 10, 5,
+    ("macd_departure_bear", "MACD departure (bearish)", "bearish", "indicator", 5, 10, 5,
      "MACD crossed down recently, the lines have moved apart for 3 candles in a row, and the Bollinger gap is over 1%. (User's pattern, 2026-10-14.)",
      ["RECENTLY(CROSSED_DOWN(MACD_LINE, MACD_SIGNAL))", "FOR(MACD_HIST < MACD_HIST[-1], 3)", "BB_WIDTH > 1"]),
     ("vwap_rejection", "VWAP rejection", "bearish", "price_action", 3, 10, 5,
