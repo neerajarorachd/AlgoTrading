@@ -614,6 +614,9 @@ export default function CandleChart({
     if (!layer || !c.main || !c.candle) return
     const range = c.main.timeScale().getVisibleLogicalRange()
     if (range) layer.dataset.barsVisible = (range.to - range.from).toFixed(1)
+    if (range) layer.dataset.rangeFrom = range.from.toFixed(1)
+    // scroll-back state, for the UI suite: why older sessions do or don't load
+    layer.dataset.olderState = `ready=${readyForMoreRef.current} loading=${loadingOlderRef.current} hasMore=${hasMoreRef.current}`
     const top = c.candle.coordinateToPrice(0)
     const bottom = c.candle.coordinateToPrice(layer.clientHeight)
     if (top != null && bottom != null) layer.dataset.priceSpan = (top - bottom).toFixed(3)

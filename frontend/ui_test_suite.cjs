@@ -35,6 +35,18 @@ async function setIndicatorsMode(scope, mode) {
   return (await scope.locator('[data-indicators-window]').first().getAttribute('data-indicators-window').catch(() => null) ?? 'hidden') === mode;
 }
 
+// Saved preferences land on the server after a batch delay plus a DB write
+// (over a second on live, through the SSH tunnel) -- poll until `ok(prefs)`.
+async function waitForSavedPrefs(page, ok, ms = 8000) {
+  let last = {};
+  const end = Date.now() + ms;
+  for (;;) {
+    last = await page.evaluate(() => fetch('/api/preferences').then((r) => r.json()));
+    if (ok(last) || Date.now() > end) return last;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
 async function eventually(fn, ms = 3000) {
   const end = Date.now() + ms
   for (;;) {
@@ -285,6 +297,20 @@ async function restorePrefs() {
 
     // ---- live patterns & indicators list (2026-10-07) ----
     checkTrue('[new] live patterns & indicators panel shown', await page.locator('[data-live-events]').count() === 1);
+    // the Events toggle beside the timeframe bar shows/hides that panel (2026-10-15), saved per user
+    {
+      const evToggle = page.locator('[data-panel-toggle="events"]');
+      const tb = await page.locator('[data-timeframe-bar]').boundingBox();
+      const eb = await evToggle.boundingBox();
+      checkTrue('[EV] Events toggle sits beside the timeframe bar, on by default',
+        eb && tb && Math.abs((eb.y + eb.height / 2) - (tb.y + tb.height / 2)) < 6 && eb.x + eb.width <= tb.x && await evToggle.getAttribute('aria-pressed') === 'true', { eb, tb });
+      await evToggle.click();
+      checkTrue('[EV] Events toggle off hides the panel', await eventually(async () => await page.locator('[data-live-events]').count() === 0, 2000));
+      const saved = await waitForSavedPrefs(page, (x) => x['workspace.showEventsPanel'] === false);
+      checkTrue('[EV] ...and the choice is saved for the user', saved['workspace.showEventsPanel'] === false, saved['workspace.showEventsPanel']);
+      await evToggle.click();
+      checkTrue('[EV] Events toggle on shows it again', await eventually(async () => await page.locator('[data-live-events]').count() === 1, 2000));
+    }
 
     // ---- Actions column, as finalized in the preview (ported 2026-10-06) ----
     await page.locator('button', { hasText: 'Show all' }).click().catch(() => {});
@@ -333,12 +359,41 @@ async function restorePrefs() {
       return n > 0 && n === (await page.evaluate(() => fetch('/api/symbols').then((r) => r.json()).then((s) => s.length)));
     });
     checkTrue('[TF] on 1m every instrument is counted in exactly one colour tile', tileTotal1);
+
+    // each row's colour dot(s) vs the API for that timeframe (2026-10-15)
+    const rowColours = (tf) => page.evaluate(async (tf) => {
+      const [symbols, scores] = await Promise.all([
+        fetch('/api/symbols').then((r) => r.json()),
+        fetch(`/api/watch-scores?timeframe=${tf}`).then((r) => r.json()),
+      ]);
+      const bySym = Object.fromEntries(symbols.map((s) => [s.symbol, scores.scores.find((x) => x.instrument_id === s.id)]));
+      const bad = [];
+      for (const tr of document.querySelectorAll('[data-instrument-grid] tbody tr')) {
+        const sym = tr.cells[0]?.innerText.split('\n')[0];
+        const sc = bySym[sym];
+        if (!sc) continue;
+        if (tf === 'all') {
+          const shown = [...tr.querySelectorAll('[data-row-colours="all"] [data-row-colour]')].map((d) => d.dataset.rowColour);
+          const want = ['1min', '3min', '5min'].map((t) => sc.by_timeframe?.[t]?.colour ?? 'none');
+          if (shown.join() !== want.join()) bad.push({ sym, shown, want });
+        } else {
+          const shown = tr.querySelector('[data-row-colour]')?.dataset.rowColour;
+          if (tr.querySelectorAll('[data-row-colour]').length !== 1 || shown !== sc.bucket) bad.push({ sym, shown, want: sc.bucket });
+        }
+      }
+      return bad;
+    }, tf);
+    let rowBad = [];
+    await eventually(async () => (rowBad = await rowColours('1min')).length === 0, 6000);
+    checkTrue('[TF] on 1m each row\'s dot is its 1m colour', rowBad.length === 0, rowBad);
     await tfBar.locator('[data-timeframe="all"]').click();
     checkTrue('[TF] on All every colour tile shows three counts (1m · 3m · 5m)', await eventually(async () => {
       const texts = await page.$$eval('[data-bucket]', (els) => els.map((e) => e.innerText.trim()));
       return texts.length === 7 && texts.every((t) => /^\d+ · \d+ · \d+$/.test(t));
     }));
     checkTrue('[TF] All asks the API for timeframe=all', scoreCalls.some((u) => u.includes('timeframe=all')), scoreCalls);
+    await eventually(async () => (rowBad = await rowColours('all')).length === 0, 6000);
+    checkTrue('[TF] on All each row shows three dots: its 1m, 3m and 5m colours', rowBad.length === 0, rowBad);
     await tfBar.locator('[data-timeframe="3min"]').click();
     checkTrue('[TF] back on 3m the tiles show single counts again', await eventually(async () => {
       const texts = await page.$$eval('[data-bucket]', (els) => els.map((e) => e.innerText.trim()));
@@ -417,8 +472,7 @@ async function restorePrefs() {
       await page.locator('[data-instrument-grid] tbody tr').first().click(); // open one chart
       await page.waitForTimeout(500);
       await page.locator('[data-timeframe-bar] [data-timeframe="5min"]').click();
-      await page.waitForTimeout(800); // batched save
-      const saved = await page.evaluate(() => fetch('/api/preferences').then((r) => r.json()));
+      const saved = await waitForSavedPrefs(page, (x) => x['workspace.screenTimeframe'] === '5min');
       checkTrue('[PREF] the screen timeframe is saved for the user', saved['workspace.screenTimeframe'] === '5min', saved);
       await page.reload({ waitUntil: 'load' });
       await page.locator('[data-timeframe-bar]').waitFor({ timeout: 25000 });
@@ -701,8 +755,7 @@ async function restorePrefs() {
         return await dots34() === allNow;
       }, 8000);
       check('[ALGO-34] ticking the raw events adds them (one dot per candle with anything ticked)', await dots34(), allNow);
-      await page.waitForTimeout(800); // batched save
-      const savedToggles = await page.evaluate(() => fetch('/api/preferences').then((r) => r.json()));
+      const savedToggles = await waitForSavedPrefs(page, (x) => x['chart.toggles']?.patterns === true && x['chart.toggles']?.signals === true);
       checkTrue('[PREF] the chart\'s ticked items are saved for the user',
         savedToggles['chart.toggles']?.patterns === true && savedToggles['chart.toggles']?.signals === true && Array.isArray(savedToggles['chart.selectedPatterns.v2']),
         { toggles: savedToggles['chart.toggles'], patterns: savedToggles['chart.selectedPatterns.v2']?.length });
@@ -812,9 +865,12 @@ async function restorePrefs() {
       // zoom out over the chart until the first bar reaches the left edge: 21
       // sessions are ~1,600 bars even on 5min, too many to wheel across, and
       // repeated horizontal wheels make Edge go Back (found on live 2026-10-15)
+      // ...then scroll left: zooming out around the middle pads the RIGHT
+      // with blank space and can stop short of the first bar (test stack,
+      // 2026-10-15), so a few horizontal turns finish the trip to the edge
       for (let i = 0; i < 60 && !candleCalls.slice(before).some((u) => u.includes('before=')); i++) {
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        await page.mouse.wheel(0, 400);
+        if (i < 40) await page.mouse.wheel(0, 400); else await page.mouse.wheel(-600, 0);
         await page.waitForTimeout(250);
       }
       // the test stack's socket.io polling keeps resetting and can queue this request ~15s behind hung long-polls

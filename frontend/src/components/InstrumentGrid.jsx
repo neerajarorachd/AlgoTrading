@@ -236,10 +236,28 @@ export default function InstrumentGrid({
                 <td style={{ padding: '7px 10px' }}>
                   {/* Order as finalized in the preview: dot, action, badges + ☰, ⚙, open-in-tab, × */}
                   <div style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 6 }}>
-                    <span
-                      title={score?.bucket ? BUCKET_LABEL[score.bucket] : 'No activity yet'}
-                      style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flex: '0 0 auto' }}
-                    />
+                    {/* the selected timeframe's colour; on "All", one dot per
+                        timeframe (1m, 3m, 5m) like the colour cards (2026-10-15) */}
+                    {score?.by_timeframe ? (
+                      <span data-row-colours="all" style={{ display: 'inline-flex', gap: 3, flex: '0 0 auto' }}>
+                        {['1min', '3min', '5min'].map((tf) => {
+                          const b = score.by_timeframe[tf]?.colour
+                          return (
+                            <span
+                              key={tf} data-row-colour={b ?? 'none'} data-tf={tf}
+                              title={`${tf.replace('min', 'm')}: ${b ? BUCKET_LABEL[b] : 'No activity yet'}`}
+                              style={{ width: 8, height: 8, borderRadius: '50%', background: b ? (bucketColors[b] ?? BUCKET_DOT_FALLBACK) : BUCKET_DOT_FALLBACK }}
+                            />
+                          )
+                        })}
+                      </span>
+                    ) : (
+                      <span
+                        data-row-colour={score?.bucket ?? 'none'}
+                        title={score?.bucket ? BUCKET_LABEL[score.bucket] : 'No activity yet'}
+                        style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flex: '0 0 auto' }}
+                      />
+                    )}
                     {action && (
                       <button
                         data-row-action={action.kind}

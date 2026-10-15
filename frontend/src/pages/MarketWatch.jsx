@@ -13,6 +13,7 @@ import PageTitleBar from '../components/PageTitleBar.jsx'
 import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import TimeframeBar from '../components/TimeframeBar.jsx'
+import PanelToggle from '../components/PanelToggle.jsx'
 import { getPref, setPref, usePreference } from '../preferences.js'
 import GraphWindow from '../components/GraphWindow.jsx'
 import Button from '../components/kit/Button.jsx'
@@ -76,6 +77,7 @@ export default function MarketWatch() {
   const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
   const [openSymbols, setOpenSymbols] = useState([]) // below-grid chart cards, up to MAX_OPEN_CHARTS
   const [focusedIndex, setFocusedIndex] = useState(-1)
+  const [showEventsPanel, setShowEventsPanel] = usePreference('workspace.showEventsPanel', true) // the general events panel (2026-10-15)
   const [listCollapsed, setListCollapsed] = usePreference('workspace.listCollapsed', false) // the card's ▼/▲ (was the "Hide list" button)
   const [headerCollapsed, setHeaderCollapsed] = usePreference('workspace.headerCollapsed', false) // the page header's ▲/▼ -- hides eyebrow + params
   const [sortMode, setSortMode] = usePreference('workspace.sortMode', '', (v) => typeof v === 'string')
@@ -433,7 +435,9 @@ export default function MarketWatch() {
               tiles, grid, "Showing X of N · Show all" footer. No
               overflow:hidden on purpose -- the "+" popover is absolutely
               positioned and would be clipped. */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-2)' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
+            <PanelToggle id="events" label="Events" on={showEventsPanel} onToggle={setShowEventsPanel}
+              title={showEventsPanel ? 'Live patterns & indicators panel: shown (click to hide)' : 'Live patterns & indicators panel: hidden (click to show) -- events keep being collected'} />
             <TimeframeBar value={screenTimeframe} onChange={handleScreenTimeframe} />
           </div>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-5)' }}>
@@ -516,7 +520,7 @@ export default function MarketWatch() {
               </>
             )}
           </div>
-          <LiveEventsPanel events={liveEvents} timeframe={screenTimeframe} />
+          {showEventsPanel && <LiveEventsPanel events={liveEvents} timeframe={screenTimeframe} />}
           {openSymbols.length > 0 && (
             <div className="chart-grid" style={{ marginTop: 'var(--space-5)' }}>
               {openSymbols.map((instrument, index) => (
