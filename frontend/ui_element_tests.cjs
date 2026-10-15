@@ -39,6 +39,17 @@ function checkTrue(name, cond, note) {
       checkTrue('E1 Workspace: + button is visible in the Tab pane',
         (await plus.count()) === 1 && (await plus.isVisible()))
 
+      // E2 (2026-10-15): the screen timeframe bar (1m / 3m / 5m / All) is
+      // visible just above the instruments grid.
+      const bar = page.locator('[data-timeframe-bar]')
+      const grid = page.locator('[data-instrument-grid]').first()
+      await grid.waitFor({ timeout: 25000 }).catch(() => {})
+      const barBox = (await bar.count()) === 1 ? await bar.boundingBox() : null
+      const gridBox = (await grid.count()) === 1 ? await grid.boundingBox() : null
+      checkTrue('E2 Workspace: timeframe bar is visible above the grid',
+        barBox && gridBox && (await bar.isVisible()) && barBox.y + barBox.height <= gridBox.y,
+        { barBox, gridBox })
+
       await page.close()
     }
   } catch (err) {
