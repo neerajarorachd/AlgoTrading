@@ -22,6 +22,19 @@ function check(name, actual, expected) {
 // Polls `fn` until it returns true or `ms` passes -- for checks right after
 // a click on the live stack, where live data can re-render the grid mid-check
 // (two checks failed intermittently on live, 2026-10-08, with a fixed wait).
+// The chart's Indicators window has 3 states (hidden -> right -> below,
+// 2026-10-15); step the toolbar button until it is in `mode`.
+async function setIndicatorsMode(scope, mode) {
+  const btn = scope.locator('[data-chart-tool="indicators"]').first();
+  for (let i = 0; i < 3; i++) {
+    const current = await scope.locator('[data-indicators-window]').first().getAttribute('data-indicators-window').catch(() => null) ?? 'hidden';
+    if (current === mode) return true;
+    await btn.click();
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return (await scope.locator('[data-indicators-window]').first().getAttribute('data-indicators-window').catch(() => null) ?? 'hidden') === mode;
+}
+
 async function eventually(fn, ms = 3000) {
   const end = Date.now() + ms
   for (;;) {
@@ -33,7 +46,7 @@ async function eventually(fn, ms = 3000) {
 function checkTrue(name, cond, note) {
   const pass = !!cond;
   results.push({ name, pass, actual: cond, expected: true, note });
-  console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}`);
+  console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass || note === undefined ? '' : `  note: ${JSON.stringify(note)}`}`);
 }
 
 // Saved user preferences (2026-10-15) would carry one run's choices into the
@@ -337,8 +350,14 @@ async function restorePrefs() {
       await eventually(async () => await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
         && await page.locator('[data-instrument-grid] tbody button[aria-label^="Remove "]').count() === await page.locator('[data-instrument-grid] tbody tr').count()));
     checkTrue('[new] redundant "open chart below" icon removed', await page.locator('table tbody button[title*="chart below"]').count() === 0);
-    const tallestActions = await page.$$eval('[data-instrument-grid] tbody tr', (rows) => Math.max(...rows.map((r) => r.cells[r.cells.length - 1].getBoundingClientRect().height)));
-    checkTrue('[new] Actions cells stay on one line (no wrapping)', tallestActions < 48, tallestActions);
+    // live re-renders the grid as data arrives -- poll, and report what wrapped
+    const tallest = () => page.$$eval('[data-instrument-grid] tbody tr', (rows) => rows.map((r) => {
+      const c = r.cells[r.cells.length - 1];
+      return { sym: r.cells[0].innerText.split('\n')[0], h: Math.round(c.getBoundingClientRect().height), text: c.innerText.replace(/\n/g, ' | ') };
+    }).sort((a, b) => b.h - a.h)[0]);
+    let tallestActions = await tallest();
+    await eventually(async () => (tallestActions = await tallest()).h < 48, 4000);
+    checkTrue('[new] Actions cells stay on one line (no wrapping)', tallestActions.h < 48, tallestActions);
     const holdBtn = page.locator('[data-row-action="hold"]').first();
     if (await holdBtn.count() > 0) {
       await holdBtn.click();
@@ -467,21 +486,27 @@ async function restorePrefs() {
     await page.waitForTimeout(400);
     const rightVisible = await page.locator('.chart-grid').first().locator(DEPTH_TEXT).count();
     checkTrue('[new] depth cycle click 1 shows the depth panel (right)', rightVisible > 0);
-    // Depth on the right + Indicators window open: one column, Depth stacked under it (2026-10-15)
+    // Depth on the right + Indicators window open: one column, Depth on top, Indicators under it (2026-10-15)
     {
       const card = page.locator('.chart-grid').first();
-      const indBtn = card.locator('[data-chart-tool="indicators"]').first();
-      const wasOpen = await indBtn.getAttribute('aria-pressed') === 'true';
-      if (!wasOpen) { await indBtn.click(); await page.waitForTimeout(400); }
+      await setIndicatorsMode(card, 'right');
       const col = card.locator('[data-right-column]');
       const ind = await col.locator('[data-indicators-window]').boundingBox();
       const dep = await col.locator('[data-side-panel]').boundingBox();
-      checkTrue('[UI] Depth and Indicators share one right-hand column, Depth below',
-        (await col.count()) === 1 && ind && dep && dep.y >= ind.y + ind.height - 1 && Math.abs(dep.x - ind.x) < 2,
+      checkTrue('[UI] Depth and Indicators share one right-hand column, Depth on top',
+        (await col.count()) === 1 && ind && dep && ind.y >= dep.y + dep.height - 1 && Math.abs(dep.x - ind.x) < 2,
         { ind, dep });
       checkTrue('[UI] ...and the column stays within the chart height',
         await col.evaluate((el) => { const r = el.getBoundingClientRect(); return [...el.children].every((c) => c.getBoundingClientRect().bottom <= r.bottom + 1) }));
-      if (!wasOpen) { await indBtn.click(); await page.waitForTimeout(300); }
+      // Indicators tri-state: right -> below puts it in the row under the chart, Depth first
+      await setIndicatorsMode(card, 'below');
+      const chartBox = await card.locator('[data-right-column]').evaluate((el) => el.previousElementSibling.getBoundingClientRect().toJSON()).catch(() => null)
+        ?? await card.locator('canvas').first().boundingBox();
+      const below = await card.locator('[data-bottom-row] [data-indicators-window="below"]').boundingBox();
+      checkTrue('[UI] Indicators "below" sits under the chart', below && chartBox && below.y >= chartBox.y + chartBox.height - 1, { below, chartBox });
+      checkTrue('[UI] Indicators button shows the below badge', (await card.locator('[data-chart-tool="indicators"]').first().innerText()).includes('↓'));
+      await setIndicatorsMode(card, 'hidden');
+      checkTrue('[UI] third click hides the Indicators window', await card.locator('[data-indicators-window]').count() === 0);
     }
 
     // right -> below
@@ -489,6 +514,15 @@ async function restorePrefs() {
     await page.waitForTimeout(400);
     const belowStillVisible = await page.locator('.chart-grid').first().locator(DEPTH_TEXT).count();
     checkTrue('[new] depth cycle click 2 still shows the depth panel (below)', belowStillVisible > 0);
+    {
+      const card = page.locator('.chart-grid').first();
+      await setIndicatorsMode(card, 'below');
+      const row = card.locator('[data-bottom-row]');
+      const dep = await row.locator('[data-side-panel]').boundingBox();
+      const ind = await row.locator('[data-indicators-window="below"]').boundingBox();
+      checkTrue('[UI] both below: one row under the chart, Depth first then Indicators', dep && ind && dep.x < ind.x, { dep, ind });
+      await setIndicatorsMode(card, 'hidden');
+    }
 
     // below -> hidden
     await depthBtn.click();
@@ -497,8 +531,7 @@ async function restorePrefs() {
     checkTrue('[new] depth cycle click 3 hides the depth panel again', hiddenAgain === 0);
 
     // ---- chart Indicators picker: every row has a readout column ----
-    await page.locator('.chart-grid [data-chart-tool="indicators"]').first().click();
-    await page.waitForTimeout(400);
+    await setIndicatorsMode(page.locator('.chart-grid').first(), 'right');
     check('[new] Indicators picker shows a readout for all 15 rows', await page.locator('.chart-grid [data-readout]').count(), 15);
     // ALGO-34: three tabs -- Indicators (as before), Patterns, Strategies
     const rail = page.locator('.chart-grid [data-indicator-tabs]').first();
@@ -517,8 +550,7 @@ async function restorePrefs() {
     checkTrue('[ALGO-34] a ticked pattern stays ticked when switching tabs', await rail.locator('[data-pattern-option="macd_departure_bull"] input').isChecked());
     await rail.locator('[data-pattern-option="macd_departure_bull"] input').uncheck();
     await rail.locator('[data-panel-tab="indicators"]').click();
-    await page.locator('.chart-grid [data-chart-tool="indicators"]').first().click();
-    await page.waitForTimeout(200);
+    await setIndicatorsMode(page.locator('.chart-grid').first(), 'hidden');
 
     // ---- fullscreen ----
     const fullscreenBtn = page.locator('.chart-grid button[title="Fullscreen"]').first();
@@ -637,7 +669,7 @@ async function restorePrefs() {
       await eventually(async () => await dots34() === marks.patterns, 25000);
       check('[ALGO-34] by default the chart shows only pattern dots (raw events off)', await dots34(), marks.patterns);
       checkTrue('[ALGO-34] pattern hits carry a direction from their type', marks.directions.some((d) => d === 'bull' || d === 'bear'), marks.directions);
-      await chart.locator('[data-chart-tool="indicators"]').click();
+      await setIndicatorsMode(chart, 'right');
       const rail34 = chart.locator('[data-indicator-tabs]');
       await rail34.locator('[data-panel-tab="patterns"]').click();
       await eventually(async () => await rail34.locator('[data-pattern-option] input').count() > 0, 30000);
@@ -651,15 +683,22 @@ async function restorePrefs() {
       for (const label of ['Patterns, price action & structure', 'Strategy signals']) {
         await rail34.locator('label', { hasText: label }).locator('input').check();
       }
-      await eventually(async () => await dots34() === marks.all, 5000);
-      check('[ALGO-34] ticking the raw events adds them (one dot per candle with anything ticked)', await dots34(), marks.all);
+      let allNow = marks.all; // a new candle can close mid-test on live: re-read
+      await eventually(async () => {
+        allNow = await page.evaluate(async (sym) => {
+          const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
+          const m = (await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json()).markers;
+          return new Set(m.map((x) => x.ts)).size;
+        }, symbol);
+        return await dots34() === allNow;
+      }, 8000);
+      check('[ALGO-34] ticking the raw events adds them (one dot per candle with anything ticked)', await dots34(), allNow);
       await page.waitForTimeout(800); // batched save
       const savedToggles = await page.evaluate(() => fetch('/api/preferences').then((r) => r.json()));
       checkTrue('[PREF] the chart\'s ticked items are saved for the user',
         savedToggles['chart.toggles']?.patterns === true && savedToggles['chart.toggles']?.signals === true && Array.isArray(savedToggles['chart.selectedPatterns.v2']),
         { toggles: savedToggles['chart.toggles'], patterns: savedToggles['chart.selectedPatterns.v2']?.length });
-      await chart.locator('[data-chart-tool="indicators"]').click();
-      await page.waitForTimeout(300);
+      await setIndicatorsMode(chart, 'hidden');
 
       // hover across the price pane until a marker's names show
       const canvas = chart.locator('canvas').first();
@@ -676,8 +715,15 @@ async function restorePrefs() {
       const dotCount = async () => Number(await layer.getAttribute('data-dot-count'));
       const diagramCount = async () => Number(await layer.getAttribute('data-diagram-count') ?? 0);
       // 1. exactly one dot per candle that has events (raw events ticked above, on 1min)
-      const expectedDots = marks.all;
-      await eventually(async () => await dotCount() === expectedDots, 25000);
+      // during market hours a new candle can close mid-test: read the expected
+      // count fresh each time it's compared
+      const allDots = () => page.evaluate(async (sym) => {
+        const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
+        const m = (await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json()).markers;
+        return new Set(m.map((x) => x.ts)).size;
+      }, symbol);
+      let expectedDots = marks.all;
+      await eventually(async () => await dotCount() === (expectedDots = await allDots()), 25000);
       check('[ALGO-25] one dot per candle with events', await dotCount(), expectedDots);
       // 2. hover lists every event of that candle
       const tipRows = await chart.locator('[data-marker-tooltip] [data-event-row]').count();
@@ -708,6 +754,7 @@ async function restorePrefs() {
       await tool('events').click(); await page.waitForTimeout(200);
       check('[ALGO-25] Event marking off hides every dot', await dotCount(), 0);
       await tool('events').click(); await page.waitForTimeout(200);
+      await eventually(async () => await dotCount() === (expectedDots = await allDots()), 10000);
       check('[ALGO-25] Event marking on shows the dots again', await dotCount(), expectedDots);
       // 6. icon toolbar: seven tools, each with a tooltip and an on/off state
       const tools = await chart.locator('[data-chart-toolbar] [data-chart-tool]').evaluateAll((els) => els.map((e) => ({

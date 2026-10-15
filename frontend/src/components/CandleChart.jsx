@@ -47,7 +47,9 @@ const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const INITIAL_DAYS = 21 // previous 20 sessions + today (ALGO-3)
 const MORE_DAYS = 10
 const DIAGRAM_SECONDS = 5 // a clicked dot's diagrams stay this long (ALGO-25)
-const RIGHT_COLUMN_WIDTH = 260 // Indicators window + Depth (5-level table) share this column
+const RIGHT_COLUMN_WIDTH = 260 // Depth (top) + Indicators window (below) share this column
+const INDICATOR_MODES = ['hidden', 'right', 'below']
+const BOTTOM_ROW_HEIGHT = 320 // Depth + Indicators window under the chart
 const LOAD_MORE_EDGE_BARS = 30 // load older sessions when the view's left edge is this close to the first bar
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -164,7 +166,7 @@ const PATTERN_DOT_COLOR = { bullish: '#1f9d55', bearish: '#d64545', caution: '#e
 
 export default function CandleChart({
   instrument, fillHeight = false, depthOpen, onToggleDepth, onControlsWidthChange,
-  depthMode, onCycleDepth, screenTimeframe, sidePanel,
+  depthMode, onCycleDepth, screenTimeframe, sidePanel, bottomPanel,
 }) {
   const containerRef = useRef(null)
   const stackRef = useRef(null)
@@ -217,12 +219,17 @@ export default function CandleChart({
     if (canSync && syncTf && TIMEFRAMES.includes(screenTimeframe)) setTimeframe(screenTimeframe)
   }, [canSync, syncTf, screenTimeframe])
   const [asOfDate, setAsOfDate] = useState(null)
-  const [indicatorsOpen, setIndicatorsOpenState] = useState(() => !!getPref('chart.indicatorsOpen', false))
-  const setIndicatorsOpen = (next) => setIndicatorsOpenState((prev) => {
-    const v = typeof next === 'function' ? next(prev) : next
-    setPref('chart.indicatorsOpen', v)
+  // Indicators window, 3 states like Depth (2026-10-15): hidden -> right -> below
+  const [indicatorsMode, setIndicatorsModeState] = useState(() => {
+    const v = getPref('chart.indicatorsMode', getPref('chart.indicatorsOpen', false) ? 'right' : 'hidden')
+    return INDICATOR_MODES.includes(v) ? v : 'hidden'
+  })
+  const cycleIndicatorsMode = () => setIndicatorsModeState((prev) => {
+    const v = INDICATOR_MODES[(INDICATOR_MODES.indexOf(prev) + 1) % INDICATOR_MODES.length]
+    setPref('chart.indicatorsMode', v)
     return v
   })
+  const indicatorsOpen = indicatorsMode !== 'hidden'
   const [reloadKey, setReloadKey] = useState(0)
   const [, forceRender] = useState(0) // bumped after a toggle so the picker's checked state re-renders
   const { theme } = useTheme()
@@ -863,9 +870,12 @@ export default function CandleChart({
   // ResizeObserver alone never fires for that transition).
   function syncRailHeight() {
     if (!stackRef.current || !railRef.current) return
-    railRef.current.style.height = `${stackRef.current.getBoundingClientRect().height}px`
+    // exactly the chart's height -- never taller (maxHeight too, in case content grows first)
+    const h = `${stackRef.current.getBoundingClientRect().height}px`
+    railRef.current.style.height = h
+    railRef.current.style.maxHeight = h
   }
-  useEffect(() => { syncRailHeight() }, [indicatorsOpen, !!sidePanel]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { syncRailHeight() }, [indicatorsMode, !!sidePanel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- indicator picker ----
   function isOn(key, defaultOn = true) {
@@ -971,7 +981,11 @@ export default function CandleChart({
             ) : onToggleDepth ? (
               <ChartToolButton ref={depthBtnRef} tool="depth" onClick={onToggleDepth} on={!!depthOpen} label={depthOpen ? 'Depth: shown (click to hide)' : 'Depth: hidden (click to show)'} />
             ) : null}
-            <ChartToolButton tool="indicators" onClick={() => setIndicatorsOpen((v) => !v)} on={indicatorsOpen} label={indicatorsOpen ? 'Indicators window: open (click to close)' : 'Indicators window: closed (click to open)'} />
+            <ChartToolButton
+              tool="indicators" onClick={cycleIndicatorsMode} on={indicatorsOpen}
+              badge={indicatorsMode === 'right' ? '→' : indicatorsMode === 'below' ? '↓' : null}
+              label={indicatorsMode === 'right' ? 'Indicators window: beside the chart (click to move below)' : indicatorsMode === 'below' ? 'Indicators window: below the chart (click to hide)' : 'Indicators window: hidden (click to show beside the chart)'}
+            />
             <span aria-hidden="true" style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 2px' }} />
             <ChartToolButton tool="events" onClick={toggleEvents} on={isOn('events', true)} label={isOn('events', true) ? 'Event marking: on (click to hide the dots)' : 'Event marking: off (click to show the dots)'} />
             <ChartToolButton tool="diagrams" onClick={toggleDiagrams} on={isOn('diagrams', false)} label={isOn('diagrams', false) ? 'Diagrams: all shown (click to hide)' : 'Diagrams: show all (or click a dot to draw just its own)'} />
@@ -1026,36 +1040,47 @@ export default function CandleChart({
           <div data-pane style={{ borderTop: '1px solid var(--border)' }}><div ref={stochElRef} style={{ width: '100%' }} /></div>
         </div>
 
-        {/* One right-hand column: the Indicators window on top, the caller's
-            side panel (Depth, from GraphWindow) stacked under it -- they
-            used to sit side by side as two columns (2026-10-15). */}
-        {(indicatorsOpen || sidePanel) && (
+        {/* One right-hand column: the caller's side panel (Depth, from
+            GraphWindow) on top, the Indicators window stacked under it --
+            they used to sit side by side as two columns (2026-10-15). */}
+        {(indicatorsMode === 'right' || sidePanel) && (
         <div
           ref={railRef} data-right-column
-          style={{ flex: `0 0 ${RIGHT_COLUMN_WIDTH}px`, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}
+          style={{ flex: `0 0 ${RIGHT_COLUMN_WIDTH}px`, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' }}
         >
-        {indicatorsOpen && (
-          <div
-            data-indicators-window
-            style={{
-              flex: '1 1 auto', minHeight: 0, overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)', padding: 12,
-            }}
-          >
-            {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
-            <IndicatorPanelTabs onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
-              <IndicatorGroup title="Overlays" defs={OVERLAY_DEFS} isOn={isOn} onToggle={toggleOverlay} values={readout} />
-              <IndicatorGroup title="Sub-panels" defs={PANEL_DEFS} isOn={(k) => isOn(k, true)} onToggle={togglePanel} values={readout} />
-              <IndicatorGroup title="Raw events" defs={MARKER_DEFS} isOn={isOn} onToggle={toggleMarkerGroup} values={readout} />
-            </IndicatorPanelTabs>
-          </div>
-        )}
-        {sidePanel && <div data-side-panel style={{ flex: indicatorsOpen ? '0 0 auto' : '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{sidePanel}</div>}
+        {sidePanel && <div data-side-panel style={{ flex: indicatorsMode === 'right' ? '0 0 auto' : '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{sidePanel}</div>}
+        {indicatorsMode === 'right' && renderIndicatorsWindow({ flex: '1 1 auto', minHeight: 0 })}
         </div>
         )}
       </div>
+      {/* below the chart: Depth first, then the Indicators window beside it */}
+      {(indicatorsMode === 'below' || bottomPanel) && (
+        <div data-bottom-row style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 14, alignItems: 'stretch' }}>
+          {bottomPanel && <div data-side-panel style={{ flex: `0 0 ${RIGHT_COLUMN_WIDTH}px`, minWidth: 0, maxHeight: BOTTOM_ROW_HEIGHT, overflowY: 'auto' }}>{bottomPanel}</div>}
+          {indicatorsMode === 'below' && renderIndicatorsWindow({ flex: '1 1 320px', minWidth: 0, height: BOTTOM_ROW_HEIGHT })}
+        </div>
+      )}
     </div>
   )
+
+  function renderIndicatorsWindow(layout) {
+    return (
+      <div
+        data-indicators-window={indicatorsMode}
+        style={{
+          ...layout, overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)', padding: 12, boxSizing: 'border-box',
+        }}
+      >
+        {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
+        <IndicatorPanelTabs onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
+          <IndicatorGroup title="Overlays" defs={OVERLAY_DEFS} isOn={isOn} onToggle={toggleOverlay} values={readout} />
+          <IndicatorGroup title="Sub-panels" defs={PANEL_DEFS} isOn={(k) => isOn(k, true)} onToggle={togglePanel} values={readout} />
+          <IndicatorGroup title="Raw events" defs={MARKER_DEFS} isOn={isOn} onToggle={toggleMarkerGroup} values={readout} />
+        </IndicatorPanelTabs>
+      </div>
+    )
+  }
 }
 
 function IndicatorGroup({ title, defs, isOn, onToggle, values = {} }) {

@@ -48,8 +48,8 @@ const GraphWindow = forwardRef(function GraphWindow(
 
   const depthPanel = showDepth && depthMode !== 'hidden' && <DepthPanel depth={depth} />
 
-  // Depth on the right is drawn INSIDE the chart's right-hand column, stacked
-  // under the Indicators window -- not as a second column beside it.
+  // Depth on the right is drawn INSIDE the chart's right-hand column, with the
+  // Indicators window stacked under it -- not as a second column beside it.
   const chart = (
     <CandleChart
       instrument={instrument}
@@ -59,15 +59,14 @@ const GraphWindow = forwardRef(function GraphWindow(
       onControlsWidthChange={setDepthPanelWidth}
       screenTimeframe={screenTimeframe}
       sidePanel={depthMode === 'right' ? depthPanel || null : null}
+      bottomPanel={depthMode === 'below' ? depthPanel || null : null}
     />
   )
 
-  const body = depthMode === 'below' ? (
-    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, flex: fullscreen ? '1 1 auto' : undefined }}>
-      <div style={{ flex: fullscreen ? '1 1 auto' : undefined, minHeight: 0 }}>{chart}</div>
-      {depthPanel && <div style={{ marginTop: 14 }}>{depthPanel}</div>}
-    </div>
-  ) : (
+  // Depth (right or below) is drawn by the chart itself, beside/under the
+  // Indicators window -- one layout here, so switching Depth's place never
+  // rebuilds the chart (2026-10-15)
+  const body = (
     <div style={{ display: 'flex', minWidth: 0, minHeight: 0, flex: fullscreen ? '1 1 auto' : undefined }}>
       <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0 }}>{chart}</div>
     </div>
