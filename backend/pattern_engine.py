@@ -44,6 +44,7 @@ class _Compiled:
     cooldown: int
     trees: List[ast.AST]
     formulas: List[str]
+    name: str = ""
 
 
 class PatternEvaluator:
@@ -78,11 +79,18 @@ class PatternEvaluator:
             except SyntaxError:
                 logger.warning("Pattern %s has a condition that does not parse; skipped", p["key"])
                 continue
-            compiled.append(_Compiled(p["id"], p["key"], p["pattern_type"], p["weight"], p["lookback"], p["cooldown"], trees, formulas))
+            compiled.append(_Compiled(p["id"], p["key"], p["pattern_type"], p["weight"], p["lookback"], p["cooldown"], trees, formulas, p["name"]))
         self.patterns = compiled
         self.threshold = float(settings.get("pattern_formed_threshold", 0.8))
         self.window = max([1] + [required_lookback(f, p.lookback) for p in compiled for f in p.formulas]) + 1
         self._loaded_at = time.monotonic()
+
+    def meta(self, key: str):
+        """(name, pattern_type) for a pattern key, or None -- labels live hits."""
+        for p in self.patterns:
+            if p.key == key:
+                return p.name or p.key, p.pattern_type
+        return None
 
     def _maybe_reload(self) -> None:
         if time.monotonic() - self._loaded_at > RELOAD_SECONDS:

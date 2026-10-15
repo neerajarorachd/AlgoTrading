@@ -5,6 +5,8 @@ There is no login yet, so the "user" is owner_id=1 for every request; when
 users arrive, owner_id comes from the session instead of USER_ID below."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from flask import Blueprint, current_app, g, jsonify, request
 
 from condition_evaluator import validate_condition
@@ -73,6 +75,20 @@ def disable_pattern(pattern_id: int):
     except ops_patterns.PatternError as exc:
         return jsonify({"error": str(exc)}), 404
     return jsonify({"ok": True})
+
+
+RECKONER_PATH = Path(__file__).resolve().parents[2] / "docs" / "condition_ready_reckoner.md"
+
+
+@patterns_bp.get("/api/condition-reckoner")
+def get_condition_reckoner():
+    """The condition language's ready reckoner (docs/condition_ready_reckoner.md),
+    shown from the condition maker's "Ready reckoner" button (ALGO-34). The
+    doc stays the single source -- the UI renders this text."""
+    try:
+        return jsonify({"markdown": RECKONER_PATH.read_text(encoding="utf-8")})
+    except OSError:
+        return jsonify({"error": "ready reckoner not found"}), 404
 
 
 @patterns_bp.post("/api/patterns/validate-condition")

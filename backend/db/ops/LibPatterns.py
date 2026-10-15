@@ -115,6 +115,23 @@ def list_patterns(session, owner_id: Optional[int] = None, enabled_only: bool = 
     return [to_dict(p, conds.get(p.id, [])) for p in rows]
 
 
+def pattern_direction(pattern_type: Optional[str]) -> Optional[str]:
+    """bullish -> "bull", bearish -> "bear"; caution/avoid have no direction."""
+    return {"bullish": "bull", "bearish": "bear"}.get(pattern_type)
+
+
+def pattern_meta(session, owner_id: Optional[int] = None) -> Dict[str, dict]:
+    """{key: {"name", "pattern_type"}} -- labels pattern hits (activity_type
+    "pattern") in the chart markers and event lists. The owner's own pattern
+    wins over a system one with the same key."""
+    q = session.query(Pattern.key, Pattern.name, Pattern.pattern_type, Pattern.origin)
+    q = q.filter((Pattern.origin == "system") | (Pattern.owner_id == owner_id)) if owner_id is not None else q.filter(Pattern.origin == "system")
+    out: Dict[str, dict] = {}
+    for key, name, pattern_type, origin in sorted(q.all(), key=lambda r: r[3] != "system"):
+        out[key] = {"name": name, "pattern_type": pattern_type}
+    return out
+
+
 def get_pattern(session, pattern_id: int) -> Optional[dict]:
     p = session.get(Pattern, pattern_id)
     if p is None:

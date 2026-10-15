@@ -436,3 +436,17 @@ def test_get_candles_without_days_is_unchanged_single_session(client, session_fa
     body = client.get("/api/candles?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=1min").get_json()
     assert [c["close"] for c in body["candles"]] == [100.0]
     assert "has_more" not in body
+
+
+def test_get_candle_markers_pattern_hits_carry_direction_name_and_score(app, client, session_factory):
+    """ALGO-34: a pattern hit's direction comes from its pattern's type --
+    bullish -> bull, bearish -> bear, caution/avoid -> none."""
+    instrument_id = _seed_instrument(session_factory)
+    engine = app.extensions["activity_engine"]
+    for minute, key, score in ((0, "macd_departure_bull", 5.0), (5, "too_volatile", 0.0)):
+        engine._buffer.append({"instrument_id": instrument_id, "timeframe": "1min", "ts": _today_utc(4, minute),
+                               "activity_type": "pattern", "activity": key, "intensity": score})
+    markers = client.get("/api/candles/markers?symbol=RELIANCE&exchange_segment=NSE_EQ&timeframe=1min").get_json()["markers"]
+    bull, avoid = markers
+    assert (bull["direction"], bull["pattern_type"], bull["name"], bull["score"]) == ("bull", "bullish", "MACD departure (bullish)", 5.0)
+    assert (avoid["direction"], avoid["pattern_type"]) == (None, "avoid")

@@ -94,6 +94,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     from api.routes_recommendation_systems import recommendation_systems_bp
     from api.routes_patterns import patterns_bp
     from api.routes_signal_strength import signal_strength_bp
+    from api.routes_preferences import preferences_bp
     from api.routes_recommendations import recommendations_bp
     from api.routes_strategies import strategies_bp
     from api.routes_symbols import symbols_bp
@@ -117,6 +118,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.register_blueprint(recommendation_systems_bp)
     app.register_blueprint(patterns_bp)
     app.register_blueprint(signal_strength_bp)
+    app.register_blueprint(preferences_bp)
 
     app.extensions["socketio"] = ws_live.init_app(app)
 
@@ -211,8 +213,10 @@ def _make_on_candle_closed(session_factory, activity_engine: ActivityEngine):
         # every newly detected pattern/indicator signal, as it happens -- the
         # Market Watch live events list (and, in replay, the color cards)
         try:
+            evaluator = getattr(activity_engine, "pattern_evaluator", None)
             for activity in new_activities:
-                ws_live.broadcast_activity(symbol, exchange_segment, activity)
+                ws_live.broadcast_activity(symbol, exchange_segment, activity,
+                                           pattern_meta=evaluator.meta if evaluator else None)
         except Exception:
             logger.exception("broadcasting activities failed for %s (%s)", symbol, exchange_segment)
         # First real live consumer of on_candle_closed's return value

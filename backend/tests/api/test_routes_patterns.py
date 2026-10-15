@@ -64,3 +64,8 @@ def test_pattern_settings_default_off(client):
 def test_unknown_pattern_is_404(client):
     assert client.get("/api/patterns/99999").status_code == 404
     assert client.put("/api/patterns/99999", json={"name": "x"}).status_code == 404
+
+
+def test_condition_reckoner_is_served_from_the_doc(client):
+    body = client.get("/api/condition-reckoner").get_json()
+    assert body["markdown"].startswith("# Condition Maker: Ready Reckoner")

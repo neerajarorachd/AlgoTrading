@@ -4,10 +4,11 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 from db.ops import LibActivities as ops_activities
 from db.ops import LibPatternOutcomes as ops_pattern_outcomes
+from db.ops import LibPatterns
 from db.ops import LibSymbols as ops_symbols
 from prediction_tracker import BEARISH_PATTERNS, BULLISH_PATTERNS
 
@@ -88,14 +89,40 @@ def get_recent_activities():
         return jsonify({"error": "instrument_id is required"}), 400
     timeframe = request.args.get("timeframe")
     limit = request.args.get("limit", default=20, type=int)
-    rows = ops_activities.get_recent(g.db_session, instrument_id, timeframe, limit)
-    return jsonify([
-        {
-            "activity": r.activity, "label": _activity_label(r.activity), "activity_type": r.activity_type,
-            "timeframe": r.timeframe, "ts": _iso_z(r.ts),
+    stored = [
+        {"activity": r.activity, "activity_type": r.activity_type, "timeframe": r.timeframe,
+         "ts": r.ts, "intensity": r.intensity}
+        for r in ops_activities.get_recent(g.db_session, instrument_id, timeframe, limit)
+    ]
+    # today's rows live in the engine's memory until the 15:30 flush -- without
+    # them this list showed yesterday's events all day (found 2026-10-15)
+    engine = current_app.extensions.get("activity_engine")
+    pending = []
+    if engine is not None:
+        for tf in ([timeframe] if timeframe else ["1min", "3min", "5min"]):
+            pending += engine.pending_activities(instrument_id, tf)
+    seen, rows = set(), []
+    for r in stored + pending:
+        k = (r["timeframe"], _iso_z(r["ts"]), r["activity"])
+        if k not in seen:
+            seen.add(k)
+            rows.append(r)
+    rows.sort(key=lambda r: _iso_z(r["ts"]), reverse=True)
+    meta = LibPatterns.pattern_meta(g.db_session, owner_id=1) if any(r["activity_type"] == "pattern" for r in rows[:limit]) else {}
+    out = []
+    for r in rows[:limit]:
+        item = {
+            "activity": r["activity"], "label": _activity_label(r["activity"]), "activity_type": r["activity_type"],
+            "timeframe": r["timeframe"], "ts": _iso_z(r["ts"]),
+            "direction": "bull" if r["activity"] in BULLISH_PATTERNS else "bear" if r["activity"] in BEARISH_PATTERNS else None,
         }
-        for r in rows
-    ])
+        if r["activity_type"] == "pattern":
+            info = meta.get(r["activity"], {})
+            item.update(label=info.get("name") or item["label"], pattern_type=info.get("pattern_type"),
+                        direction=LibPatterns.pattern_direction(info.get("pattern_type")),
+                        score=float(r["intensity"]) if r.get("intensity") is not None else None)
+        out.append(item)
+    return jsonify(out)
 
 
 @activities_bp.get("/api/activities/occurrences")

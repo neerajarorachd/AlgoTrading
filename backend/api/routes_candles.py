@@ -7,12 +7,15 @@ from flask import Blueprint, current_app, g, jsonify, request
 
 from db.models import CandleHistorical, CandleToday
 from db.ops import LibActivities as ops_activities
+from db.ops import LibPatterns
 from db.ops import LibCandleIndicators as ops_indicators
 from db.ops import LibCandles as ops_candles
 from db.ops import LibCandlesHistorical as ops_candles_historical
 from db.ops import LibSymbols as ops_symbols
 from pivot_points import classic_pivot_points
 from prediction_tracker import BEARISH_PATTERNS, BULLISH_PATTERNS
+
+PATTERN_OWNER_ID = 1  # single user until login exists (same as the patterns API)
 
 candles_bp = Blueprint("candles", __name__)
 
@@ -293,7 +296,8 @@ def get_candle_markers():
     )
     rows = _merge_pending(stored, _pending("activities", instrument_id, timeframe), ts_from, ts_to,
                           key=lambda r: (_naive_utc(_field(r, "ts")), _field(r, "activity")))
-    return jsonify({"markers": [_serialize_marker(row) for row in rows]})
+    meta = LibPatterns.pattern_meta(g.db_session, owner_id=PATTERN_OWNER_ID)
+    return jsonify({"markers": [_serialize_marker(row, meta) for row in rows]})
 
 
 def _resolve_range():
@@ -344,9 +348,16 @@ def _naive_utc(ts: datetime) -> datetime:
     return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
 
 
-def _serialize_marker(row) -> dict:
+def _serialize_marker(row, pattern_meta=None) -> dict:
     activity = _field(row, "activity")
     direction = "bull" if activity in BULLISH_PATTERNS else "bear" if activity in BEARISH_PATTERNS else None
+    extra = {}
+    if _field(row, "activity_type") == "pattern":
+        # a pattern hit (ALGO-32): direction from the pattern's own type
+        info = (pattern_meta or {}).get(activity, {})
+        direction = LibPatterns.pattern_direction(info.get("pattern_type"))
+        intensity = row.get("intensity") if isinstance(row, dict) else getattr(row, "intensity", None)
+        extra = {"pattern_type": info.get("pattern_type"), "name": info.get("name") or activity, "score": _num(intensity)}
     # neckline: double/triple top/bottom only -- drawn by the chart's
     # click-to-show diagrams (ALGO-25). Engine dicts may lack the key.
     neckline = row.get("neckline_price") if isinstance(row, dict) else getattr(row, "neckline_price", None)
@@ -356,6 +367,7 @@ def _serialize_marker(row) -> dict:
         "activity": activity,
         "direction": direction,
         "neckline": _num(neckline),
+        **extra,
     }
 
 

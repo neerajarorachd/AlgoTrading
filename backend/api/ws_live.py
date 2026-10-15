@@ -51,7 +51,7 @@ def broadcast_backfill_status(symbol: str, exchange_segment: str, status: str, m
     }, room=room_for_exchange_segment(exchange_segment, symbol))
 
 
-def broadcast_activity(symbol: str, exchange_segment: str, activity: dict) -> None:
+def broadcast_activity(symbol: str, exchange_segment: str, activity: dict, pattern_meta=None) -> None:
     """One newly detected pattern/indicator signal (an ActivityEngine buffer
     row), as it's detected. `direction` uses the same bull/bear pattern sets
     as the rest of the app (None = no directional bias, e.g. doji)."""
@@ -59,6 +59,14 @@ def broadcast_activity(symbol: str, exchange_segment: str, activity: dict) -> No
     name = activity["activity"]
     ts = activity["ts"]
     ts_str = ts.isoformat().replace("+00:00", "Z") if ts.tzinfo else ts.isoformat() + "Z"
+    direction = "bull" if name in BULLISH_PATTERNS else "bear" if name in BEARISH_PATTERNS else None
+    extra = {}
+    if activity["activity_type"] == "pattern":
+        # pattern hit (ALGO-32): pattern_meta(key) -> (name, pattern_type)
+        from db.ops.LibPatterns import pattern_direction
+        label, pattern_type = (pattern_meta(name) if pattern_meta else None) or (name, None)
+        direction = pattern_direction(pattern_type)
+        extra = {"name": label, "pattern_type": pattern_type}
     socketio.emit("activity", {
         "type": "activity",
         "symbol": symbol,
@@ -66,8 +74,9 @@ def broadcast_activity(symbol: str, exchange_segment: str, activity: dict) -> No
         "ts": ts_str,
         "activity_type": activity["activity_type"],
         "activity": name,
-        "direction": "bull" if name in BULLISH_PATTERNS else "bear" if name in BEARISH_PATTERNS else None,
+        "direction": direction,
         "intensity": float(activity["intensity"]) if activity.get("intensity") is not None else None,
+        **extra,
     }, room=room_for_exchange_segment(exchange_segment, symbol))
 
 

@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, Date, DateTime, Index, Integer, Numeric, SmallInteger, String, Time, UniqueConstraint,
+    BigInteger, Boolean, Date, DateTime, Index, Integer, Numeric, SmallInteger, String, Text, Time, UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -1933,4 +1933,23 @@ class SignalStrengthRule(Base):
 
     __table_args__ = (
         UniqueConstraint("signal", "measure", "owner_id", name="uq_signal_strength_rule"),
+    )
+
+
+class UserPreference(Base):
+    """A user's last-used UI setting (2026-10-15): one row per user x key,
+    e.g. "workspace.screenTimeframe" -> "3min", "chart.toggles" -> {...}.
+    The value is JSON. Restored on the next visit from any browser, so the
+    screen opens the way the user left it."""
+
+    __tablename__ = "user_preferences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    key: Mapped[str] = mapped_column(String(100), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "key", name="uq_user_preference"),
     )

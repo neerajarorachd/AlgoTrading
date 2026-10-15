@@ -319,3 +319,22 @@ def test_activity_counts_excludes_yesterdays_events(client):
 
 def test_activity_counts_requires_instrument_id(client):
     assert client.get("/api/activities/counts").status_code == 400
+
+
+def test_recent_activities_include_unflushed_engine_rows_and_label_pattern_hits(app, client):
+    """Today's rows sit in the engine until the 15:30 flush -- the list must
+    show them; a pattern hit carries its name, type, direction and score."""
+    instrument_id = _register(client)
+    _seed(client, instrument_id)
+    engine = app.extensions["activity_engine"]
+    engine._buffer.append({
+        "instrument_id": instrument_id, "timeframe": "3min", "ts": _dt(5),
+        "activity_type": "pattern", "activity": "macd_departure_bear", "intensity": 5.0,
+        "open_price": 100, "high_price": 101, "low_price": 99, "close_price": 100.5,
+    })
+    rows = client.get(f"/api/activities/recent?instrument_id={instrument_id}").get_json()
+    assert rows[0]["activity"] == "macd_departure_bear"  # newest, from memory
+    assert rows[0]["label"] == "MACD departure (bearish)" and rows[0]["pattern_type"] == "bearish"
+    assert rows[0]["direction"] == "bear" and rows[0]["score"] == 5.0
+    assert len(rows) == 3
+    assert client.get(f"/api/activities/recent?instrument_id={instrument_id}&timeframe=1min").get_json()[0]["activity"] == "hammer"
