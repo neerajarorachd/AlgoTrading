@@ -394,6 +394,34 @@ async function restorePrefs() {
     checkTrue('[TF] All asks the API for timeframe=all', scoreCalls.some((u) => u.includes('timeframe=all')), scoreCalls);
     await eventually(async () => (rowBad = await rowColours('all')).length === 0, 6000);
     checkTrue('[TF] on All each row shows three dots: its 1m, 3m and 5m colours', rowBad.length === 0, rowBad);
+    // colour sort: colour order first, then within a colour the most green
+    // timeframes first (3 of 1m/3m/5m, then 2, then 1) -- 2026-10-15
+    {
+      const sortSel = page.locator('select[aria-label="Sort instruments"]');
+      const prevSort = await sortSel.inputValue();
+      await sortSel.selectOption('status');
+      await page.waitForTimeout(500);
+      const orderBad = await page.evaluate(async () => {
+        const [symbols, scores] = await Promise.all([
+          fetch('/api/symbols').then((r) => r.json()),
+          fetch('/api/watch-scores?timeframe=all').then((r) => r.json()),
+        ]);
+        const ORDER = ['dark_green', 'light_green', 'orange', 'yellow', 'white', 'pink', 'red'];
+        const bySym = Object.fromEntries(symbols.map((s) => [s.symbol, scores.scores.find((x) => x.instrument_id === s.id)]));
+        const greens = (sc) => ['1min', '3min', '5min'].filter((t) => ['dark_green', 'light_green'].includes(sc?.by_timeframe?.[t]?.colour)).length;
+        const rows = [...document.querySelectorAll('[data-instrument-grid] tbody tr')].map((tr) => tr.cells[0]?.innerText.split('\n')[0]).filter((s) => bySym[s]);
+        const bad = [];
+        for (let i = 1; i < rows.length; i++) {
+          const a = bySym[rows[i - 1]], b = bySym[rows[i]];
+          const ra = ORDER.indexOf(a.bucket), rb = ORDER.indexOf(b.bucket);
+          if (ra > rb || (ra === rb && greens(a) < greens(b))) bad.push({ above: [rows[i - 1], a.bucket, greens(a)], below: [rows[i], b.bucket, greens(b)] });
+        }
+        return bad;
+      });
+      checkTrue('[SORT] colour sort: within a colour, more green timeframes first (3, then 2, then 1)', orderBad.length === 0, orderBad);
+      await sortSel.selectOption(prevSort);
+      await page.waitForTimeout(300);
+    }
     await tfBar.locator('[data-timeframe="3min"]').click();
     checkTrue('[TF] back on 3m the tiles show single counts again', await eventually(async () => {
       const texts = await page.$$eval('[data-bucket]', (els) => els.map((e) => e.innerText.trim()));

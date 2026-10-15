@@ -107,3 +107,13 @@ def test_api_all_timeframes_strongest_wins_but_warnings_override(app, client):
 
 def test_api_rejects_unknown_timeframe(client):
     assert client.get("/api/watch-scores?timeframe=15min").status_code == 400
+
+
+def test_api_single_timeframe_rows_also_carry_every_timeframe(app, client):
+    """The colour sort counts greens across 1m/3m/5m on any selected timeframe."""
+    iid = _register(client, "SBIN")
+    ev = app.extensions["activity_engine"].pattern_evaluator
+    ev.scores[("SBIN", "NSE_EQ", "1min")] = {"macd_departure_bull": 1.0}
+    row = next(r for r in client.get("/api/watch-scores?timeframe=3min").get_json()["scores"] if r["instrument_id"] == iid)
+    assert row["colour"] == "white"  # the selected timeframe's own colour
+    assert {tf: r["colour"] for tf, r in row["by_timeframe"].items()} == {"1min": "dark_green", "3min": "white", "5min": "white"}

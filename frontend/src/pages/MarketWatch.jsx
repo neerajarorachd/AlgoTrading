@@ -13,6 +13,7 @@ import PageTitleBar from '../components/PageTitleBar.jsx'
 import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import TimeframeBar from '../components/TimeframeBar.jsx'
+import { withinColour } from '../components/colourSort.js'
 import PanelToggle from '../components/PanelToggle.jsx'
 import { getPref, setPref, usePreference } from '../preferences.js'
 import GraphWindow from '../components/GraphWindow.jsx'
@@ -36,10 +37,7 @@ function nullsLast(a, b) {
   return (a == null) - (b == null)
 }
 
-// Within a colour, strongest top pattern first (ALGO-33).
-function scoreSortKey(bucket, row) {
-  return row?.top_score ?? 0
-}
+
 
 const MAX_OPEN_CHARTS = 4
 // Deliberately distinct from MarketWatchClassic.jsx's own
@@ -171,7 +169,7 @@ export default function MarketWatch() {
     if (!selectedBucket) return symbols
     return symbols
       .filter((s) => scoreByInstrument[s.id]?.bucket === selectedBucket)
-      .sort((a, b) => scoreSortKey(selectedBucket, scoreByInstrument[b.id]) - scoreSortKey(selectedBucket, scoreByInstrument[a.id]))
+      .sort((a, b) => withinColour(scoreByInstrument[a.id], scoreByInstrument[b.id]))
   }, [symbols, selectedBucket, scoreByInstrument])
 
   // The Sort dropdown, applied on top of the bucket filter above. Stable:
@@ -185,7 +183,8 @@ export default function MarketWatch() {
     }
     const dayChange = (s) => liveTicks[s.symbol]?.day_change_percentage ?? null
     const compare = {
-      status: (a, b) => nullsLast(bucketRank(a), bucketRank(b)) || (bucketRank(a) - bucketRank(b)),
+      status: (a, b) => nullsLast(bucketRank(a), bucketRank(b)) || (bucketRank(a) - bucketRank(b))
+        || withinColour(scoreByInstrument[a.id], scoreByInstrument[b.id]),
       selected: (a, b) => Number(openIds.has(b.id)) - Number(openIds.has(a.id)),
       day_change: (a, b) => nullsLast(dayChange(a), dayChange(b)) || (dayChange(b) - dayChange(a)),
     }[sortMode]

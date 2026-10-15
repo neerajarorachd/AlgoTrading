@@ -83,11 +83,11 @@ def get_watch_scores():
             matches = evaluator.scores.get((inst.symbol, inst.exchange_segment, tf), {}) if evaluator else {}
             return colour_for(matches, patterns, threshold, weight_of)
 
-        if is_all:
-            by_tf = {tf: score_tf(tf) for tf in _TIMEFRAMES}
-            result = {**combine_timeframes(by_tf), "by_timeframe": by_tf}
-        else:
-            result = score_tf(timeframe)
+        # every row carries all three timeframes' colours (2026-10-15): the
+        # grid's colour sort orders rows within a colour by how many of
+        # 1m/3m/5m are green, whichever timeframe is selected
+        by_tf = {tf: score_tf(tf) for tf in _TIMEFRAMES}
+        result = {**(combine_timeframes(by_tf) if is_all else by_tf[timeframe]), "by_timeframe": by_tf}
         scores.append({"instrument_id": inst.id, "bucket": result["colour"], **result})
     return jsonify({
         "scores": scores, "bucket_colors": COLOUR_HEX,

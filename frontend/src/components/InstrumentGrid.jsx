@@ -238,7 +238,7 @@ export default function InstrumentGrid({
                   <div style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 6 }}>
                     {/* the selected timeframe's colour; on "All", one dot per
                         timeframe (1m, 3m, 5m) like the colour cards (2026-10-15) */}
-                    {score?.by_timeframe ? (
+                    {timeframe === 'all' && score?.by_timeframe ? (
                       <span data-row-colours="all" style={{ display: 'inline-flex', gap: 3, flex: '0 0 auto' }}>
                         {['1min', '3min', '5min'].map((tf) => {
                           const b = score.by_timeframe[tf]?.colour
