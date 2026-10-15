@@ -1016,8 +1016,13 @@ export default function CandleChart({
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 14, flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
-        <div ref={stackRef} style={{ flex: '1 1 auto', minWidth: 0, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', display: fillHeight ? 'flex' : undefined, flexDirection: fillHeight ? 'column' : undefined }}>
+      {/* flex-start, not stretch: a right-hand column that renders before
+          it is sized (Indicators saved as "right" on page load) used to
+          stretch the chart frame to its own content height, and the
+          column was then sized to that stretched frame (2026-10-15).
+          Fullscreen still stretches -- the chart fills the screen there. */}
+      <div style={{ display: 'flex', gap: 14, alignItems: fillHeight ? 'stretch' : 'flex-start', flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
+        <div ref={stackRef} data-chart-stack style={{ flex: '1 1 auto', minWidth: 0, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', display: fillHeight ? 'flex' : undefined, flexDirection: fillHeight ? 'column' : undefined }}>
           <div style={{ position: 'relative', flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
             {/* height:100% in fullscreen so the price pane fills whatever the
                 sub-panels leave -- without it this div only ever wraps the

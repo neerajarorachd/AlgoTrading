@@ -675,8 +675,16 @@ async function restorePrefs() {
       await eventually(async () => await rail34.locator('[data-pattern-option] input').count() > 0, 30000);
       if (marks.busiest) {
         await rail34.locator(`[data-pattern-option="${marks.busiest}"] input`).uncheck();
-        await eventually(async () => await dots34() === marks.withoutBusiest, 5000);
-        check('[ALGO-34] unticking a pattern removes exactly its dots', await dots34(), marks.withoutBusiest);
+        let withoutNow = marks.withoutBusiest; // re-read: a new pattern hit can land mid-test on live
+        await eventually(async () => {
+          withoutNow = await page.evaluate(async ([sym, busiest]) => {
+            const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
+            const m = (await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json()).markers;
+            return new Set(m.filter((x) => x.activity_type === 'pattern' && x.activity !== busiest).map((x) => x.ts)).size;
+          }, [symbol, marks.busiest]);
+          return await dots34() === withoutNow;
+        }, 8000);
+        check('[ALGO-34] unticking a pattern removes exactly its dots', await dots34(), withoutNow);
         await rail34.locator(`[data-pattern-option="${marks.busiest}"] input`).check();
       }
       await rail34.locator('[data-panel-tab="indicators"]').click();
