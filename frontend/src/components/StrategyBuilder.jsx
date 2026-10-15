@@ -5,6 +5,8 @@
 // frontend conventions. Visual polish deferred ("design we will decide
 // later") — this is a working editor, not a styled one yet.
 
+import ReckonerButton from './ReckonerButton.jsx'
+
 const OPERATORS = ['>', '>=', '<', '<=', '==', '!=']
 
 // Ready-made formulas a user can drop straight in, one click, to see a
@@ -105,6 +107,9 @@ export default function StrategyBuilder({ tree, onChange, elements, grammar, lea
   }
   return (
     <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+        <ReckonerButton />
+      </div>
       <div style={{
         fontFamily: 'monospace', fontSize: 13, color: '#334', background: '#eef6ff',
         border: '1px solid #cfe3fb', borderRadius: 4, padding: '6px 10px', marginBottom: 10,

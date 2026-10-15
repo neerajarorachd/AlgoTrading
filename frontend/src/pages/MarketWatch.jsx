@@ -13,6 +13,7 @@ import PageTitleBar from '../components/PageTitleBar.jsx'
 import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import TimeframeBar from '../components/TimeframeBar.jsx'
+import { getPref, setPref, usePreference } from '../preferences.js'
 import GraphWindow from '../components/GraphWindow.jsx'
 import Button from '../components/kit/Button.jsx'
 
@@ -49,16 +50,7 @@ const MAX_OPEN_CHARTS = 4
 // an already-open row toggled it closed instead of opening it.
 const OPEN_SYMBOL_IDS_KEY = 'marketWatch.new.openSymbolIds'
 const OPEN_TAB_IDS_KEY = 'marketWatch.openTabIds'
-const SCREEN_TIMEFRAME_KEY = 'workspace.screenTimeframe'
-
-function loadScreenTimeframe() {
-  try {
-    const v = localStorage.getItem(SCREEN_TIMEFRAME_KEY)
-    return ['1min', '3min', '5min', 'all'].includes(v) ? v : '3min'
-  } catch {
-    return '3min'
-  }
-}
+const SCREEN_TIMEFRAMES = ['1min', '3min', '5min', 'all']
 
 function loadStoredIds(key) {
   try {
@@ -77,20 +69,21 @@ export default function MarketWatch() {
   const [scores, setScores] = useState([])
   const [bucketColors, setBucketColors] = useState({})
   const [selectedBucket, setSelectedBucket] = useState(null)
-  const [screenTimeframe, setScreenTimeframe] = useState(loadScreenTimeframe) // 1min/3min/5min/all, above the grid
+  // the user's last choices (2026-10-15, preferences.js)
+  const [screenTimeframe, setScreenTimeframe] = usePreference('workspace.screenTimeframe', '3min', (v) => SCREEN_TIMEFRAMES.includes(v))
   const [liveTicks, setLiveTicks] = useState({}) // symbol -> tick payload
   const [liveDepth, setLiveDepth] = useState({}) // symbol -> depth payload
   const [backfillStatus, setBackfillStatus] = useState({}) // symbol -> {status, message}
   const [openSymbols, setOpenSymbols] = useState([]) // below-grid chart cards, up to MAX_OPEN_CHARTS
   const [focusedIndex, setFocusedIndex] = useState(-1)
-  const [listCollapsed, setListCollapsed] = useState(false) // the card's ▼/▲ (was the "Hide list" button)
-  const [headerCollapsed, setHeaderCollapsed] = useState(false) // the page header's ▲/▼ -- hides eyebrow + params
-  const [sortMode, setSortMode] = useState('')
+  const [listCollapsed, setListCollapsed] = usePreference('workspace.listCollapsed', false) // the card's ▼/▲ (was the "Hide list" button)
+  const [headerCollapsed, setHeaderCollapsed] = usePreference('workspace.headerCollapsed', false) // the page header's ▲/▼ -- hides eyebrow + params
+  const [sortMode, setSortMode] = usePreference('workspace.sortMode', '', (v) => typeof v === 'string')
   const [showAllRows, setShowAllRows] = useState(false)
   const [dragIndex, setDragIndex] = useState(null)
   // Off by default, as in the finalized preview: clicking a row replaces the
   // one chart below the grid; the card's "Multi" checkbox opts into up to 4.
-  const [multiOpenMode, setMultiOpenMode] = useState(false)
+  const [multiOpenMode, setMultiOpenMode] = usePreference('workspace.multi', false)
   // instrument id -> 'hidden' | 'right' | 'below' -- the 3-state depth cycle,
   // persisted here (not inside GraphWindow) so it survives drag-reorder
   const [depthModeById, setDepthModeById] = useState({})
@@ -150,7 +143,6 @@ export default function MarketWatch() {
 
   function handleScreenTimeframe(tf) {
     setScreenTimeframe(tf)
-    try { localStorage.setItem(SCREEN_TIMEFRAME_KEY, tf) } catch { /* per-viewer convenience only */ }
   }
 
   useEffect(() => {
@@ -220,7 +212,7 @@ export default function MarketWatch() {
     // real symbol rows are available to match stored ids against
     if (!restoredOpenSymbols.current && symbols.length > 0) {
       restoredOpenSymbols.current = true
-      const storedIds = loadStoredIds(OPEN_SYMBOL_IDS_KEY)
+      const storedIds = getPref('workspace.openCharts', loadStoredIds(OPEN_SYMBOL_IDS_KEY))
       if (storedIds.length > 0) {
         const byId = new Map(symbols.map((s) => [s.id, s]))
         const restored = storedIds.map((id) => byId.get(id)).filter(Boolean).slice(0, MAX_OPEN_CHARTS)
@@ -229,7 +221,7 @@ export default function MarketWatch() {
     }
     if (!restoredTabs.current && symbols.length > 0) {
       restoredTabs.current = true
-      const storedTabIds = loadStoredIds(OPEN_TAB_IDS_KEY)
+      const storedTabIds = getPref('workspace.openTabs', loadStoredIds(OPEN_TAB_IDS_KEY))
       if (storedTabIds.length > 0) {
         const byId = new Map(symbols.map((s) => [s.id, s]))
         const restored = storedTabIds.map((id) => byId.get(id)).filter(Boolean)
@@ -251,6 +243,7 @@ export default function MarketWatch() {
   // session's saved selection with []
   useEffect(() => {
     if (!restoredOpenSymbols.current) return
+    setPref('workspace.openCharts', openSymbols.map((s) => s.id))
     try {
       localStorage.setItem(OPEN_SYMBOL_IDS_KEY, JSON.stringify(openSymbols.map((s) => s.id)))
     } catch {
@@ -260,6 +253,7 @@ export default function MarketWatch() {
 
   useEffect(() => {
     if (!restoredTabs.current) return
+    setPref('workspace.openTabs', tabs.map((s) => s.id))
     try {
       localStorage.setItem(OPEN_TAB_IDS_KEY, JSON.stringify(tabs.map((s) => s.id)))
     } catch {
@@ -500,6 +494,7 @@ export default function MarketWatch() {
                   strategies={strategies}
                   scoreByInstrument={scoreByInstrument}
                   bucketColors={bucketColors}
+                  timeframe={screenTimeframe}
                   showAll={showAllRows}
                   embedded
                   externalSortMode={sortMode}
@@ -521,7 +516,7 @@ export default function MarketWatch() {
               </>
             )}
           </div>
-          <LiveEventsPanel events={liveEvents} />
+          <LiveEventsPanel events={liveEvents} timeframe={screenTimeframe} />
           {openSymbols.length > 0 && (
             <div className="chart-grid" style={{ marginTop: 'var(--space-5)' }}>
               {openSymbols.map((instrument, index) => (

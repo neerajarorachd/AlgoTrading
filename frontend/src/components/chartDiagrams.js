@@ -99,6 +99,9 @@ export function shapesForEvent(ev, data) {
   const label = humanize(ev.activity)
   const dir = ev.direction
 
+  if (ev.activity_type === 'pattern') {
+    return [{ kind: 'ellipse', ...span(data, i, 1), dir, label: ev.name ?? label }]
+  }
   if (ev.activity_type === 'candle_pattern' || ev.activity_type === 'price_action') {
     const s = span(data, i, CANDLES_SPANNED[ev.activity] ?? 1)
     return [{ kind: 'ellipse', ...s, dir, label }]

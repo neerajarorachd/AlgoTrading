@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { eventSections } from './eventSections.js'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -21,7 +22,7 @@ const DIRECTION = {
 // detected (the `activity` WebSocket event) -- added 2026-10-07 with the
 // replay feed: "generate on go the list of generated patterns and
 // indicators, show in list". Works the same against the live feed.
-export default function LiveEventsPanel({ events }) {
+export default function LiveEventsPanel({ events, timeframe }) {
   const [filter, setFilter] = useState('all')
   const shown = events.filter((e) => filter === 'all' || (filter === 'indicators') === isIndicatorSignal(e))
   const patternCount = events.filter((e) => !isIndicatorSignal(e)).length
@@ -60,14 +61,21 @@ export default function LiveEventsPanel({ events }) {
         ) : (
           <table>
             <tbody>
-              {shown.map((e) => {
+              {/* ALGO-34: selected timeframe's last n candles, then other timeframes', then earlier */}
+              {eventSections(shown, timeframe).flatMap((section) => [
+                <tr key={`section-${section.key}`} data-event-section={section.key}>
+                  <td colSpan={6} style={{ padding: '7px 12px 3px', fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-faint)', background: 'var(--surface-2, transparent)', borderTop: '1px solid var(--border)' }}>
+                    {section.label}
+                  </td>
+                </tr>,
+                ...section.rows.map((e) => {
                 const dir = DIRECTION[e.direction]
                 return (
                   <tr key={`${e.symbol}-${e.timeframe}-${e.ts}-${e.activity}`} data-live-event style={{ borderTop: '1px solid var(--border)' }}>
                     <td className="num" style={{ padding: '5px 12px', color: 'var(--text-faint)', width: 60 }}>{formatTimeIST(e.ts)}</td>
                     <td style={{ padding: '5px 8px', fontWeight: 600, width: 120 }}>{e.symbol}</td>
                     <td style={{ padding: '5px 8px', color: 'var(--text-faint)', width: 50 }}>{e.timeframe}</td>
-                    <td style={{ padding: '5px 8px' }}>{e.activity.replaceAll('_', ' ')}</td>
+                    <td style={{ padding: '5px 8px', fontWeight: e.activity_type === 'pattern' ? 700 : undefined }}>{e.name ?? e.activity.replaceAll('_', ' ')}</td>
                     <td style={{ padding: '5px 8px', color: 'var(--text-faint)', width: 110 }}>
                       {isIndicatorSignal(e) ? 'indicator' : e.activity_type.replace('_', ' ')}
                     </td>
@@ -78,7 +86,8 @@ export default function LiveEventsPanel({ events }) {
                     </td>
                   </tr>
                 )
-              })}
+                }),
+              ])}
             </tbody>
           </table>
         )}

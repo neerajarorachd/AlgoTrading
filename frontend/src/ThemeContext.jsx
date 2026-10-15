@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { THEME_VALUES } from './themes.js'
+import { getPref, setPref } from './preferences.js'
 
 // theme.css's own token resolution: any named theme in THEME_VALUES
 // (an explicit user choice, stamped as data-theme) | 'system' (no stamp at
@@ -22,7 +23,10 @@ function readStored() {
 }
 
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(readStored)
+  const [theme, setTheme] = useState(() => {
+    const v = getPref('theme', readStored())
+    return THEME_VALUES.includes(v) || v === 'system' ? v : 'system'
+  })
 
   useEffect(() => {
     if (theme === 'system') {
@@ -30,6 +34,7 @@ export function ThemeProvider({ children }) {
     } else {
       document.documentElement.dataset.theme = theme
     }
+    setPref('theme', theme) // the user's preference (2026-10-15)
     try {
       if (theme === 'system') localStorage.removeItem(STORAGE_KEY)
       else localStorage.setItem(STORAGE_KEY, theme)

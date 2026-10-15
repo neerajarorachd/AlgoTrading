@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import ThemeToggle from './components/kit/ThemeToggle.jsx'
+import { getPref, setPref } from './preferences.js'
 
 const SIDEBAR_KEY = 'algotrading.sidebarWidth'
 const COLLAPSED_KEY = 'algotrading.sidebarCollapsed'
@@ -43,8 +44,11 @@ const NAV_ITEMS = [
 ]
 
 export default function AppShell() {
-  const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth)
-  const [collapsed, setCollapsedState] = useState(readStoredCollapsed)
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const v = getPref('sidebar.width', readStoredSidebarWidth())
+    return v >= SIDEBAR_MIN && v <= SIDEBAR_MAX ? v : SIDEBAR_DEFAULT
+  })
+  const [collapsed, setCollapsedState] = useState(() => !!getPref('sidebar.collapsed', readStoredCollapsed()))
   const [resizerActive, setResizerActive] = useState(false)
   const [resizerHover, setResizerHover] = useState(false)
   const draggingRef = useRef(false)
@@ -54,6 +58,7 @@ export default function AppShell() {
   const applyWidth = useCallback((px) => {
     const clamped = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px))
     setSidebarWidth(clamped)
+    setPref('sidebar.width', clamped)
     try {
       localStorage.setItem(SIDEBAR_KEY, clamped)
     } catch {
@@ -63,6 +68,7 @@ export default function AppShell() {
 
   const setCollapsed = useCallback((next) => {
     setCollapsedState(next)
+    setPref('sidebar.collapsed', !!next)
     try {
       localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0')
     } catch {

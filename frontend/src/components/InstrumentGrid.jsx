@@ -88,7 +88,7 @@ function compareValues(a, b) {
 // parent to reset its dropdown.
 export default function InstrumentGrid({
   symbols, liveTicks, backfillStatus, openSymbols, onToggleOpen, onRemove, onOpenTab,
-  focusedIndex, onFocusedIndexChange, elements = [], strategies = [], scoreByInstrument = {}, bucketColors = {},
+  focusedIndex, onFocusedIndexChange, elements = [], strategies = [], scoreByInstrument = {}, bucketColors = {}, timeframe,
   showAll = false, embedded = false, externalSortMode = '', onColumnSort,
 }) {
   const containerRef = useRef(null)
@@ -253,7 +253,7 @@ export default function InstrumentGrid({
                         {action.label}
                       </button>
                     )}
-                    <EventsCell instrumentId={row.id} compact={!!action} />
+                    <EventsCell instrumentId={row.id} compact={!!action} timeframe={timeframe} />
                     <WatchSelectionCell instrumentId={row.id} elements={elements} strategies={strategies} />
                     <button
                       onClick={(e) => { e.stopPropagation(); onOpenTab(row) }}

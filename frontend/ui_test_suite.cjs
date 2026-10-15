@@ -36,7 +36,25 @@ function checkTrue(name, cond, note) {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}`);
 }
 
+// Saved user preferences (2026-10-15) would carry one run's choices into the
+// next -- every section that checks defaults starts from a clean slate.
+async function resetPrefs() {
+  try {
+    const cur = await (await fetch(`${BASE}/api/preferences`)).json();
+    const keys = Object.keys(cur);
+    if (keys.length) {
+      await fetch(`${BASE}/api/preferences`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.fromEntries(keys.map((k) => [k, null]))),
+      });
+    }
+  } catch (e) {
+    console.log('could not reset preferences:', e.message);
+  }
+}
+
 (async () => {
+  await resetPrefs();
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   const context = await browser.newContext({ viewport: { width: 1400, height: 1400 } });
 
@@ -311,6 +329,69 @@ function checkTrue(name, cond, note) {
     await page.locator('button', { hasText: 'Show less' }).click().catch(() => {});
     await page.waitForTimeout(200);
 
+    // ---- ALGO-34: event lists put the screen timeframe's recent events first ----
+    {
+      const order = (tf) => page.evaluate((screenTf) => {
+        const out = { sections: [], bad: [] };
+        let section = null;
+        for (const tr of document.querySelectorAll('[data-live-events] tbody tr')) {
+          if (tr.dataset.eventSection) { section = tr.dataset.eventSection; out.sections.push(section); continue; }
+          const rowTf = tr.cells[2]?.innerText.trim();
+          if (section === 'selected' && rowTf !== screenTf) out.bad.push({ section, rowTf });
+          if (section === 'recent' && screenTf !== 'all' && rowTf === screenTf) out.bad.push({ section, rowTf });
+        }
+        return out;
+      }, tf);
+      const hasEvents = await eventually(async () => (await order('3min')).sections.length > 0, 20000);
+      if (!hasEvents) {
+        console.log('SKIP  [ALGO-34] live events list is empty on this stack right now');
+      } else {
+        const o = await order('3min');
+        const rank = { selected: 0, recent: 1, older: 2 };
+        checkTrue('[ALGO-34] live list: sections in order (screen timeframe, other timeframes, earlier)',
+          o.sections.every((s, i) => i === 0 || rank[s] > rank[o.sections[i - 1]]), o.sections);
+        checkTrue('[ALGO-34] live list: the first section holds only the screen timeframe (3m)', o.bad.length === 0, o.bad);
+      }
+      // per-stock list (☰): same order
+      const listBtn = page.locator('[data-instrument-grid] button[title="Recent events"]').first();
+      await listBtn.click();
+      const pop = await eventually(async () => await page.locator('[data-event-section]').filter({ has: page.locator('[data-event-row]') }).count() > 0
+        || await page.locator('text=No recent events').count() > 0, 10000);
+      const per = await page.evaluate(() => [...document.querySelectorAll('[data-instrument-grid] [data-event-section]')].map((s) => ({
+        key: s.dataset.eventSection,
+        tfs: [...s.querySelectorAll('[data-event-row]')].map((r) => r.children[1]?.innerText.split(' ')[0]),
+      })));
+      if (!pop || per.length === 0) {
+        console.log('SKIP  [ALGO-34] per-stock list has no events on this stack');
+      } else {
+        const rank = { selected: 0, recent: 1, older: 2 };
+        checkTrue('[ALGO-34] per-stock list: sections in order', per.every((s, i) => i === 0 || rank[s.key] > rank[per[i - 1].key]), per.map((s) => s.key));
+        checkTrue('[ALGO-34] per-stock list: first section is the screen timeframe only', per[0].key !== 'selected' || per[0].tfs.every((t) => t === '3min'), per[0]);
+      }
+      await page.mouse.click(5, 5);
+    }
+
+    // ---- user preferences: the screen reopens the way it was left (2026-10-15) ----
+    {
+      await page.locator('[data-instrument-grid] tbody tr').first().click(); // open one chart
+      await page.waitForTimeout(500);
+      await page.locator('[data-timeframe-bar] [data-timeframe="5min"]').click();
+      await page.waitForTimeout(800); // batched save
+      const saved = await page.evaluate(() => fetch('/api/preferences').then((r) => r.json()));
+      checkTrue('[PREF] the screen timeframe is saved for the user', saved['workspace.screenTimeframe'] === '5min', saved);
+      await page.reload({ waitUntil: 'load' });
+      await page.locator('[data-timeframe-bar]').waitFor({ timeout: 25000 });
+      checkTrue('[PREF] after a reload the screen reopens on 5m', await page.locator('[data-timeframe-bar] [data-timeframe="5min"]').getAttribute('aria-checked') === 'true');
+      await page.locator('[data-timeframe-bar] [data-timeframe="3min"]').click();
+      await page.waitForTimeout(800);
+      await page.locator('table tbody tr').first().waitFor({ timeout: 25000 });
+      // the reload restored the open chart too -- close it so the next steps start clean
+      const restoredCharts = await page.locator('.chart-grid .chart-card').count();
+      checkTrue('[PREF] open charts come back after a reload', restoredCharts > 0, restoredCharts);
+      for (let i = 0; i < restoredCharts; i++) await page.locator('.chart-grid button[title="Close chart"]').first().click();
+      await page.waitForTimeout(300);
+    }
+
     // ---- below-grid chart + 3-state depth cycle ----
     const firstRow = page.locator('table tbody tr').first();
     const firstSymbol = await firstRow.locator('td').first().innerText();
@@ -386,6 +467,8 @@ function checkTrue(name, cond, note) {
     await eventually(async () => await rail.locator('[data-pattern-option]').count() > 0, 30000);
     const patternKeys = await rail.locator('[data-pattern-option]').evaluateAll((els) => els.map((e) => e.dataset.patternOption));
     checkTrue('[ALGO-34] Patterns tab lists the system patterns by type', patternKeys.includes('macd_departure_bull') && patternKeys.includes('bb_squeeze_tight'), patternKeys.length);
+    checkTrue('[ALGO-34] every enabled pattern is ticked by default',
+      await rail.locator('[data-pattern-option] input').evaluateAll((els) => els.length > 0 && els.every((e) => e.checked)));
     await rail.locator('[data-pattern-option="macd_departure_bull"] input').check();
     await rail.locator('[data-panel-tab="strategies"]').click();
     checkTrue('[ALGO-34] Strategies tab shows the strategy list', await rail.locator('[data-strategy-picker], [data-panel="strategies"]').count() > 0);
@@ -439,11 +522,34 @@ function checkTrue(name, cond, note) {
     await page.close();
   }
 
+  // ==================== ready reckoner on the condition maker (ALGO-34) ====================
+  {
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(`${BASE}/strategies`, { waitUntil: 'load' });
+    const btn = page.locator('[data-reckoner-button]').first();
+    await btn.waitFor({ timeout: 20000 }).catch(() => {});
+    checkTrue('[ALGO-34] condition maker has a Ready reckoner button', await btn.count() > 0);
+    if (await btn.count() > 0) {
+      await btn.click();
+      const panel = page.locator('[data-reckoner-panel]');
+      await eventually(async () => await panel.locator('h2').count() > 0, 10000);
+      checkTrue('[ALGO-34] the reckoner opens with the condition language reference',
+        (await panel.locator('h2').first().innerText()).includes('Ready Reckoner') && await panel.locator('table').count() > 0);
+      await page.keyboard.press('Escape');
+      checkTrue('[ALGO-34] Escape closes the reckoner', await eventually(async () => await panel.count() === 0, 2000));
+    }
+    checkTrue('[ALGO-34] no page errors on the strategies page', errors.length === 0, errors);
+    await page.close();
+  }
+
   // ==================== multi-day chart (step 4, 2026-10-08) ====================
   // Needs a stock with several stored sessions; CHART_SYMBOL picks it (the
   // test stack is seeded with BANKBARODA). Skipped if that row isn't there.
   {
     const symbol = process.env.CHART_SYMBOL || 'BANKBARODA';
+    await resetPrefs();
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
@@ -465,6 +571,55 @@ function checkTrue(name, cond, note) {
       checkTrue('[chart] day-boundary lines drawn for earlier sessions', dayLabels >= 2, dayLabels);
       checkTrue('[chart] opening does not load older sessions by itself', !candleCalls.some((u) => u.includes('before=')), candleCalls.filter((u) => u.includes('before=')));
 
+      // ---- ALGO-34: by default only pattern dots; ticking marks exactly what's ticked ----
+      const layer34 = chart.locator('[data-diagrams]');
+      const dots34 = async () => Number(await layer34.getAttribute('data-dot-count'));
+      const tf1 = chart.locator('[data-chart-tf="1min"]');
+      if (await tf1.count() > 0 && await tf1.getAttribute('aria-pressed') !== 'true') {
+        await tf1.click();
+        await page.waitForTimeout(2500);
+      }
+      const marks = await page.evaluate(async (sym) => {
+        const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
+        const m = (await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json()).markers;
+        const byPattern = {};
+        for (const r of m.filter((x) => x.activity_type === 'pattern')) (byPattern[r.activity] ??= new Set()).add(r.ts);
+        const busiest = Object.entries(byPattern).sort((a, b) => b[1].size - a[1].size)[0]?.[0] ?? null;
+        const without = new Set(m.filter((x) => x.activity_type === 'pattern' && x.activity !== busiest).map((x) => x.ts));
+        return {
+          all: new Set(m.map((x) => x.ts)).size,
+          patterns: new Set(m.filter((x) => x.activity_type === 'pattern').map((x) => x.ts)).size,
+          busiest, withoutBusiest: without.size,
+          directions: [...new Set(m.filter((x) => x.activity_type === 'pattern').map((x) => x.direction))],
+        };
+      }, symbol);
+      await eventually(async () => await dots34() === marks.patterns, 25000);
+      check('[ALGO-34] by default the chart shows only pattern dots (raw events off)', await dots34(), marks.patterns);
+      checkTrue('[ALGO-34] pattern hits carry a direction from their type', marks.directions.some((d) => d === 'bull' || d === 'bear'), marks.directions);
+      await chart.locator('[data-chart-tool="indicators"]').click();
+      const rail34 = chart.locator('[data-indicator-tabs]');
+      await rail34.locator('[data-panel-tab="patterns"]').click();
+      await eventually(async () => await rail34.locator('[data-pattern-option] input').count() > 0, 30000);
+      if (marks.busiest) {
+        await rail34.locator(`[data-pattern-option="${marks.busiest}"] input`).uncheck();
+        await eventually(async () => await dots34() === marks.withoutBusiest, 5000);
+        check('[ALGO-34] unticking a pattern removes exactly its dots', await dots34(), marks.withoutBusiest);
+        await rail34.locator(`[data-pattern-option="${marks.busiest}"] input`).check();
+      }
+      await rail34.locator('[data-panel-tab="indicators"]').click();
+      for (const label of ['Patterns, price action & structure', 'Strategy signals']) {
+        await rail34.locator('label', { hasText: label }).locator('input').check();
+      }
+      await eventually(async () => await dots34() === marks.all, 5000);
+      check('[ALGO-34] ticking the raw events adds them (one dot per candle with anything ticked)', await dots34(), marks.all);
+      await page.waitForTimeout(800); // batched save
+      const savedToggles = await page.evaluate(() => fetch('/api/preferences').then((r) => r.json()));
+      checkTrue('[PREF] the chart\'s ticked items are saved for the user',
+        savedToggles['chart.toggles']?.patterns === true && savedToggles['chart.toggles']?.signals === true && Array.isArray(savedToggles['chart.selectedPatterns.v2']),
+        { toggles: savedToggles['chart.toggles'], patterns: savedToggles['chart.selectedPatterns.v2']?.length });
+      await chart.locator('[data-chart-tool="indicators"]').click();
+      await page.waitForTimeout(300);
+
       // hover across the price pane until a marker's names show
       const canvas = chart.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -479,19 +634,8 @@ function checkTrue(name, cond, note) {
       const layer = chart.locator('[data-diagrams]');
       const dotCount = async () => Number(await layer.getAttribute('data-dot-count'));
       const diagramCount = async () => Number(await layer.getAttribute('data-diagram-count') ?? 0);
-      // 1. exactly one dot per candle that has events (all event types) -- on
-      // 1min: a synced chart opens on the screen's timeframe (3m by default)
-      const tf1 = chart.locator('[data-chart-tf="1min"]');
-      if (await tf1.count() > 0 && await tf1.getAttribute('aria-pressed') !== 'true') {
-        await tf1.click();
-        await page.waitForTimeout(2500);
-      }
-      const expectedDots = await page.evaluate(async (sym) => {
-        const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
-        const m = await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json();
-        // pattern hits (ALGO-32) aren't drawn as raw dots yet -- ALGO-34 (5.5) adds them
-        return new Set(m.markers.filter((r) => r.activity_type !== 'pattern').map((r) => r.ts)).size;
-      }, symbol);
+      // 1. exactly one dot per candle that has events (raw events ticked above, on 1min)
+      const expectedDots = marks.all;
       await eventually(async () => await dotCount() === expectedDots, 25000);
       check('[ALGO-25] one dot per candle with events', await dotCount(), expectedDots);
       // 2. hover lists every event of that candle

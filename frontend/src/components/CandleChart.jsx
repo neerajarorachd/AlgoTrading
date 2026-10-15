@@ -35,8 +35,9 @@ import {
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
+import { getPref, setPref } from '../preferences.js'
 import IndicatorPanelTabs from './IndicatorPanelTabs.jsx'
-import { prefetchPatterns, prefetchStrategies } from './patternData.js'
+import { prefetchPatterns, prefetchStrategies, usePatterns } from './patternData.js'
 import { eventTime, humanize, indexData, shapesForEvents, shapesToSvg, snapToCandles } from './chartDiagrams.js'
 
 const TIMEFRAMES = ['1min', '3min', '5min']
@@ -153,9 +154,12 @@ const PANEL_DEFS = [
 // Event dots cover every event type (ALGO-25: "any event"); price action and
 // structure were not marked before.
 const MARKER_DEFS = [
-  { key: 'patterns', label: 'Patterns, price action & structure', types: ['candle_pattern', 'graph_formation', 'price_action', 'structure'] },
-  { key: 'signals', label: 'Strategy signals', types: ['indicator'] },
+  { key: 'patterns', label: 'Patterns, price action & structure', types: ['candle_pattern', 'graph_formation', 'price_action', 'structure'], defaultOn: false },
+  { key: 'signals', label: 'Strategy signals', types: ['indicator'], defaultOn: false },
 ]
+
+// pattern dots by type (ALGO-34) -- same pink/red as the colour scale
+const PATTERN_DOT_COLOR = { bullish: '#1f9d55', bearish: '#d64545', caution: '#e48aae', avoid: '#8e1b1b' }
 
 export default function CandleChart({
   instrument, fillHeight = false, depthOpen, onToggleDepth, onControlsWidthChange,
@@ -170,7 +174,7 @@ export default function CandleChart({
   const depthBtnRef = useRef(null)
   const tfToggleRef = useRef(null)
   const charts = useRef({}) // every chart/series instance, keyed by name -- see the build effect below
-  const toggleState = useRef({}) // key -> bool, read by the toggle*/refresh* functions below
+  const toggleState = useRef({ ...getPref('chart.toggles', {}) }) // key -> bool, the user's last choices (preferences.js)
   const lastPivots = useRef(null) // the raw pivots object, so re-enabling the toggle after turning it off doesn't need a re-fetch
   const lastCandles = useRef([]) // so a theme change can recolor the volume bars (their up/down color is baked in per-bar, not a series-level option)
   const sessionStartRef = useRef(null) // ISO 00:00 IST of the current (newest) session shown -- its indicators/markers are re-fetched per candle
@@ -189,22 +193,35 @@ export default function CandleChart({
   const diagramRef = useRef(null)
   const tooltipRef = useRef(null)
   const priceZoomRef = useRef(0) // ALGO-26 vertical zoom in whole wheel steps; 0 = auto-fit (factor 0.9^steps)
-  const selectedPatternsRef = useRef([]) // pattern keys ticked on the Patterns tab -- marked once pattern hits exist (ALGO-32)
+  const selectedPatternsRef = useRef(getPref('chart.selectedPatterns.v2', null) ?? []) // pattern keys ticked on the Patterns tab (all enabled until changed)
   const selectedStrategiesRef = useRef([]) // strategy ids ticked on the Strategies tab
   const userPaneRef = useRef({ chart: null, at: 0 }) // the sub-pane the viewer is scrolling right now (see the pane sync)
   const [readout, setReadout] = useState({}) // latest value per picker row, shown beside each checkbox
 
-  const [timeframe, setTimeframe] = useState(TIMEFRAMES.includes(screenTimeframe) ? screenTimeframe : '1min')
+  const savedTf = getPref('chart.timeframe', '1min')
+  const [syncTf, setSyncTfState] = useState(() => getPref('chart.syncTimeframe', true) !== false)
+  const [timeframe, setTimeframe] = useState(() => (
+    screenTimeframe !== undefined && syncTf && TIMEFRAMES.includes(screenTimeframe) ? screenTimeframe
+      : TIMEFRAMES.includes(savedTf) ? savedTf : '1min'))
   // Sync with the screen's timeframe bar (2026-10-14): on by default where a
   // screen timeframe exists; picking a timeframe on the chart itself turns it
   // off. "All" on the screen leaves the chart where it is.
-  const [syncTf, setSyncTf] = useState(true)
+  const setSyncTf = (next) => setSyncTfState((prev) => {
+    const v = typeof next === 'function' ? next(prev) : next
+    setPref('chart.syncTimeframe', v)
+    return v
+  })
   const canSync = screenTimeframe !== undefined
   useEffect(() => {
     if (canSync && syncTf && TIMEFRAMES.includes(screenTimeframe)) setTimeframe(screenTimeframe)
   }, [canSync, syncTf, screenTimeframe])
   const [asOfDate, setAsOfDate] = useState(null)
-  const [indicatorsOpen, setIndicatorsOpen] = useState(false)
+  const [indicatorsOpen, setIndicatorsOpenState] = useState(() => !!getPref('chart.indicatorsOpen', false))
+  const setIndicatorsOpen = (next) => setIndicatorsOpenState((prev) => {
+    const v = typeof next === 'function' ? next(prev) : next
+    setPref('chart.indicatorsOpen', v)
+    return v
+  })
   const [reloadKey, setReloadKey] = useState(0)
   const [, forceRender] = useState(0) // bumped after a toggle so the picker's checked state re-renders
   const { theme } = useTheme()
@@ -223,6 +240,14 @@ export default function CandleChart({
 
   // the Patterns/Strategies tabs' lists load with the chart, not when the panel opens
   useEffect(() => { prefetchPatterns(); prefetchStrategies() }, [])
+  // default marks with the panel closed: every enabled pattern, until the user
+  // picks on the Patterns tab (that choice is saved and wins)
+  const allPatterns = usePatterns()
+  useEffect(() => {
+    if (!allPatterns || getPref('chart.selectedPatterns.v2', null) !== null) return
+    selectedPatternsRef.current = allPatterns.filter((p) => p.enabled).map((p) => p.key)
+    refreshMarkers()
+  }, [allPatterns]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- build every chart/series once, on mount ----
   useEffect(() => {
@@ -377,6 +402,7 @@ export default function CandleChart({
       drawDaySeparators()
       drawDiagrams()
     }
+    applySavedVisibility()
     syncRailHeight()
     updateTimeAxisVisibility()
 
@@ -684,13 +710,15 @@ export default function CandleChart({
   // ONE dot per candle with any shown event (ALGO-25), coloured by the net
   // direction of its events; names and details live in the hover list.
   function refreshMarkers() {
-    const shownTypes = MARKER_DEFS.filter((d) => isOn(d.key, true)).flatMap((d) => d.types)
+    const shownTypes = MARKER_DEFS.filter((d) => isOn(d.key, d.defaultOn)).flatMap((d) => d.types)
+    const shownPatterns = new Set(selectedPatternsRef.current)
     // every event on the nearest candle of this timeframe (a 3/5-min event
     // can fall where no candle exists); re-snapped whenever candles change
     snappedEventsRef.current = snapToCandles(allEventsRef.current, lastCandles.current)
     const byTime = new Map()
     for (const r of snappedEventsRef.current) {
-      if (!shownTypes.includes(r.activity_type)) continue
+      const shown = r.activity_type === 'pattern' ? shownPatterns.has(r.activity) : shownTypes.includes(r.activity_type)
+      if (!shown) continue
       const t = eventTime(r)
       byTime.set(t, [...(byTime.get(t) ?? []), r])
     }
@@ -698,6 +726,13 @@ export default function CandleChart({
     const dots = []
     if (isOn('events', true)) {
       for (const [time, events] of byTime) {
+        // a pattern hit leads its candle (ALGO-34): bigger dot, the top
+        // pattern's colour -- green bullish, red bearish, pink caution, dark red avoid
+        const top = events.filter((e) => e.activity_type === 'pattern').sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0]
+        if (top) {
+          dots.push({ time, position: 'aboveBar', shape: 'circle', size: 1.1, color: PATTERN_DOT_COLOR[top.pattern_type] ?? tok('--accent') })
+          continue
+        }
         const net = events.reduce((n, e) => n + (e.direction === 'bull' ? 1 : e.direction === 'bear' ? -1 : 0), 0)
         dots.push({
           time, position: 'aboveBar', shape: 'circle', size: 0.7,
@@ -718,16 +753,20 @@ export default function CandleChart({
     head.textContent = `${events.length} event${events.length > 1 ? 's' : ''} · ${formatIST(eventTime(events[0]))}`
     head.style.cssText = 'font-size:10.5px;font-weight:700;color:var(--text-faint);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em'
     tip.append(head)
-    for (const e of events) {
+    const ordered = [...events].sort((a, b) => (b.activity_type === 'pattern') - (a.activity_type === 'pattern'))
+    for (const e of ordered) {
+      const isPattern = e.activity_type === 'pattern'
       const row = document.createElement('div')
       row.setAttribute('data-event-row', '')
+      if (isPattern) row.setAttribute('data-pattern-row', e.activity)
       row.style.cssText = 'display:flex;align-items:center;gap:6px;white-space:nowrap'
       const dot = document.createElement('span')
-      dot.style.cssText = `width:7px;height:7px;border-radius:50%;flex:none;background:${e.direction === 'bull' ? 'var(--good)' : e.direction === 'bear' ? 'var(--critical)' : 'var(--text-faint)'}`
+      dot.style.cssText = `width:7px;height:7px;border-radius:50%;flex:none;background:${isPattern && PATTERN_DOT_COLOR[e.pattern_type] ? PATTERN_DOT_COLOR[e.pattern_type] : e.direction === 'bull' ? 'var(--good)' : e.direction === 'bear' ? 'var(--critical)' : 'var(--text-faint)'}`
       const name = document.createElement('span')
-      name.textContent = humanize(e.activity)
+      name.textContent = isPattern ? (e.name ?? humanize(e.activity)) : humanize(e.activity)
+      if (isPattern) name.style.fontWeight = '700'
       const kind = document.createElement('span')
-      kind.textContent = humanize(e.activity_type)
+      kind.textContent = isPattern ? `Pattern${e.score != null ? ` · ${Number(e.score).toFixed(1)}` : ''}` : humanize(e.activity_type)
       kind.style.cssText = 'color:var(--text-faint);font-weight:500;margin-left:auto;padding-left:10px'
       row.append(dot, name, kind)
       tip.append(row)
@@ -831,9 +870,28 @@ export default function CandleChart({
   function isOn(key, defaultOn = true) {
     return toggleState.current[key] !== undefined ? toggleState.current[key] : defaultOn
   }
+  function setToggle(key, value) {
+    toggleState.current[key] = value
+    setPref('chart.toggles', { ...toggleState.current })
+  }
+  // after a (re)build: the user's saved overlay/panel choices, not the defaults
+  function applySavedVisibility() {
+    const c = charts.current
+    for (const d of OVERLAY_DEFS) {
+      const on = isOn(d.key, d.defaultOn)
+      if (d.key === 'pivots') continue // applyPivots reads toggleState itself
+      if (d.key === 'bb') [c.bbUpper, c.bbMiddle, c.bbLower, c.bbFillUpper, c.bbFillLower].forEach((s) => s?.applyOptions({ visible: on }))
+      else c[d.key]?.applyOptions({ visible: on })
+    }
+    for (const d of PANEL_DEFS) {
+      const elRef = d.key === 'rsi' ? rsiElRef : d.key === 'macd' ? macdElRef : stochElRef
+      const wrapper = elRef.current?.closest('[data-pane]')
+      if (wrapper) wrapper.hidden = !isOn(d.key, true)
+    }
+  }
   function toggleOverlay(key) {
     const next = !isOn(key, OVERLAY_DEFS.find((d) => d.key === key)?.defaultOn)
-    toggleState.current[key] = next
+    setToggle(key, next)
     const c = charts.current
     if (key === 'volume') c.volume.applyOptions({ visible: next })
     else if (key === 'vwap') c.vwap.applyOptions({ visible: next })
@@ -844,7 +902,7 @@ export default function CandleChart({
   }
   function togglePanel(key) {
     const next = !isOn(key, true)
-    toggleState.current[key] = next
+    setToggle(key, next)
     const elRef = key === 'rsi' ? rsiElRef : key === 'macd' ? macdElRef : stochElRef
     const wrapper = elRef.current?.closest('[data-pane]')
     if (wrapper) wrapper.hidden = !next
@@ -853,19 +911,19 @@ export default function CandleChart({
     forceRender((n) => n + 1)
   }
   function toggleMarkerGroup(key) {
-    const next = !isOn(key, true)
-    toggleState.current[key] = next
+    const next = !isOn(key, MARKER_DEFS.find((d) => d.key === key)?.defaultOn ?? false)
+    setToggle(key, next)
     refreshMarkers()
     forceRender((n) => n + 1)
   }
   // toolbar toggles (ALGO-25): event dots on/off, all diagrams on/off
   function toggleEvents() {
-    toggleState.current.events = !isOn('events', true)
+    setToggle('events', !isOn('events', true))
     refreshMarkers()
     forceRender((n) => n + 1)
   }
   function toggleDiagrams() {
-    toggleState.current.diagrams = !isOn('diagrams', false)
+    setToggle('diagrams', !isOn('diagrams', false))
     drawDiagrams()
     forceRender((n) => n + 1)
   }
@@ -931,7 +989,7 @@ export default function CandleChart({
           <div ref={tfToggleRef} style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
             {TIMEFRAMES.map((tf) => (
               <button
-                key={tf} onClick={() => { setTimeframe(tf); if (canSync && tf !== screenTimeframe) setSyncTf(false) }}
+                key={tf} onClick={() => { setTimeframe(tf); setPref('chart.timeframe', tf); if (canSync && tf !== screenTimeframe) setSyncTf(false) }}
                 data-chart-tf={tf} aria-pressed={tf === timeframe}
                 style={{ border: 'none', fontSize: 12, fontWeight: 600, padding: '5px 10px', color: tf === timeframe ? 'var(--text-on-accent)' : 'var(--text-dim)', background: tf === timeframe ? 'var(--accent)' : 'transparent' }}
               >
@@ -976,10 +1034,10 @@ export default function CandleChart({
             }}
           >
             {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
-            <IndicatorPanelTabs onPatternsChange={(keys) => { selectedPatternsRef.current = keys }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
+            <IndicatorPanelTabs onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
               <IndicatorGroup title="Overlays" defs={OVERLAY_DEFS} isOn={isOn} onToggle={toggleOverlay} values={readout} />
               <IndicatorGroup title="Sub-panels" defs={PANEL_DEFS} isOn={(k) => isOn(k, true)} onToggle={togglePanel} values={readout} />
-              <IndicatorGroup title="Raw events" defs={MARKER_DEFS} isOn={(k) => isOn(k, true)} onToggle={toggleMarkerGroup} values={readout} />
+              <IndicatorGroup title="Raw events" defs={MARKER_DEFS} isOn={isOn} onToggle={toggleMarkerGroup} values={readout} />
             </IndicatorPanelTabs>
           </div>
         )}

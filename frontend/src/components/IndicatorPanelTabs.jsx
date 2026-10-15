@@ -4,35 +4,35 @@
 // component only owns which tab is open and the chart's selection, remembered
 // per viewer and reported through onPatternsChange/onStrategiesChange so the
 // chart can mark them (pattern marks arrive with pattern evaluation, ALGO-32).
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import PatternPicker, { Note } from './PatternPicker.jsx'
 import StrategyPicker from './StrategyPicker.jsx'
+import { usePatterns } from './patternData.js'
+import { usePreference } from '../preferences.js'
 
 const TABS = [
   { key: 'indicators', label: 'Indicators' },
   { key: 'patterns', label: 'Patterns' },
   { key: 'strategies', label: 'Strategies' },
 ]
-const STORE = { tab: 'chart.panelTab', patterns: 'chart.selectedPatterns', strategies: 'chart.selectedStrategies' }
-
-function load(key, fallback) {
-  try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v) } catch { return fallback }
-}
-function save(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* private mode etc. -- fine */ }
-}
+const isList = (v) => Array.isArray(v)
 function toggled(list, id) {
   return list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
 }
 
 export default function IndicatorPanelTabs({ children, onPatternsChange, onStrategiesChange }) {
-  const [tab, setTab] = useState(() => load(STORE.tab, 'indicators'))
-  const [patterns, setPatterns] = useState(() => load(STORE.patterns, []))
-  const [strategies, setStrategies] = useState(() => load(STORE.strategies, []))
+  // the user's last choices (preferences.js). Patterns: every enabled pattern
+  // is ticked until the user changes the selection (ALGO-34 default: the chart
+  // shows pattern dots, raw events off).
+  const [tab, setTab] = usePreference('chart.panelTab', 'indicators', (v) => TABS.some((t) => t.key === v))
+  const [storedPatterns, setPatterns] = usePreference('chart.selectedPatterns.v2', null, (v) => v === null || isList(v))
+  const [strategies, setStrategies] = usePreference('chart.selectedStrategies', [], isList)
+  const allPatterns = usePatterns()
+  const patterns = storedPatterns ?? (allPatterns ? allPatterns.filter((p) => p.enabled).map((p) => p.key) : [])
+  const patternsKey = patterns.join(',')
 
-  useEffect(() => { save(STORE.tab, tab) }, [tab])
-  useEffect(() => { save(STORE.patterns, patterns); onPatternsChange?.(patterns) }, [patterns]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { save(STORE.strategies, strategies); onStrategiesChange?.(strategies) }, [strategies]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onPatternsChange?.(patterns) }, [patternsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onStrategiesChange?.(strategies) }, [strategies]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const count = { patterns: patterns.length, strategies: strategies.length }
   return (
@@ -59,8 +59,8 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
         {tab === 'indicators' && children}
         {tab === 'patterns' && (
           <>
-            <PatternPicker selected={patterns} onToggle={(key) => setPatterns((prev) => toggled(prev, key))} />
-            <Note>Ticked patterns are marked on the chart once pattern evaluation is live.</Note>
+            <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} />
+            <Note>Ticked patterns get a dot where they form. Raw events (Indicators tab) are off unless ticked there.</Note>
           </>
         )}
         {tab === 'strategies' && (

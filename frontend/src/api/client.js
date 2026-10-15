@@ -13,6 +13,9 @@ async function request(path, options) {
 
 export const listSymbols = () => request('/api/symbols')
 
+// the condition language's ready reckoner (docs/condition_ready_reckoner.md)
+export const getConditionReckoner = () => request('/api/condition-reckoner')
+
 // Recent events for one instrument (doji formed, MACD crossover, etc, newest
 // first) -- the Market Watch per-row events list.
 export const getRecentActivities = (instrumentId, limit) => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { eventSections } from './eventSections.js'
 import { getActivityCounts, getRecentActivities, getWatchSelection, putWatchSelection } from '../api/client.js'
 import Button from './kit/Button.jsx'
 
@@ -60,7 +61,7 @@ export function CountBadge({ label, count, title }) {
   )
 }
 
-export function EventsCell({ instrumentId, compact = false }) {
+export function EventsCell({ instrumentId, compact = false, timeframe }) {
   const [open, setOpen] = useState(false)
   const [events, setEvents] = useState(null) // null = not loaded yet
   const [error, setError] = useState(null)
@@ -75,7 +76,7 @@ export function EventsCell({ instrumentId, compact = false }) {
     const next = !open
     setOpen(next)
     if (next && events === null) {
-      getRecentActivities(instrumentId).then(setEvents).catch((err) => setError(err.message))
+      getRecentActivities(instrumentId, 60).then(setEvents).catch((err) => setError(err.message))
     }
   }
 
@@ -120,10 +121,21 @@ export function EventsCell({ instrumentId, compact = false }) {
           {error && <div style={{ color: 'var(--critical)' }}>{error}</div>}
           {!error && events === null && <div style={{ color: 'var(--text-faint)' }}>Loading…</div>}
           {!error && events?.length === 0 && <div style={{ color: 'var(--text-faint)' }}>No recent events</div>}
-          {events?.map((ev, i) => (
-            <div key={i} style={{ padding: '4px 0', borderBottom: i < events.length - 1 ? '1px solid var(--border)' : undefined }}>
-              <div>{ev.label}</div>
-              <div style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{ev.timeframe} · {formatEventTs(ev.ts)} IST</div>
+          {/* ALGO-34: selected timeframe's last n candles, then other timeframes', then earlier */}
+          {events?.length > 0 && eventSections(events, timeframe).map((section) => (
+            <div key={section.key} data-event-section={section.key}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-faint)', padding: '6px 0 2px', borderTop: section.key === 'selected' ? undefined : '1px solid var(--border)' }}>
+                {section.label}
+              </div>
+              {section.rows.map((ev, i) => (
+                <div key={i} data-event-row style={{ padding: '4px 0', borderBottom: i < section.rows.length - 1 ? '1px solid var(--border)' : undefined }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {ev.direction && <span style={{ width: 7, height: 7, borderRadius: '50%', flex: 'none', background: ev.direction === 'bull' ? 'var(--good)' : 'var(--critical)' }} />}
+                    <span style={{ fontWeight: ev.activity_type === 'pattern' ? 700 : 400 }}>{ev.label}</span>
+                  </div>
+                  <div style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{ev.timeframe} · {formatEventTs(ev.ts)} IST{ev.activity_type === 'pattern' ? ' · pattern' : ''}</div>
+                </div>
+              ))}
             </div>
           ))}
         </div>
