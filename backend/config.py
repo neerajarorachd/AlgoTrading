@@ -9,7 +9,11 @@ DHAN_TOKEN_TYPE_REST = 3   # FIXED3 — AlgoTrading's REST calls (quotes, instru
 
 
 def cors_origins() -> list[str]:
-    raw = os.environ.get("CORS_ORIGINS", "http://localhost:5173")
+    # The page's own address must be listed: a browser on any other origin has
+    # every socket connection rejected (HTTP 400) and retries in a loop, which
+    # also held its API calls for seconds (ALGO-36). Both spellings of the
+    # local dev address are accepted by default.
+    raw = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
