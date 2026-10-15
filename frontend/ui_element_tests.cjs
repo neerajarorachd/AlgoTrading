@@ -53,6 +53,15 @@ async function setMode(card, tool, read, mode) {
   return (await read(card)) === mode
 }
 const box = async (loc) => ((await loc.count()) ? loc.first().boundingBox() : null)
+// Graph only (2026-10-15) is a saved per-user setting that another open
+// session can turn on mid-run -- every layout test starts with it off
+async function graphOnlyOff(card) {
+  const b = card.locator('[data-chart-tool="graphonly"]').first()
+  if ((await b.count()) && (await b.getAttribute('aria-pressed')) === 'true') {
+    await b.click()
+    await new Promise((r) => setTimeout(r, 400))
+  }
+}
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -95,6 +104,7 @@ const box = async (loc) => ((await loc.count()) ? loc.first().boundingBox() : nu
       const card = page.locator('.chart-grid .chart-card').first()
       await card.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 })
       await page.waitForTimeout(1500)
+      await graphOnlyOff(card)
       await setMode(card, 'depth', depthMode, 'hidden')
       await setMode(card, 'indicators', indicatorsMode, 'hidden')
       const stack = card.locator('[data-chart-stack]')
@@ -192,6 +202,8 @@ const box = async (loc) => ((await loc.count()) ? loc.first().boundingBox() : nu
       const card2 = page.locator('.chart-grid .chart-card').first()
       await card2.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 })
       await page.waitForTimeout(2500)
+      await graphOnlyOff(card2)
+      await page.waitForTimeout(500)
       const fit = async () => card2.evaluate((el) => {
         const stack = el.querySelector('[data-chart-stack]').getBoundingClientRect()
         const last = [...el.querySelectorAll('[data-chart-stack] canvas')].reduce((m, c) => Math.max(m, c.getBoundingClientRect().bottom), 0)
@@ -207,8 +219,67 @@ const box = async (loc) => ((await loc.count()) ? loc.first().boundingBox() : nu
       checkTrue('E9 Chart: ...and adding Depth on top does not grow it either',
         f.emptyBelowCharts <= 4 && Math.abs(f.colH - f.stackH) <= 1, f)
 
-      await setMode(card2, 'depth', depthMode, 'hidden')
-      await setMode(card2, 'indicators', indicatorsMode, 'hidden')
+      // E10: "Graph only" hides the panels -- RSI/MACD/Stoch panes, Depth,
+      // Indicators window -- leaves the price graph as it is, and turning it
+      // off brings back exactly the layout before (user, 2026-10-15)
+      const layout = (c) => c.evaluate((el) => ({
+        panes: [...el.querySelectorAll('[data-chart-stack] [data-pane]')].map((p) => !p.hidden),
+        right: !!el.querySelector('[data-right-column]'),
+        rightDepth: !!el.querySelector('[data-right-column] [data-side-panel]'),
+        rightIndicators: !!el.querySelector('[data-right-column] [data-indicators-window]'),
+        below: !!el.querySelector('[data-bottom-row]'),
+        belowDepth: !!el.querySelector('[data-bottom-row] [data-side-panel]'),
+        belowIndicators: !!el.querySelector('[data-bottom-row] [data-indicators-window]'),
+        dots: el.querySelector('[data-diagrams]')?.getAttribute('data-dot-count'),
+      }))
+      const tool = (name) => card2.locator(`[data-chart-tool="${name}"]`).first()
+      // the mixed layout: RSI off, MACD + Stoch on, Depth below, Indicators right
+      if (await tool('rsi').getAttribute('aria-pressed') === 'true') await tool('rsi').click()
+      for (const k of ['macd', 'stoch']) if (await tool(k).getAttribute('aria-pressed') !== 'true') await tool(k).click()
+      await setMode(card2, 'depth', depthMode, 'below')
+      await setMode(card2, 'indicators', indicatorsMode, 'right')
+      await page.waitForTimeout(500)
+      const before = await layout(card2)
+      await tool('graphonly').click()
+      await page.waitForTimeout(500)
+      const during = await layout(card2)
+      checkTrue('E10 Chart: Graph only hides every panel (panes, Depth, Indicators)',
+        during.panes.every((v) => !v) && !during.right && !during.below, during)
+      checkTrue('E10 Chart: ...the price graph stays as it was',
+        await card2.locator('[data-chart-stack] canvas').first().isVisible() && Math.abs(Number(during.dots) - Number(before.dots)) <= 1, { before: before.dots, during: during.dots })
+      checkTrue('E10 Chart: ...and the panel buttons are inactive meanwhile',
+        await tool('depth').isDisabled() && await tool('indicators').isDisabled() && await tool('rsi').isDisabled())
+      await tool('graphonly').click()
+      await page.waitForTimeout(600)
+      const after = await layout(card2)
+      checkTrue('E10 Chart: turning Graph only off restores exactly the layout before',
+        JSON.stringify({ ...after, dots: null }) === JSON.stringify({ ...before, dots: null }), { before, after })
+
+      // E11: Graph only is remembered across a reload; turning it off then
+      // still restores the same layout (Depth's place is per page, so only
+      // the saved parts are compared: panes and Indicators)
+      await tool('graphonly').click()
+      await page.waitForTimeout(1000) // saved
+      await page.reload({ waitUntil: 'load' })
+      await page.waitForFunction(() => document.querySelectorAll('[data-instrument-grid] tbody tr').length > 1, null, { timeout: 30000 })
+      const card3 = page.locator('.chart-grid .chart-card').first()
+      await card3.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 })
+      await page.waitForTimeout(1500)
+      const reloaded = await layout(card3)
+      checkTrue('E11 Chart: Graph only is still on after a reload',
+        await card3.locator('[data-chart-tool="graphonly"]').first().getAttribute('aria-pressed') === 'true' && reloaded.panes.every((v) => !v) && !reloaded.right && !reloaded.below, reloaded)
+      await card3.locator('[data-chart-tool="graphonly"]').first().click()
+      await page.waitForTimeout(600)
+      const restored = await layout(card3)
+      checkTrue('E11 Chart: ...and turning it off restores the saved panes and Indicators',
+        JSON.stringify(restored.panes) === JSON.stringify(before.panes) && restored.rightIndicators === before.rightIndicators, { before, restored })
+
+      // back to defaults
+      await graphOnlyOff(card3)
+      const t3 = (name) => card3.locator(`[data-chart-tool="${name}"]`).first()
+      if (await t3('rsi').getAttribute('aria-pressed') !== 'true') await t3('rsi').click()
+      await setMode(card3, 'depth', depthMode, 'hidden')
+      await setMode(card3, 'indicators', indicatorsMode, 'hidden')
       await page.close()
     }
   } catch (err) {

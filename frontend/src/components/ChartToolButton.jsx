@@ -18,18 +18,20 @@ const ICONS = {
   macd: <><rect x="2" y="8" width="2" height="5" /><rect x="5.2" y="6" width="2" height="7" /><rect x="8.4" y="9" width="2" height="4" /><rect x="11.6" y="7" width="2" height="6" /><path d="M1.5 6.5 5 3.5 9 5 14.5 2.5" stroke="currentColor" strokeWidth="1.3" fill="none" /></>,
   // two crossing lines (%K / %D)
   stoch: <><path d="M1.5 12 5 5 8.5 9 14.5 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinejoin="round" /><path d="M1.5 6 5 9.5 9 4.5 14.5 10" stroke="currentColor" strokeWidth="1.1" fill="none" opacity=".7" /></>,
+  // a framed candle: the price graph alone
+  graphonly: <><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M8 4.5v7" stroke="currentColor" strokeWidth="1.2" /><rect x="6.2" y="6" width="3.6" height="4" rx=".6" /></>,
   // two linked rings (follow the screen's timeframe)
   sync: <><rect x="1.5" y="5" width="7.5" height="6" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="7" y="5" width="7.5" height="6" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" /></>,
 }
 
-const ChartToolButton = forwardRef(function ChartToolButton({ tool, label, on, onClick, badge }, ref) {
+const ChartToolButton = forwardRef(function ChartToolButton({ tool, label, on, onClick, badge, disabled = false }, ref) {
   return (
     <button
-      ref={ref} type="button" onClick={onClick}
-      data-chart-tool={tool} aria-label={label} aria-pressed={on} title={label}
+      ref={ref} type="button" onClick={onClick} disabled={disabled}
+      data-chart-tool={tool} aria-label={label} aria-pressed={on} title={disabled ? `${label} -- hidden while Graph only is on` : label}
       style={{
         position: 'relative', width: 32, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        border: '1.5px solid', borderRadius: 'var(--radius-md)', cursor: 'pointer', padding: 0,
+        border: '1.5px solid', borderRadius: 'var(--radius-md)', cursor: disabled ? 'not-allowed' : 'pointer', padding: 0, opacity: disabled ? 0.4 : 1,
         borderColor: on ? 'var(--accent)' : 'var(--border)',
         background: on ? 'var(--accent-soft)' : 'transparent',
         color: on ? 'var(--accent-text)' : 'var(--text-faint)',

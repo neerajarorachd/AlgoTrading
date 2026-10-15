@@ -768,7 +768,7 @@ async function restorePrefs() {
       const tools = await chart.locator('[data-chart-toolbar] [data-chart-tool]').evaluateAll((els) => els.map((e) => ({
         tool: e.dataset.chartTool, title: e.getAttribute('title'), pressed: e.getAttribute('aria-pressed'), text: e.innerText.trim(),
       })));
-      check('[ALGO-25] toolbar has Depth, Indicators, Events, Diagrams, RSI, MACD, Stoch', tools.map((t) => t.tool), ['depth', 'indicators', 'events', 'diagrams', 'rsi', 'macd', 'stoch']);
+      check('[ALGO-25] toolbar has Depth, Indicators, Events, Diagrams, RSI, MACD, Stoch, Graph only', tools.map((t) => t.tool), ['depth', 'indicators', 'events', 'diagrams', 'rsi', 'macd', 'stoch', 'graphonly']);
       checkTrue('[ALGO-25] every tool is an icon with a tooltip and an on/off state',
         tools.every((t) => t.title && (t.pressed === 'true' || t.pressed === 'false') && !/[a-z]{3,}/i.test(t.text)), tools);
       // ---- ALGO-26: wheel over the price axis zooms height, not width ----

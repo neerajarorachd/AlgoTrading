@@ -230,6 +230,11 @@ export default function CandleChart({
     return v
   })
   const indicatorsOpen = indicatorsMode !== 'hidden'
+  // "Graph only" (2026-10-15): hides the panels -- RSI/MACD/Stoch panes, Depth,
+  // the Indicators window -- WITHOUT touching their own settings, so turning it
+  // off brings back exactly the layout before. The price graph is unchanged.
+  const [graphOnly, setGraphOnlyState] = useState(() => !!getPref('chart.graphOnly', false))
+  const graphOnlyRef = useRef(graphOnly)
   const [reloadKey, setReloadKey] = useState(0)
   const [, forceRender] = useState(0) // bumped after a toggle so the picker's checked state re-renders
   const { theme } = useTheme()
@@ -897,7 +902,7 @@ export default function CandleChart({
     for (const d of PANEL_DEFS) {
       const elRef = d.key === 'rsi' ? rsiElRef : d.key === 'macd' ? macdElRef : stochElRef
       const wrapper = elRef.current?.closest('[data-pane]')
-      if (wrapper) wrapper.hidden = !isOn(d.key, true)
+      if (wrapper) wrapper.hidden = !paneShown(d.key)
     }
   }
   function toggleOverlay(key) {
@@ -916,7 +921,7 @@ export default function CandleChart({
     setToggle(key, next)
     const elRef = key === 'rsi' ? rsiElRef : key === 'macd' ? macdElRef : stochElRef
     const wrapper = elRef.current?.closest('[data-pane]')
-    if (wrapper) wrapper.hidden = !next
+    if (wrapper) wrapper.hidden = !paneShown(key)
     updateTimeAxisVisibility()
     syncRailHeight()
     forceRender((n) => n + 1)
@@ -938,13 +943,32 @@ export default function CandleChart({
     drawDiagrams()
     forceRender((n) => n + 1)
   }
+  function paneShown(key) {
+    return !graphOnlyRef.current && isOn(key, true)
+  }
+  function applyPaneVisibility() {
+    for (const d of PANEL_DEFS) {
+      const elRef = d.key === 'rsi' ? rsiElRef : d.key === 'macd' ? macdElRef : stochElRef
+      const wrapper = elRef.current?.closest('[data-pane]')
+      if (wrapper) wrapper.hidden = !paneShown(d.key)
+    }
+    updateTimeAxisVisibility()
+    syncRailHeight()
+  }
+  function toggleGraphOnly() {
+    const v = !graphOnlyRef.current
+    graphOnlyRef.current = v
+    setPref('chart.graphOnly', v)
+    setGraphOnlyState(v)
+    applyPaneVisibility()
+  }
   function updateTimeAxisVisibility() {
     const c = charts.current
     const entries = [
       { chart: c.main, visible: true },
-      { chart: c.rsi, visible: isOn('rsi', true) },
-      { chart: c.macd, visible: isOn('macd', true) },
-      { chart: c.stoch, visible: isOn('stoch', true) },
+      { chart: c.rsi, visible: paneShown('rsi') },
+      { chart: c.macd, visible: paneShown('macd') },
+      { chart: c.stoch, visible: paneShown('stoch') },
     ]
     const visible = entries.filter((e) => e.visible)
     const last = visible[visible.length - 1]
@@ -974,7 +998,7 @@ export default function CandleChart({
           <div role="toolbar" aria-label="Chart tools" data-chart-toolbar style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {onCycleDepth ? (
               <ChartToolButton
-                ref={depthBtnRef} tool="depth" onClick={onCycleDepth} on={depthMode !== 'hidden'}
+                ref={depthBtnRef} tool="depth" onClick={onCycleDepth} on={depthMode !== 'hidden'} disabled={graphOnly}
                 badge={depthMode === 'right' ? '→' : depthMode === 'below' ? '↓' : null}
                 label={depthMode === 'right' ? 'Depth: shown beside the chart (click to move below)' : depthMode === 'below' ? 'Depth: shown below the chart (click to hide)' : 'Depth: hidden (click to show beside the chart)'}
               />
@@ -982,7 +1006,7 @@ export default function CandleChart({
               <ChartToolButton ref={depthBtnRef} tool="depth" onClick={onToggleDepth} on={!!depthOpen} label={depthOpen ? 'Depth: shown (click to hide)' : 'Depth: hidden (click to show)'} />
             ) : null}
             <ChartToolButton
-              tool="indicators" onClick={cycleIndicatorsMode} on={indicatorsOpen}
+              tool="indicators" onClick={cycleIndicatorsMode} on={indicatorsOpen} disabled={graphOnly}
               badge={indicatorsMode === 'right' ? '→' : indicatorsMode === 'below' ? '↓' : null}
               label={indicatorsMode === 'right' ? 'Indicators window: beside the chart (click to move below)' : indicatorsMode === 'below' ? 'Indicators window: below the chart (click to hide)' : 'Indicators window: hidden (click to show beside the chart)'}
             />
@@ -991,8 +1015,17 @@ export default function CandleChart({
             <ChartToolButton tool="diagrams" onClick={toggleDiagrams} on={isOn('diagrams', false)} label={isOn('diagrams', false) ? 'Diagrams: all shown (click to hide)' : 'Diagrams: show all (or click a dot to draw just its own)'} />
             <span aria-hidden="true" style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 2px' }} />
             {PANEL_DEFS.map((d) => (
-              <ChartToolButton key={d.key} tool={d.key} onClick={() => togglePanel(d.key)} on={isOn(d.key, true)} label={`${d.label} panel: ${isOn(d.key, true) ? 'shown (click to hide)' : 'hidden (click to show)'}`} />
+              <ChartToolButton key={d.key} tool={d.key} onClick={() => togglePanel(d.key)} on={isOn(d.key, true)} disabled={graphOnly} label={`${d.label} panel: ${isOn(d.key, true) ? 'shown (click to hide)' : 'hidden (click to show)'}`} />
             ))}
+            {!onToggleDepth && (
+              <>
+                <span aria-hidden="true" style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 2px' }} />
+                <ChartToolButton
+                  tool="graphonly" onClick={toggleGraphOnly} on={graphOnly}
+                  label={graphOnly ? 'Graph only: on -- panels hidden (click to bring them back as they were)' : 'Graph only: off (click to hide the RSI/MACD/Stoch panes, Depth and the Indicators window)'}
+                />
+              </>
+            )}
           </div>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           {canSync && (
@@ -1048,7 +1081,7 @@ export default function CandleChart({
         {/* One right-hand column: the caller's side panel (Depth, from
             GraphWindow) on top, the Indicators window stacked under it --
             they used to sit side by side as two columns (2026-10-15). */}
-        {(indicatorsMode === 'right' || sidePanel) && (
+        {!graphOnly && (indicatorsMode === 'right' || sidePanel) && (
         <div
           ref={railRef} data-right-column
           style={{ flex: `0 0 ${RIGHT_COLUMN_WIDTH}px`, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' }}
@@ -1059,7 +1092,7 @@ export default function CandleChart({
         )}
       </div>
       {/* below the chart: Depth first, then the Indicators window beside it */}
-      {(indicatorsMode === 'below' || bottomPanel) && (
+      {!graphOnly && (indicatorsMode === 'below' || bottomPanel) && (
         <div data-bottom-row style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 14, alignItems: 'stretch' }}>
           {bottomPanel && <div data-side-panel style={{ flex: `0 0 ${RIGHT_COLUMN_WIDTH}px`, minWidth: 0, maxHeight: BOTTOM_ROW_HEIGHT, overflowY: 'auto' }}>{bottomPanel}</div>}
           {indicatorsMode === 'below' && renderIndicatorsWindow({ flex: '1 1 320px', minWidth: 0, height: BOTTOM_ROW_HEIGHT })}
