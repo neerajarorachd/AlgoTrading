@@ -467,6 +467,22 @@ async function restorePrefs() {
     await page.waitForTimeout(400);
     const rightVisible = await page.locator('.chart-grid').first().locator(DEPTH_TEXT).count();
     checkTrue('[new] depth cycle click 1 shows the depth panel (right)', rightVisible > 0);
+    // Depth on the right + Indicators window open: one column, Depth stacked under it (2026-10-15)
+    {
+      const card = page.locator('.chart-grid').first();
+      const indBtn = card.locator('[data-chart-tool="indicators"]').first();
+      const wasOpen = await indBtn.getAttribute('aria-pressed') === 'true';
+      if (!wasOpen) { await indBtn.click(); await page.waitForTimeout(400); }
+      const col = card.locator('[data-right-column]');
+      const ind = await col.locator('[data-indicators-window]').boundingBox();
+      const dep = await col.locator('[data-side-panel]').boundingBox();
+      checkTrue('[UI] Depth and Indicators share one right-hand column, Depth below',
+        (await col.count()) === 1 && ind && dep && dep.y >= ind.y + ind.height - 1 && Math.abs(dep.x - ind.x) < 2,
+        { ind, dep });
+      checkTrue('[UI] ...and the column stays within the chart height',
+        await col.evaluate((el) => { const r = el.getBoundingClientRect(); return [...el.children].every((c) => c.getBoundingClientRect().bottom <= r.bottom + 1) }));
+      if (!wasOpen) { await indBtn.click(); await page.waitForTimeout(300); }
+    }
 
     // right -> below
     await depthBtn.click();

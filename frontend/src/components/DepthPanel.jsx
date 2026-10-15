@@ -31,7 +31,10 @@ export default function DepthPanel({ depth }) {
       {fields.map(([label, value]) => (
         <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
           <span style={{ color: 'var(--text-faint)' }}>{label}</span>
-          <span className="num" style={{ color: 'var(--text)', fontWeight: 600, fontSize: 13 }}>{value ?? '—'}</span>
+          <span className="num" style={{ color: 'var(--text)', fontWeight: 600, fontSize: 13 }}>
+            {/* prices arrive as raw floats (457.8500061035156) -- 2 decimals, like the grid */}
+            {typeof value === 'number' ? value.toFixed(2) : (value ?? '—')}
+          </span>
         </div>
       ))}
       {bidPct != null && askPct != null && (

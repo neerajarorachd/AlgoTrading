@@ -47,6 +47,7 @@ const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const INITIAL_DAYS = 21 // previous 20 sessions + today (ALGO-3)
 const MORE_DAYS = 10
 const DIAGRAM_SECONDS = 5 // a clicked dot's diagrams stay this long (ALGO-25)
+const RIGHT_COLUMN_WIDTH = 260 // Indicators window + Depth (5-level table) share this column
 const LOAD_MORE_EDGE_BARS = 30 // load older sessions when the view's left edge is this close to the first bar
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -163,7 +164,7 @@ const PATTERN_DOT_COLOR = { bullish: '#1f9d55', bearish: '#d64545', caution: '#e
 
 export default function CandleChart({
   instrument, fillHeight = false, depthOpen, onToggleDepth, onControlsWidthChange,
-  depthMode, onCycleDepth, screenTimeframe,
+  depthMode, onCycleDepth, screenTimeframe, sidePanel,
 }) {
   const containerRef = useRef(null)
   const stackRef = useRef(null)
@@ -864,7 +865,7 @@ export default function CandleChart({
     if (!stackRef.current || !railRef.current) return
     railRef.current.style.height = `${stackRef.current.getBoundingClientRect().height}px`
   }
-  useEffect(() => { if (indicatorsOpen) syncRailHeight() }, [indicatorsOpen])
+  useEffect(() => { syncRailHeight() }, [indicatorsOpen, !!sidePanel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- indicator picker ----
   function isOn(key, defaultOn = true) {
@@ -1025,11 +1026,19 @@ export default function CandleChart({
           <div data-pane style={{ borderTop: '1px solid var(--border)' }}><div ref={stochElRef} style={{ width: '100%' }} /></div>
         </div>
 
+        {/* One right-hand column: the Indicators window on top, the caller's
+            side panel (Depth, from GraphWindow) stacked under it -- they
+            used to sit side by side as two columns (2026-10-15). */}
+        {(indicatorsOpen || sidePanel) && (
+        <div
+          ref={railRef} data-right-column
+          style={{ flex: `0 0 ${RIGHT_COLUMN_WIDTH}px`, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}
+        >
         {indicatorsOpen && (
           <div
-            ref={railRef}
+            data-indicators-window
             style={{
-              flex: '0 0 240px', overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)',
+              flex: '1 1 auto', minHeight: 0, overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)', padding: 12,
             }}
           >
@@ -1040,6 +1049,9 @@ export default function CandleChart({
               <IndicatorGroup title="Raw events" defs={MARKER_DEFS} isOn={isOn} onToggle={toggleMarkerGroup} values={readout} />
             </IndicatorPanelTabs>
           </div>
+        )}
+        {sidePanel && <div data-side-panel style={{ flex: indicatorsOpen ? '0 0 auto' : '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{sidePanel}</div>}
+        </div>
         )}
       </div>
     </div>
