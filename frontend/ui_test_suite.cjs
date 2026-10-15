@@ -53,7 +53,22 @@ async function resetPrefs() {
   }
 }
 
+// On live these are the user's real preferences: snapshot them first and put
+// them back at the end, whatever the run changed.
+let savedPrefs = null;
+async function restorePrefs() {
+  if (savedPrefs === null) return;
+  try {
+    const now = await (await fetch(`${BASE}/api/preferences`)).json();
+    const body = { ...Object.fromEntries(Object.keys(now).map((k) => [k, null])), ...savedPrefs };
+    await fetch(`${BASE}/api/preferences`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } catch (e) {
+    console.log('could not restore preferences:', e.message);
+  }
+}
+
 (async () => {
+  try { savedPrefs = await (await fetch(`${BASE}/api/preferences`)).json(); } catch { savedPrefs = null; }
   await resetPrefs();
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   const context = await browser.newContext({ viewport: { width: 1400, height: 1400 } });
@@ -322,7 +337,7 @@ async function resetPrefs() {
       await eventually(async () => await page.locator('table tbody button', { hasText: /^Remove$/ }).count() === 0
         && await page.locator('[data-instrument-grid] tbody button[aria-label^="Remove "]').count() === await page.locator('[data-instrument-grid] tbody tr').count()));
     checkTrue('[new] redundant "open chart below" icon removed', await page.locator('table tbody button[title*="chart below"]').count() === 0);
-    const tallestActions = await page.$$eval('table tbody tr', (rows) => Math.max(...rows.map((r) => r.cells[r.cells.length - 1].getBoundingClientRect().height)));
+    const tallestActions = await page.$$eval('[data-instrument-grid] tbody tr', (rows) => Math.max(...rows.map((r) => r.cells[r.cells.length - 1].getBoundingClientRect().height)));
     checkTrue('[new] Actions cells stay on one line (no wrapping)', tallestActions < 48, tallestActions);
     const holdBtn = page.locator('[data-row-action="hold"]').first();
     if (await holdBtn.count() > 0) {
@@ -391,8 +406,11 @@ async function resetPrefs() {
       checkTrue('[PREF] after a reload the screen reopens on 5m', await page.locator('[data-timeframe-bar] [data-timeframe="5min"]').getAttribute('aria-checked') === 'true');
       await page.locator('[data-timeframe-bar] [data-timeframe="3min"]').click();
       await page.waitForTimeout(800);
-      await page.locator('table tbody tr').first().waitFor({ timeout: 25000 });
+      // real rows, not the "No instruments registered yet" placeholder (live is slower over the tunnel)
+      await page.waitForFunction(() => document.querySelectorAll('[data-instrument-grid] tbody tr').length > 1
+        || !/No instruments/.test(document.querySelector('[data-instrument-grid] tbody')?.innerText ?? 'No instruments'), null, { timeout: 30000 });
       // the reload restored the open chart too -- close it so the next steps start clean
+      await eventually(async () => await page.locator('.chart-grid .chart-card').count() > 0, 10000);
       const restoredCharts = await page.locator('.chart-grid .chart-card').count();
       checkTrue('[PREF] open charts come back after a reload', restoredCharts > 0, restoredCharts);
       for (let i = 0; i < restoredCharts; i++) await page.locator('.chart-grid button[title="Close chart"]').first().click();
@@ -715,12 +733,18 @@ async function resetPrefs() {
       await tool('rsi').click(); await page.waitForTimeout(150);
       checkTrue('[ALGO-25] RSI icon shows it again', !(await rsiPane.evaluate((el) => el.hidden)) && await tool('rsi').getAttribute('aria-pressed') === 'true');
 
-      // scroll back: drag the chart right until older sessions are requested
+      // scroll back: drag the chart right until older sessions are requested --
+      // on 5min, so 21 sessions of 1-min bars (live) don't outlast the wheel turns
+      await chart.locator('[data-chart-tf="5min"]').click();
+      await page.waitForTimeout(3000);
       const before = candleCalls.length;
-      for (let i = 0; i < 30 && !candleCalls.slice(before).some((u) => u.includes('before=')); i++) {
-        await page.mouse.move(box.x + 60, box.y + box.height / 2);
-        await page.mouse.wheel(-1500, 0); // horizontal wheel (headless drag only scrolls once)
-        await page.waitForTimeout(400);
+      // zoom out over the chart until the first bar reaches the left edge: 21
+      // sessions are ~1,600 bars even on 5min, too many to wheel across, and
+      // repeated horizontal wheels make Edge go Back (found on live 2026-10-15)
+      for (let i = 0; i < 60 && !candleCalls.slice(before).some((u) => u.includes('before=')); i++) {
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.wheel(0, 400);
+        await page.waitForTimeout(250);
       }
       // the test stack's socket.io polling keeps resetting and can queue this request ~15s behind hung long-polls
       await page.waitForResponse((r) => r.url().includes('before='), { timeout: 30000 }).catch(() => {});
@@ -742,5 +766,6 @@ async function resetPrefs() {
   console.log('===================================================================\n');
 
   await browser.close();
+  await restorePrefs();
   process.exit(failed.length > 0 ? 1 : 0);
-})().catch((e) => { console.error('SUITE CRASHED:', e); process.exit(1); });
+})().catch(async (e) => { console.error('SUITE CRASHED:', e); await restorePrefs(); process.exit(1); });

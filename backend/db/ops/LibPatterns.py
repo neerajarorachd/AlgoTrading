@@ -105,7 +105,7 @@ def list_patterns(session, owner_id: Optional[int] = None, enabled_only: bool = 
     q = session.query(Pattern)
     q = q.filter((Pattern.origin == "system") | (Pattern.owner_id == owner_id)) if owner_id is not None else q.filter(Pattern.origin == "system")
     if enabled_only:
-        q = q.filter(Pattern.enabled.is_(True))
+        q = q.filter(Pattern.enabled)  # bare column: .is_(True) compiles to invalid T-SQL ("IS 1")
     if pattern_type:
         q = q.filter(Pattern.pattern_type == pattern_type)
     if category:
