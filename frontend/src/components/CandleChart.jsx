@@ -171,6 +171,11 @@ const PANEL_DEFS = [
 ]
 
 // pattern dots by type (ALGO-34) -- same pink/red as the colour scale
+// Mark sizes that LOOK equal (user, 2026-10-16: the square looked bigger than
+// the circle). lightweight-charts draws a circle 0.8 x its size wide, a square
+// 0.7 x (same area, but the corners read bigger) and an arrow 1.0 x, so the
+// square and triangle get smaller settings. Same-candle marks stack above the bar.
+const MARK_SIZE = { circle: 0.7, square: 0.56, triangle: 0.5 }
 const PATTERN_DOT_COLOR = { bullish: '#1f9d55', bearish: '#d64545', caution: '#e48aae', avoid: '#8e1b1b' }
 
 export default function CandleChart({
@@ -836,16 +841,16 @@ export default function CandleChart({
         const signals = events.filter((e) => e.activity_type !== 'pattern' && e.activity_type !== 'strategy')
         if (signals.length) {
           const net = signals.reduce((n, e) => n + (e.direction === 'bull' ? 1 : e.direction === 'bear' ? -1 : 0), 0)
-          dots.push({ time, position: 'aboveBar', shape: 'circle', size: 0.7, color: net > 0 ? tok('--good') : net < 0 ? tok('--critical') : tok('--accent') })
+          dots.push({ time, position: 'aboveBar', shape: 'circle', size: MARK_SIZE.circle, color: net > 0 ? tok('--good') : net < 0 ? tok('--critical') : tok('--accent') })
         }
         if (patterns.length) {
           // the top pattern's colour -- green bullish, red bearish, pink caution, dark red avoid
           const top = [...patterns].sort((x, y) => (y.score ?? 0) - (x.score ?? 0))[0]
-          dots.push({ time, position: 'aboveBar', shape: 'square', size: 1, color: PATTERN_DOT_COLOR[top.pattern_type] ?? tok('--accent') })
+          dots.push({ time, position: 'aboveBar', shape: 'square', size: MARK_SIZE.square, color: PATTERN_DOT_COLOR[top.pattern_type] ?? tok('--accent') })
         }
         if (strategies.length) {
           const bear = strategies.some((e) => e.direction === 'bear')
-          dots.push({ time, position: bear ? 'aboveBar' : 'belowBar', shape: bear ? 'arrowDown' : 'arrowUp', size: 1, color: bear ? tok('--critical') : tok('--good') })
+          dots.push({ time, position: bear ? 'aboveBar' : 'belowBar', shape: bear ? 'arrowDown' : 'arrowUp', size: MARK_SIZE.triangle, color: bear ? tok('--critical') : tok('--good') })
         }
       }
       dots.sort((x, y) => x.time - y.time)
