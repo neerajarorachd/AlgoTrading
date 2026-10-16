@@ -379,8 +379,10 @@ async function graphOnlyOff(card) {
 
     // ==================== chart: candle width measured by x-axis time (2026-10-16) ====================
     // E18: zoomed fully in, 15 minutes of the time axis never span more than
-    // ~95 px (Dhan's scale, same TradingView engine) -- on 1/3/5 min and in
-    // fullscreen. So a 1-min candle is at most ~6.3 px, 3-min ~19, 5-min ~32.
+    // ~62 px -- Dhan's ~95 px scale, then 65% of it (user, 2026-10-16) -- on
+    // 1/3/5 min and in fullscreen: a 1-min slot ~4.1 px, 3-min ~12.4, 5-min ~20.6.
+    // E19: each candle body fills ~60% of its slot (the library's own ~80% was
+    // too wide; user, 2026-10-16: body half its old width).
     {
       const page = await context.newPage()
       await page.goto(`${BASE}/`, { waitUntil: 'load' })
@@ -390,7 +392,7 @@ async function graphOnlyOff(card) {
       await card.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 })
       await page.waitForTimeout(2000)
       await graphOnlyOff(card)
-      const MAX_PX_PER_15_MIN = 95
+      const MAX_PX_PER_15_MIN = 62
       // waits until the chart has data (live loads 21 sessions over the tunnel, slower than the test stack)
       const per15 = async (scope) => {
         for (let i = 0; i < 40; i++) {
@@ -414,7 +416,7 @@ async function graphOnlyOff(card) {
         await zoomIn(card)
         seen[`${tf} zoomed`] = Math.round(await per15(card))
       }
-      checkTrue('E18 Chart: zoomed fully in, 15 min of the time axis span at most 95 px (1/3/5 min)',
+      checkTrue('E18 Chart: zoomed fully in, 15 min of the time axis span at most 62 px (1/3/5 min)',
         Object.values(seen).every((v) => v > 0 && v <= MAX_PX_PER_15_MIN + 1) && seen['1min zoomed'] >= MAX_PX_PER_15_MIN - 2, seen)
       await card.locator('button[title="Fullscreen"]').click()
       await page.waitForTimeout(1500)
@@ -422,6 +424,12 @@ async function graphOnlyOff(card) {
       await zoomIn(page)
       const fs = Math.round(await per15(page))
       checkTrue('E18 Chart: ...and the same in fullscreen', fs > 0 && fs <= MAX_PX_PER_15_MIN + 1, fs)
+      const body = await page.locator('[data-diagrams]').first().evaluate((el) => {
+        const d = el.measureView()
+        return { ratio: Number(d.bodyRatio), body: Number(d.candleBody), slot: Number(d.barSpacing) }
+      })
+      checkTrue('E19 Chart: a candle body fills about 60% of its slot (not the library default ~80%)',
+        Math.abs(body.ratio - 0.6) <= 0.02 && body.slot > 0 && Math.abs(body.body / body.slot - 0.6) <= 0.02, body)
       await page.locator('button', { hasText: 'Back' }).first().click().catch(() => {})
       await page.close()
     }

@@ -35,6 +35,7 @@ import {
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
+import { DEFAULT_BODY_RATIO, ThinCandleSeries } from './thinCandleSeries.js'
 import { getPref, setPref } from '../preferences.js'
 import IndicatorPanelTabs from './IndicatorPanelTabs.jsx'
 import IndicatorStrip from './IndicatorStrip.jsx'
@@ -49,10 +50,12 @@ const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const INITIAL_DAYS = 21 // previous 20 sessions + today (ALGO-3)
 const MORE_DAYS = 10
 const DIAGRAM_SECONDS = 5 // a clicked dot's diagrams stay this long (ALGO-25)
-// Zoom limit measured by TIME on the x-axis, like Dhan (same TradingView
-// engine; user, 2026-10-16): 15 minutes span at most ~95 px there, so a
-// minute is at most ~6.3 px -- a 1-min candle ~6.3 px, 3-min ~19 px, 5-min ~32 px.
-const MAX_PX_PER_MINUTE = 95 / 15
+// Zoom limit measured by TIME on the x-axis (user, 2026-10-16): first Dhan's
+// scale (15 min = ~95 px), then "space 65% of that, candle body half": 15 min
+// span at most ~62 px -- a 1-min slot ~4.1 px, 3-min ~12.4 px, 5-min ~20.6 px --
+// and each body fills CANDLE_BODY_RATIO of its slot (was the library's ~80%).
+const MAX_PX_PER_MINUTE = (95 / 15) * 0.65
+const CANDLE_BODY_RATIO = DEFAULT_BODY_RATIO
 const TF_MINUTES = { '1min': 1, '3min': 3, '5min': 5 }
 const RIGHT_COLUMN_WIDTH = 260 // Depth (top) + Indicators window (below) share this column
 const INDICATOR_MODES = ['hidden', 'right', 'below']
@@ -293,7 +296,8 @@ export default function CandleChart({
     // shading" note for why this two-Area-series trick needs that order).
     c.bbFillUpper = c.main.addAreaSeries({ lineVisible: false, topColor: tok('--ind-bb') + '22', bottomColor: tok('--ind-bb') + '22', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
     c.bbFillLower = c.main.addAreaSeries({ lineVisible: false, topColor: tok('--chart-bg'), bottomColor: tok('--chart-bg'), priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
-    c.candle = c.main.addCandlestickSeries({ upColor: tok('--up'), downColor: tok('--down'), borderVisible: false, wickUpColor: tok('--up'), wickDownColor: tok('--down') })
+    // thin-bodied candles (custom series): body ~60% of its slot, like Dhan (2026-10-16)
+    c.candle = c.main.addCustomSeries(new ThinCandleSeries(), { upColor: tok('--up'), downColor: tok('--down'), bodyRatio: CANDLE_BODY_RATIO })
     c.volume = c.main.addHistogramSeries({ priceScaleId: 'volume', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false })
     c.volume.priceScale().applyOptions({ scaleMargins: { top: 0.88, bottom: 0 } })
     c.vwap = c.main.addLineSeries({ color: tok('--ind-vwap'), lineWidth: 2, priceLineVisible: false, lastValueVisible: false })
@@ -474,7 +478,8 @@ export default function CandleChart({
       c.macdSignal.applyOptions({ color: tok('--ind-macd-signal') })
       c.stochK.applyOptions({ color: tok('--ind-stoch-k') })
       c.stochD.applyOptions({ color: tok('--ind-stoch-d') })
-      if (lastCandles.current.length) c.volume.setData(lastCandles.current.map(toVolumeBar)) // per-bar color is baked in, not a series option -- must be re-set, not applyOptions'd
+      if (lastCandles.current.length) c.volume.setData(lastCandles.current.map(toVolumeBar))
+      colourLastPrice(lastCandles.current[lastCandles.current.length - 1]) // per-bar color is baked in, not a series option -- must be re-set, not applyOptions'd
     }
     // Deferred, not called synchronously: ThemeProvider's own effect (the
     // ancestor that actually stamps data-theme on <html>) is ALSO triggered
@@ -559,6 +564,7 @@ export default function CandleChart({
     if (!c.main) return
     lastCandles.current = candles
     c.candle.setData(candles.map(toBar))
+    colourLastPrice(candles[candles.length - 1])
     c.volume.setData(candles.map(toVolumeBar))
     c.spacers.forEach((s) => s.setData(toWhitespace(candles)))
     drawDaySeparators()
@@ -629,6 +635,14 @@ export default function CandleChart({
 
   // the view as data attributes on the diagram layer -- read by the UI suite
   // (lightweight-charts draws its axes on canvas, so there is nothing else to read)
+  // the last-price label/line in the last candle's colour (a custom series
+  // has one colour of its own, the built-in candles did this by themselves)
+  function colourLastPrice(candle) {
+    if (!candle || !charts.current.candle) return
+    const colour = candle.close >= candle.open ? tok('--up') : tok('--down')
+    charts.current.candle.applyOptions({ color: colour, priceLineColor: colour })
+  }
+
   // the price plot's width (the chart minus its right-hand price axis)
   function plotWidth() {
     const c = charts.current
@@ -661,6 +675,8 @@ export default function CandleChart({
     if (range) layer.dataset.barsVisible = (range.to - range.from).toFixed(1)
     if (range) layer.dataset.rangeFrom = range.from.toFixed(1)
     if (range) layer.dataset.barSpacing = (plotWidth() / (range.to - range.from)).toFixed(2)
+    if (range) layer.dataset.candleBody = (plotWidth() / (range.to - range.from) * CANDLE_BODY_RATIO).toFixed(2)
+    layer.dataset.bodyRatio = String(c.candle.options().bodyRatio)
     if (range) layer.dataset.pxPerMinute = (plotWidth() / (range.to - range.from) / (TF_MINUTES[timeframeRef.current] ?? 1)).toFixed(2)
     // scroll-back state, for the UI suite: why older sessions do or don't load
     layer.dataset.olderState = `ready=${readyForMoreRef.current} loading=${loadingOlderRef.current} hasMore=${hasMoreRef.current}`
@@ -895,6 +911,7 @@ export default function CandleChart({
         return
       }
       charts.current.candle?.update(toBar(msg.candle))
+      colourLastPrice(msg.candle)
       charts.current.volume?.update(toVolumeBar(msg.candle))
       charts.current.spacers?.forEach((s) => s.update(toWhitespace([msg.candle])[0]))
       const withoutDup = lastCandles.current.filter((c) => c.ts !== msg.candle.ts)
