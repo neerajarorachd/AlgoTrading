@@ -391,7 +391,15 @@ async function graphOnlyOff(card) {
       await page.waitForTimeout(2000)
       await graphOnlyOff(card)
       const MAX_PX_PER_15_MIN = 95
-      const per15 = (scope) => scope.locator('[data-diagrams]').first().evaluate((el) => Number(el.measureView().pxPerMinute) * 15)
+      // waits until the chart has data (live loads 21 sessions over the tunnel, slower than the test stack)
+      const per15 = async (scope) => {
+        for (let i = 0; i < 40; i++) {
+          const v = await scope.locator('[data-diagrams]').first().evaluate((el) => Number(el.measureView?.().pxPerMinute) * 15).catch(() => NaN)
+          if (Number.isFinite(v) && v > 0) return v
+          await page.waitForTimeout(500)
+        }
+        return NaN
+      }
       const zoomIn = async (scope) => {
         const b = await scope.locator('[data-chart-stack] canvas').first().boundingBox()
         await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
@@ -401,7 +409,7 @@ async function graphOnlyOff(card) {
       const seen = {}
       for (const tf of ['1min', '3min', '5min']) {
         await card.locator(`[data-chart-tf="${tf}"]`).click()
-        await page.waitForTimeout(2500)
+        await page.waitForTimeout(1000)
         seen[`${tf} open`] = Math.round(await per15(card))
         await zoomIn(card)
         seen[`${tf} zoomed`] = Math.round(await per15(card))
@@ -410,6 +418,7 @@ async function graphOnlyOff(card) {
         Object.values(seen).every((v) => v > 0 && v <= MAX_PX_PER_15_MIN + 1) && seen['1min zoomed'] >= MAX_PX_PER_15_MIN - 2, seen)
       await card.locator('button[title="Fullscreen"]').click()
       await page.waitForTimeout(1500)
+      await per15(page) // loaded
       await zoomIn(page)
       const fs = Math.round(await per15(page))
       checkTrue('E18 Chart: ...and the same in fullscreen', fs > 0 && fs <= MAX_PX_PER_15_MIN + 1, fs)

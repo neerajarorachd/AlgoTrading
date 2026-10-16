@@ -315,7 +315,9 @@ async function restorePrefs() {
     // ---- Actions column, as finalized in the preview (ported 2026-10-06) ----
     await page.locator('button', { hasText: 'Show all' }).click().catch(() => {});
     await page.waitForTimeout(200);
-    const actionCheck = await page.evaluate(async () => {
+    // the grid re-fetches colours at most every 15 s while activity arrives --
+    // on live a colour can change mid-check, so retry for up to 20 s
+    const readActionCheck = () => page.evaluate(async () => {
       const [symbols, scores] = await Promise.all([
         fetch('/api/symbols').then((r) => r.json()),
         fetch('/api/watch-scores?timeframe=3min').then((r) => r.json()),
@@ -331,13 +333,15 @@ async function restorePrefs() {
       };
       const expected = (b, symbol) => expectedFor(scoreBySymbol[symbol]);
       const mismatches = [];
-      for (const tr of document.querySelectorAll('table tbody tr')) {
+      for (const tr of document.querySelectorAll('[data-instrument-grid] tbody tr')) {
         const symbol = tr.cells[0].innerText.split('\n')[0];
         const shown = tr.querySelector('[data-row-action]')?.dataset.rowAction ?? null;
         if (shown !== expected(bucketBySymbol[symbol], symbol)) mismatches.push({ symbol, bucket: bucketBySymbol[symbol], shown });
       }
       return mismatches;
     });
+    let actionCheck = await readActionCheck();
+    await eventually(async () => (actionCheck = await readActionCheck()).length === 0, 20000);
     checkTrue('[ALGO-33] every row\'s action follows the colour rule (green=Buy/Sell by direction, orange/yellow=Hold, else none)', actionCheck.length === 0, actionCheck);
     // ---- screen timeframe bar (2026-10-14) ----
     const tfBar = page.locator('[data-timeframe-bar]');
@@ -878,7 +882,8 @@ async function restorePrefs() {
       check('[ALGO-26] double-click on the price axis resets the height zoom', (await view()).zoom, 1);
       const v3 = await view();
       await page.mouse.move(box.x + box.width / 2, midY);
-      for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, -120); await page.waitForTimeout(80); }
+      // zoom OUT: zooming in can already sit at the candle-width limit (2026-10-16)
+      for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, 120); await page.waitForTimeout(80); }
       await page.waitForTimeout(250);
       const v4 = await view();
       checkTrue('[ALGO-26] wheel over the chart area still zooms width only', Math.abs(v4.bars - v3.bars) / v3.bars > 0.05 && v4.zoom === 1, { v3, v4 });
