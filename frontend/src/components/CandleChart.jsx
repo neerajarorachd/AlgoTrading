@@ -37,7 +37,9 @@ import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
 import { getPref, setPref } from '../preferences.js'
 import IndicatorPanelTabs from './IndicatorPanelTabs.jsx'
-import { prefetchPatterns, prefetchStrategies, usePatterns } from './patternData.js'
+import IndicatorStrip from './IndicatorStrip.jsx'
+import SignalPicker from './SignalPicker.jsx'
+import { prefetchPatterns, prefetchSignals, prefetchStrategies, usePatterns, useSignals } from './patternData.js'
 import { eventTime, humanize, indexData, shapesForEvents, shapesToSvg, snapToCandles } from './chartDiagrams.js'
 
 const TIMEFRAMES = ['1min', '3min', '5min']
@@ -47,6 +49,11 @@ const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const INITIAL_DAYS = 21 // previous 20 sessions + today (ALGO-3)
 const MORE_DAYS = 10
 const DIAGRAM_SECONDS = 5 // a clicked dot's diagrams stay this long (ALGO-25)
+// Zoom limit measured by TIME on the x-axis, like Dhan (same TradingView
+// engine; user, 2026-10-16): 15 minutes span at most ~95 px there, so a
+// minute is at most ~6.3 px -- a 1-min candle ~6.3 px, 3-min ~19 px, 5-min ~32 px.
+const MAX_PX_PER_MINUTE = 95 / 15
+const TF_MINUTES = { '1min': 1, '3min': 3, '5min': 5 }
 const RIGHT_COLUMN_WIDTH = 260 // Depth (top) + Indicators window (below) share this column
 const INDICATOR_MODES = ['hidden', 'right', 'below']
 const BOTTOM_ROW_HEIGHT = 320 // Depth + Indicators window under the chart
@@ -140,25 +147,19 @@ function sharedChartOptions() {
 const OVERLAY_DEFS = [
   { key: 'volume', label: 'Volume', defaultOn: true },
   { key: 'vwap', label: 'VWAP', defaultOn: true },
-  { key: 'bb', label: 'Bollinger Bands (20, 2σ)', defaultOn: true },
+  { key: 'bb', label: 'Bollinger Bands (20, 2σ)', short: 'BB', defaultOn: true },
   { key: 'ema5', label: 'EMA 5', defaultOn: true },
   { key: 'ema14', label: 'EMA 14', defaultOn: true },
   { key: 'ema21', label: 'EMA 21', defaultOn: false },
   { key: 'ema50', label: 'EMA 50', defaultOn: false },
   { key: 'ma21', label: 'MA 21', defaultOn: false },
   { key: 'ma50', label: 'MA 50', defaultOn: false },
-  { key: 'pivots', label: 'Pivot Points (classic)', defaultOn: true },
+  { key: 'pivots', label: 'Pivot Points (classic)', short: 'Pivots', defaultOn: true },
 ]
 const PANEL_DEFS = [
-  { key: 'rsi', label: 'RSI (14)' },
-  { key: 'macd', label: 'MACD (12, 26, 9)' },
-  { key: 'stoch', label: 'Stochastic (14, 3)' },
-]
-// Event dots cover every event type (ALGO-25: "any event"); price action and
-// structure were not marked before.
-const MARKER_DEFS = [
-  { key: 'patterns', label: 'Patterns, price action & structure', types: ['candle_pattern', 'graph_formation', 'price_action', 'structure'], defaultOn: false },
-  { key: 'signals', label: 'Strategy signals', types: ['indicator'], defaultOn: false },
+  { key: 'rsi', label: 'RSI (14)', short: 'RSI' },
+  { key: 'macd', label: 'MACD (12, 26, 9)', short: 'MACD' },
+  { key: 'stoch', label: 'Stochastic (14, 3)', short: 'Stoch' },
 ]
 
 // pattern dots by type (ALGO-34) -- same pink/red as the colour scale
@@ -200,6 +201,23 @@ export default function CandleChart({
   const selectedStrategiesRef = useRef([]) // strategy ids ticked on the Strategies tab
   const userPaneRef = useRef({ chart: null, at: 0 }) // the sub-pane the viewer is scrolling right now (see the pane sync)
   const [readout, setReadout] = useState({}) // latest value per picker row, shown beside each checkbox
+  // Raw signals ticked on the Signals tab (2026-10-16), saved per user. Until
+  // the user picks, a saved old group switch ("Patterns, price action &
+  // structure" / "Strategy signals") stands for every signal in it.
+  const [selectedSignals, setSelectedSignalsState] = useState(() => getPref('chart.selectedSignals', null))
+  const [signalCounts, setSignalCounts] = useState({}) // today's count per signal code
+  const allSignals = useSignals()
+  const effectiveSignals = selectedSignals ?? (allSignals ?? [])
+    .filter((sig) => (sig.kind === 'indicator' ? isOn('signals', false) : isOn('patterns', false)))
+    .map((sig) => sig.code)
+  const shownSignalsRef = useRef(new Set())
+  shownSignalsRef.current = new Set(effectiveSignals)
+  const setSelectedSignals = (codes) => {
+    setPref('chart.selectedSignals', codes)
+    setSelectedSignalsState(codes)
+  }
+  const signalsKey = effectiveSignals.join(',')
+  useEffect(() => { refreshMarkers() }, [signalsKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const savedTf = getPref('chart.timeframe', '1min')
   const [syncTf, setSyncTfState] = useState(() => getPref('chart.syncTimeframe', true) !== false)
@@ -218,6 +236,8 @@ export default function CandleChart({
   useEffect(() => {
     if (canSync && syncTf && TIMEFRAMES.includes(screenTimeframe)) setTimeframe(screenTimeframe)
   }, [canSync, syncTf, screenTimeframe])
+  const timeframeRef = useRef(timeframe) // for the chart's own callbacks (built once)
+  timeframeRef.current = timeframe
   const [asOfDate, setAsOfDate] = useState(null)
   // Indicators window, 3 states like Depth (2026-10-15): hidden -> right -> below
   const [indicatorsMode, setIndicatorsModeState] = useState(() => {
@@ -252,7 +272,7 @@ export default function CandleChart({
   }, [onControlsWidthChange, depthOpen, depthMode])
 
   // the Patterns/Strategies tabs' lists load with the chart, not when the panel opens
-  useEffect(() => { prefetchPatterns(); prefetchStrategies() }, [])
+  useEffect(() => { prefetchPatterns(); prefetchStrategies(); prefetchSignals() }, [])
   // default marks with the panel closed: every enabled pattern, until the user
   // picks on the Patterns tab (that choice is saved and wins)
   const allPatterns = usePatterns()
@@ -381,6 +401,7 @@ export default function CandleChart({
     })
 
     c.main.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (capBarSpacing(range)) return // re-fires with the capped range
       recordView()
       drawDaySeparators()
       if (range && range.from < LOAD_MORE_EDGE_BARS) loadOlderRef.current?.()
@@ -608,6 +629,30 @@ export default function CandleChart({
 
   // the view as data attributes on the diagram layer -- read by the UI suite
   // (lightweight-charts draws its axes on canvas, so there is nothing else to read)
+  // the price plot's width (the chart minus its right-hand price axis)
+  function plotWidth() {
+    const c = charts.current
+    const w = containerRef.current?.clientWidth ?? 0
+    return Math.max(0, w - (c.main?.priceScale('right').width() ?? 0))
+  }
+  // Candles never wider than MAX_PX_PER_MINUTE x the timeframe's minutes
+  // (2026-10-16). lightweight-charts 4.x has no maxBarSpacing option (it came
+  // in 5.x), so a too-narrow visible range is widened to the left, keeping the
+  // right edge (the latest candle) where it is. Returns true when it changed
+  // the range.
+  function maxBarSpacing() {
+    return MAX_PX_PER_MINUTE * (TF_MINUTES[timeframeRef.current] ?? 1)
+  }
+  function capBarSpacing(range) {
+    const c = charts.current
+    const w = plotWidth()
+    if (!range || !c.main || !w) return false
+    const minBars = w / maxBarSpacing()
+    if (range.to - range.from >= minBars - 0.01) return false
+    c.main.timeScale().setVisibleLogicalRange({ from: range.to - minBars, to: range.to })
+    return true
+  }
+
   function recordView() {
     const c = charts.current
     const layer = diagramRef.current
@@ -615,6 +660,8 @@ export default function CandleChart({
     const range = c.main.timeScale().getVisibleLogicalRange()
     if (range) layer.dataset.barsVisible = (range.to - range.from).toFixed(1)
     if (range) layer.dataset.rangeFrom = range.from.toFixed(1)
+    if (range) layer.dataset.barSpacing = (plotWidth() / (range.to - range.from)).toFixed(2)
+    if (range) layer.dataset.pxPerMinute = (plotWidth() / (range.to - range.from) / (TF_MINUTES[timeframeRef.current] ?? 1)).toFixed(2)
     // scroll-back state, for the UI suite: why older sessions do or don't load
     layer.dataset.olderState = `ready=${readyForMoreRef.current} loading=${loadingOlderRef.current} hasMore=${hasMoreRef.current}`
     const top = c.candle.coordinateToPrice(0)
@@ -715,25 +762,23 @@ export default function CandleChart({
     allEventsRef.current = rows
     // readout counts: the current session only
     const current = currentRows.current.markers
-    setReadout((prev) => ({
-      ...prev,
-      patterns: String(current.filter((r) => MARKER_DEFS[0].types.includes(r.activity_type)).length),
-      signals: String(current.filter((r) => MARKER_DEFS[1].types.includes(r.activity_type)).length),
-    }))
+    const counts = {}
+    for (const r of current) if (r.activity_type !== 'pattern') counts[r.activity] = (counts[r.activity] ?? 0) + 1
+    setSignalCounts(counts)
     refreshMarkers()
   }
 
   // ONE dot per candle with any shown event (ALGO-25), coloured by the net
   // direction of its events; names and details live in the hover list.
   function refreshMarkers() {
-    const shownTypes = MARKER_DEFS.filter((d) => isOn(d.key, d.defaultOn)).flatMap((d) => d.types)
+    const shownSignals = shownSignalsRef.current
     const shownPatterns = new Set(selectedPatternsRef.current)
     // every event on the nearest candle of this timeframe (a 3/5-min event
     // can fall where no candle exists); re-snapped whenever candles change
     snappedEventsRef.current = snapToCandles(allEventsRef.current, lastCandles.current)
     const byTime = new Map()
     for (const r of snappedEventsRef.current) {
-      const shown = r.activity_type === 'pattern' ? shownPatterns.has(r.activity) : shownTypes.includes(r.activity_type)
+      const shown = r.activity_type === 'pattern' ? shownPatterns.has(r.activity) : shownSignals.has(r.activity)
       if (!shown) continue
       const t = eventTime(r)
       byTime.set(t, [...(byTime.get(t) ?? []), r])
@@ -929,12 +974,6 @@ export default function CandleChart({
     syncRailHeight()
     forceRender((n) => n + 1)
   }
-  function toggleMarkerGroup(key) {
-    const next = !isOn(key, MARKER_DEFS.find((d) => d.key === key)?.defaultOn ?? false)
-    setToggle(key, next)
-    refreshMarkers()
-    forceRender((n) => n + 1)
-  }
   // toolbar toggles (ALGO-25): event dots on/off, all diagrams on/off
   function toggleEvents() {
     setToggle('events', !isOn('events', true))
@@ -1011,7 +1050,7 @@ export default function CandleChart({
             <ChartToolButton
               tool="indicators" onClick={cycleIndicatorsMode} on={indicatorsOpen} disabled={graphOnly}
               badge={indicatorsMode === 'right' ? '→' : indicatorsMode === 'below' ? '↓' : null}
-              label={indicatorsMode === 'right' ? 'Indicators window: beside the chart (click to move below)' : indicatorsMode === 'below' ? 'Indicators window: below the chart (click to hide)' : 'Indicators window: hidden (click to show beside the chart)'}
+              label={indicatorsMode === 'right' ? 'Signals, patterns & strategies: beside the chart (click to move below)' : indicatorsMode === 'below' ? 'Signals, patterns & strategies: below the chart (click to hide)' : 'Signals, patterns & strategies: hidden (click to show beside the chart)'}
             />
             <span aria-hidden="true" style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 2px' }} />
             <ChartToolButton tool="events" onClick={toggleEvents} on={isOn('events', true)} label={isOn('events', true) ? 'Event marking: on (click to hide the dots)' : 'Event marking: off (click to show the dots)'} />
@@ -1051,6 +1090,15 @@ export default function CandleChart({
           </div>
         </div>
       </div>
+
+      {/* Indicators above the graph (2026-10-16): overlays + panes, each an on/off chip with its value */}
+      <IndicatorStrip
+        values={readout}
+        groups={[
+          { title: 'Overlays', defs: OVERLAY_DEFS, isOn, onToggle: toggleOverlay },
+          { title: 'Panes', defs: PANEL_DEFS, isOn: (k) => isOn(k, true), onToggle: togglePanel, disabled: graphOnly },
+        ]}
+      />
 
       {/* flex-start, not stretch: a right-hand column that renders before
           it is sized (Indicators saved as "right" on page load) used to
@@ -1115,31 +1163,10 @@ export default function CandleChart({
       >
         {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
         <IndicatorPanelTabs onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
-          <IndicatorGroup title="Overlays" defs={OVERLAY_DEFS} isOn={isOn} onToggle={toggleOverlay} values={readout} />
-          <IndicatorGroup title="Sub-panels" defs={PANEL_DEFS} isOn={(k) => isOn(k, true)} onToggle={togglePanel} values={readout} />
-          <IndicatorGroup title="Raw events" defs={MARKER_DEFS} isOn={isOn} onToggle={toggleMarkerGroup} values={readout} />
+          <SignalPicker selected={effectiveSignals} onChange={setSelectedSignals} counts={signalCounts} />
         </IndicatorPanelTabs>
       </div>
     )
   }
 }
 
-function IndicatorGroup({ title, defs, isOn, onToggle, values = {} }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-faint)', margin: '0 0 8px' }}>{title}</p>
-      {defs.map((def) => {
-        const on = isOn(def.key, def.defaultOn)
-        return (
-          <label key={def.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 2px', cursor: 'pointer', fontSize: 12.5, color: on ? 'var(--text)' : 'var(--text-faint)' }}>
-            <input type="checkbox" checked={on} onChange={() => onToggle(def.key)} />
-            <span style={{ flex: '1 1 auto', minWidth: 0 }}>{def.label}</span>
-            <span className="num" data-readout={def.key} style={{ fontSize: 11.5, color: on ? 'var(--text-dim)' : 'var(--text-faint)', textAlign: 'right' }}>
-              {values[def.key] ?? '—'}
-            </span>
-          </label>
-        )
-      })}
-    </div>
-  )
-}

@@ -282,6 +282,140 @@ async function graphOnlyOff(card) {
       await setMode(card3, 'indicators', indicatorsMode, 'hidden')
       await page.close()
     }
+
+    // ==================== chart: indicators strip + Signals / Patterns / Strategies (2026-10-16) ====================
+    {
+      const page = await context.newPage()
+      await page.goto(`${BASE}/`, { waitUntil: 'load' })
+      await page.waitForFunction(() => document.querySelectorAll('[data-instrument-grid] tbody tr').length > 1, null, { timeout: 30000 })
+      if (!(await page.locator('.chart-grid .chart-card').count())) await page.locator('[data-instrument-grid] tbody tr').first().click()
+      const card = page.locator('.chart-grid .chart-card').first()
+      await card.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 })
+      await page.waitForTimeout(1500)
+      await graphOnlyOff(card)
+      await setMode(card, 'indicators', indicatorsMode, 'hidden')
+
+      // E12: the indicators are a strip ABOVE the graph (below the toolbar),
+      // all 13 in this order, each with its current value
+      const strip = card.locator('[data-indicator-strip]')
+      const sb = await box(strip)
+      const tb = await box(card.locator('[data-chart-toolbar]'))
+      const gb = await box(card.locator('[data-chart-stack]'))
+      checkTrue('E12 Chart: indicator strip sits above the graph, below the toolbar',
+        sb && tb && gb && sb.y >= tb.y + tb.height - 1 && sb.y + sb.height <= gb.y + 1, { sb, tb, gb })
+      const chips = await strip.locator('[data-indicator]').evaluateAll((els) => els.map((e) => ({ key: e.dataset.indicator, readout: !!e.querySelector('[data-readout]') })))
+      checkTrue('E12 Chart: the strip lists the 13 indicators in order, each with its value',
+        chips.map((c) => c.key).join(',') === 'volume,vwap,bb,ema5,ema14,ema21,ema50,ma21,ma50,pivots,rsi,macd,stoch' && chips.every((c) => c.readout),
+        chips.map((c) => c.key))
+
+      // E13: the window's tabs are exactly Signals, Patterns, Strategies;
+      // Signals opens first
+      await setMode(card, 'indicators', indicatorsMode, 'right')
+      const win = card.locator('[data-indicators-window]')
+      const tabs = await win.locator('[data-panel-tab]').evaluateAll((els) => els.map((e) => e.dataset.panelTab))
+      checkTrue('E13 Chart: window tabs are Signals, Patterns, Strategies (in that order)', tabs.join(',') === 'signals,patterns,strategies', tabs)
+      checkTrue('E13 Chart: Signals is the tab that opens first',
+        (await win.locator('[data-panel-tab="signals"]').getAttribute('aria-selected')) === 'true')
+
+      // E14: Signals = raw single signals, grouped; no indicators in it;
+      // none ticked by default
+      await win.locator('[data-signal-option]').first().waitFor({ timeout: 15000 }).catch(() => {})
+      const groups = await win.locator('[data-signal-group]').evaluateAll((els) => els.map((e) => e.dataset.signalGroup))
+      checkTrue('E14 Signals: groups are Candles, Indicator crossovers, Price action, Structure, Chart formations',
+        groups.join(',') === 'candles,crossovers,price_action,structure,formations', groups)
+      const sigs = await win.locator('[data-signal-option]').evaluateAll((els) => els.map((e) => ({ code: e.dataset.signalOption, on: e.querySelector('input').checked })))
+      const codes = sigs.map((x) => x.code)
+      const must = ['doji', 'hammer', 'shooting_star', 'bullish_engulfing', 'bearish_engulfing', 'macd_bullish_cross', 'stoch_bullish_cross', 'rsi_cross_above_60', 'bb_squeeze', 'swing_high', 'double_top']
+      checkTrue('E14 Signals: lists the raw signals (candles, crossovers, price action, structure, formations)',
+        must.every((c) => codes.includes(c)), must.filter((c) => !codes.includes(c)))
+      checkTrue('E14 Signals: holds no indicators (VWAP, EMA, BB lines, RSI pane...)',
+        !codes.some((c) => ['volume', 'vwap', 'bb', 'ema5', 'ema14', 'ema21', 'ema50', 'ma21', 'ma50', 'pivots', 'rsi', 'macd', 'stoch'].includes(c))
+          && (await win.locator('[data-readout]').count()) === 0)
+      checkTrue('E14 Signals: nothing ticked by default', sigs.length > 0 && sigs.every((x) => !x.on), sigs.filter((x) => x.on).map((x) => x.code))
+
+      // E15: Patterns = the pattern table, grouped by type, each with its
+      // weight; every enabled pattern ticked by default
+      await win.locator('[data-panel-tab="patterns"]').click()
+      await win.locator('[data-pattern-option]').first().waitFor({ timeout: 15000 }).catch(() => {})
+      const ptitles = await win.locator('[data-pattern-picker] > div > p').allInnerTexts()
+      checkTrue('E15 Patterns: grouped Bullish, Bearish, Caution, Avoid',
+        ptitles.map((t) => t.toLowerCase().split(' ')[0]).join(',') === 'bullish,bearish,caution,avoid', ptitles)
+      const pats = await win.locator('[data-pattern-option]').evaluateAll((els) => els.map((e) => ({ key: e.dataset.patternOption, on: e.querySelector('input').checked, weight: e.querySelector('.num')?.innerText.trim() })))
+      checkTrue('E15 Patterns: lists the patterns (e.g. MACD departure, sideways chop) each with a weight',
+        ['macd_departure_bull', 'macd_departure_bear', 'sideways_chop'].every((k) => pats.some((x) => x.key === k)) && pats.every((x) => x.weight !== undefined && x.weight !== ''), pats.length)
+      checkTrue('E15 Patterns: every enabled pattern ticked by default', pats.length > 0 && pats.every((x) => x.on), pats.filter((x) => !x.on).map((x) => x.key))
+
+      // E16: Strategies = the strategy list (or its empty note)
+      await win.locator('[data-panel-tab="strategies"]').click()
+      await page.waitForTimeout(500)
+      checkTrue('E16 Strategies: the tab shows the strategy list',
+        (await win.locator('[data-strategy-picker], [data-panel="strategies"]').count()) > 0)
+
+      // E17: ticking ONE signal marks exactly it (plus the ticked patterns'
+      // dots) -- on 1min, where the markers are compared one-to-one
+      const tf1 = card.locator('[data-chart-tf="1min"]')
+      if ((await tf1.getAttribute('aria-pressed')) !== 'true') { await tf1.click(); await page.waitForTimeout(3000) }
+      const sym = (await card.locator('strong').first().innerText()).replace(/[^A-Z0-9&-]/g, '')
+      const expectFor = (code) => page.evaluate(async ([s, code]) => {
+        const c = await (await fetch(`/api/candles?symbol=${s}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json()
+        const m = (await (await fetch(`/api/candles/markers?symbol=${s}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json()).markers
+        return new Set(m.filter((x) => x.activity_type === 'pattern' || (code && x.activity === code)).map((x) => x.ts)).size
+      }, [sym, code])
+      const dots = async () => Number(await card.locator('[data-diagrams]').getAttribute('data-dot-count'))
+      await win.locator('[data-panel-tab="signals"]').click()
+      const base = await expectFor(null)
+      let okBase = false
+      for (let i = 0; i < 20 && !okBase; i++) { okBase = (await dots()) === base; if (!okBase) await page.waitForTimeout(500) }
+      await win.locator('[data-signal-option="doji"] input').check()
+      const withDoji = await expectFor('doji')
+      let okDoji = false
+      for (let i = 0; i < 20 && !okDoji; i++) { okDoji = (await dots()) === withDoji; if (!okDoji) await page.waitForTimeout(500) }
+      checkTrue('E17 Signals: ticking one signal (doji) marks exactly its candles', okBase && okDoji && withDoji >= base, { base, withDoji, shown: await dots() })
+      await win.locator('[data-signal-option="doji"] input').uncheck()
+
+      await setMode(card, 'indicators', indicatorsMode, 'hidden')
+      await page.close()
+    }
+
+    // ==================== chart: candle width measured by x-axis time (2026-10-16) ====================
+    // E18: zoomed fully in, 15 minutes of the time axis never span more than
+    // ~95 px (Dhan's scale, same TradingView engine) -- on 1/3/5 min and in
+    // fullscreen. So a 1-min candle is at most ~6.3 px, 3-min ~19, 5-min ~32.
+    {
+      const page = await context.newPage()
+      await page.goto(`${BASE}/`, { waitUntil: 'load' })
+      await page.waitForFunction(() => document.querySelectorAll('[data-instrument-grid] tbody tr').length > 1, null, { timeout: 30000 })
+      if (!(await page.locator('.chart-grid .chart-card').count())) await page.locator('[data-instrument-grid] tbody tr').first().click()
+      const card = page.locator('.chart-grid .chart-card').first()
+      await card.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 })
+      await page.waitForTimeout(2000)
+      await graphOnlyOff(card)
+      const MAX_PX_PER_15_MIN = 95
+      const per15 = (scope) => scope.locator('[data-diagrams]').first().evaluate((el) => Number(el.measureView().pxPerMinute) * 15)
+      const zoomIn = async (scope) => {
+        const b = await scope.locator('[data-chart-stack] canvas').first().boundingBox()
+        await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
+        for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, -400); await page.waitForTimeout(40) }
+        await page.waitForTimeout(400)
+      }
+      const seen = {}
+      for (const tf of ['1min', '3min', '5min']) {
+        await card.locator(`[data-chart-tf="${tf}"]`).click()
+        await page.waitForTimeout(2500)
+        seen[`${tf} open`] = Math.round(await per15(card))
+        await zoomIn(card)
+        seen[`${tf} zoomed`] = Math.round(await per15(card))
+      }
+      checkTrue('E18 Chart: zoomed fully in, 15 min of the time axis span at most 95 px (1/3/5 min)',
+        Object.values(seen).every((v) => v > 0 && v <= MAX_PX_PER_15_MIN + 1) && seen['1min zoomed'] >= MAX_PX_PER_15_MIN - 2, seen)
+      await card.locator('button[title="Fullscreen"]').click()
+      await page.waitForTimeout(1500)
+      await zoomIn(page)
+      const fs = Math.round(await per15(page))
+      checkTrue('E18 Chart: ...and the same in fullscreen', fs > 0 && fs <= MAX_PX_PER_15_MIN + 1, fs)
+      await page.locator('button', { hasText: 'Back' }).first().click().catch(() => {})
+      await page.close()
+    }
   } catch (err) {
     console.log('SUITE CRASHED:', err)
     results.push({ name: 'suite ran to completion', pass: false })

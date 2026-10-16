@@ -1,6 +1,6 @@
-// The chart's Indicators panel as three tabs (ALGO-34): Indicators (overlays,
-// sub-panels and raw events -- passed in as children, unchanged), Patterns and
-// Strategies. The two lists are the shared PatternPicker / StrategyPicker; this
+// The chart's marks window as three tabs (ALGO-34; 2026-10-16): Signals (raw
+// single signals -- passed in as children; the indicators moved to a strip
+// above the graph), Patterns and Strategies. The two lists are the shared PatternPicker / StrategyPicker; this
 // component only owns which tab is open and the chart's selection, remembered
 // per viewer and reported through onPatternsChange/onStrategiesChange so the
 // chart can mark them (pattern marks arrive with pattern evaluation, ALGO-32).
@@ -11,7 +11,7 @@ import { usePatterns } from './patternData.js'
 import { usePreference } from '../preferences.js'
 
 const TABS = [
-  { key: 'indicators', label: 'Indicators' },
+  { key: 'signals', label: 'Signals' },
   { key: 'patterns', label: 'Patterns' },
   { key: 'strategies', label: 'Strategies' },
 ]
@@ -24,7 +24,7 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
   // the user's last choices (preferences.js). Patterns: every enabled pattern
   // is ticked until the user changes the selection (ALGO-34 default: the chart
   // shows pattern dots, raw events off).
-  const [tab, setTab] = usePreference('chart.panelTab', 'indicators', (v) => TABS.some((t) => t.key === v))
+  const [tab, setTab] = usePreference('chart.panelTab', 'signals', (v) => TABS.some((t) => t.key === v))
   const [storedPatterns, setPatterns] = usePreference('chart.selectedPatterns.v2', null, (v) => v === null || isList(v))
   const [strategies, setStrategies] = usePreference('chart.selectedStrategies', [], isList)
   const allPatterns = usePatterns()
@@ -56,11 +56,11 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
       </div>
 
       <div role="tabpanel" data-panel={tab} style={{ overflowY: 'auto', minHeight: 0, flex: '1 1 auto' }}>
-        {tab === 'indicators' && children}
+        {tab === 'signals' && children}
         {tab === 'patterns' && (
           <>
             <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} />
-            <Note>Ticked patterns get a dot where they form. Raw events (Indicators tab) are off unless ticked there.</Note>
+            <Note>Ticked patterns get a dot where they form. Raw signals (Signals tab) are off unless ticked there.</Note>
           </>
         )}
         {tab === 'strategies' && (

@@ -3,7 +3,7 @@
 // the pattern editor -- so they are fetched once per page and shared, and
 // refreshed together after an edit (refreshPatterns / refreshStrategies).
 import { useEffect, useState } from 'react'
-import { listPatterns, listStrategies } from '../api/client.js'
+import { listPatterns, listStrategies, listStrategyElements } from '../api/client.js'
 
 function sharedList(fetcher, pick) {
   let data = null
@@ -36,6 +36,8 @@ function sharedList(fetcher, pick) {
 }
 
 const patterns = sharedList(listPatterns, (r) => r.patterns ?? [])
+// raw signals: the engine's single events (strategy-elements of type "event")
+const signals = sharedList(listStrategyElements, (r) => (Array.isArray(r) ? r : []).filter((e) => e.element_type === 'event'))
 const strategies = sharedList(listStrategies, (r) => (Array.isArray(r) ? r : []).filter((s) => s.strategy_type !== 'recommendation_parent'))
 
 /** All patterns (system + mine), or null while loading. */
@@ -46,6 +48,18 @@ export const prefetchPatterns = patterns.prefetch
 export const useStrategies = strategies.useList
 export const refreshStrategies = strategies.refresh
 export const prefetchStrategies = strategies.prefetch
+
+/** Raw signals (doji, MACD crossover...), or null while loading. */
+export const useSignals = signals.useList
+export const prefetchSignals = signals.prefetch
+// how the Signals tab groups them (the catalog's `kind`)
+export const SIGNAL_GROUPS = [
+  { key: 'candles', label: 'Candles', kinds: ['single_candle', 'multi_candle'] },
+  { key: 'crossovers', label: 'Indicator crossovers', kinds: ['indicator'] },
+  { key: 'price_action', label: 'Price action', kinds: ['price_action'] },
+  { key: 'structure', label: 'Structure', kinds: ['structure'] },
+  { key: 'formations', label: 'Chart formations', kinds: ['graph_formation'] },
+]
 
 export const PATTERN_TYPES = [
   { type: 'bullish', label: 'Bullish', color: 'var(--good)' },

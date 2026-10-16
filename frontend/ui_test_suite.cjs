@@ -612,12 +612,13 @@ async function restorePrefs() {
     const hiddenAgain = await page.locator('.chart-grid').first().locator(DEPTH_TEXT).count();
     checkTrue('[new] depth cycle click 3 hides the depth panel again', hiddenAgain === 0);
 
-    // ---- chart Indicators picker: every row has a readout column ----
+    // ---- indicators: a strip above the graph, every chip with its value (2026-10-16) ----
+    check('[SIG] indicator strip shows a value for all 13 indicators', await page.locator('.chart-grid [data-indicator-strip] [data-readout]').count(), 13);
     await setIndicatorsMode(page.locator('.chart-grid').first(), 'right');
-    check('[new] Indicators picker shows a readout for all 15 rows', await page.locator('.chart-grid [data-readout]').count(), 15);
+    checkTrue('[SIG] the Signals tab holds no indicators (no readout rows in the window)', await page.locator('.chart-grid [data-indicators-window] [data-readout]').count() === 0);
     // ALGO-34: three tabs -- Indicators (as before), Patterns, Strategies
     const rail = page.locator('.chart-grid [data-indicator-tabs]').first();
-    check('[ALGO-34] Indicators panel has 3 tabs', await rail.locator('[data-panel-tab]').allInnerTexts().then((t) => t.map((x) => x.replace(/\d+$/, '').trim())), ['Indicators', 'Patterns', 'Strategies']);
+    check('[ALGO-34] Indicators panel has 3 tabs', await rail.locator('[data-panel-tab]').allInnerTexts().then((t) => t.map((x) => x.replace(/\d+$/, '').trim())), ['Signals', 'Patterns', 'Strategies']);
     await rail.locator('[data-panel-tab="patterns"]').click();
     // the test stack can queue this request ~15-20 s behind its resetting socket.io polls
     await eventually(async () => await rail.locator('[data-pattern-option]').count() > 0, 30000);
@@ -631,7 +632,7 @@ async function restorePrefs() {
     await rail.locator('[data-panel-tab="patterns"]').click();
     checkTrue('[ALGO-34] a ticked pattern stays ticked when switching tabs', await rail.locator('[data-pattern-option="macd_departure_bull"] input').isChecked());
     await rail.locator('[data-pattern-option="macd_departure_bull"] input').uncheck();
-    await rail.locator('[data-panel-tab="indicators"]').click();
+    await rail.locator('[data-panel-tab="signals"]').click();
     await setIndicatorsMode(page.locator('.chart-grid').first(), 'hidden');
 
     // ---- fullscreen ----
@@ -741,8 +742,9 @@ async function restorePrefs() {
         for (const r of m.filter((x) => x.activity_type === 'pattern')) (byPattern[r.activity] ??= new Set()).add(r.ts);
         const busiest = Object.entries(byPattern).sort((a, b) => b[1].size - a[1].size)[0]?.[0] ?? null;
         const without = new Set(m.filter((x) => x.activity_type === 'pattern' && x.activity !== busiest).map((x) => x.ts));
+        const codes = new Set((await (await fetch('/api/strategy-elements')).json()).filter((e) => e.element_type === 'event').map((e) => e.code));
         return {
-          all: new Set(m.map((x) => x.ts)).size,
+          all: new Set(m.filter((x) => x.activity_type === 'pattern' || codes.has(x.activity)).map((x) => x.ts)).size,
           patterns: new Set(m.filter((x) => x.activity_type === 'pattern').map((x) => x.ts)).size,
           busiest, withoutBusiest: without.size,
           directions: [...new Set(m.filter((x) => x.activity_type === 'pattern').map((x) => x.direction))],
@@ -769,24 +771,25 @@ async function restorePrefs() {
         check('[ALGO-34] unticking a pattern removes exactly its dots', await dots34(), withoutNow);
         await rail34.locator(`[data-pattern-option="${marks.busiest}"] input`).check();
       }
-      await rail34.locator('[data-panel-tab="indicators"]').click();
-      for (const label of ['Patterns, price action & structure', 'Strategy signals']) {
-        await rail34.locator('label', { hasText: label }).locator('input').check();
-      }
+      await rail34.locator('[data-panel-tab="signals"]').click();
+      // tick every raw signal: each group's "all" switch (Signals tab, 2026-10-16)
+      await eventually(async () => await rail34.locator('[data-signal-group-all]').count() > 0, 10000);
+      for (const box of await rail34.locator('[data-signal-group-all]').all()) await box.check();
       let allNow = marks.all; // a new candle can close mid-test on live: re-read
       await eventually(async () => {
         allNow = await page.evaluate(async (sym) => {
           const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
           const m = (await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json()).markers;
-          return new Set(m.map((x) => x.ts)).size;
+          const codes = new Set((await (await fetch('/api/strategy-elements')).json()).filter((e) => e.element_type === 'event').map((e) => e.code));
+          return new Set(m.filter((x) => x.activity_type === 'pattern' || codes.has(x.activity)).map((x) => x.ts)).size;
         }, symbol);
         return await dots34() === allNow;
       }, 8000);
       check('[ALGO-34] ticking the raw events adds them (one dot per candle with anything ticked)', await dots34(), allNow);
-      const savedToggles = await waitForSavedPrefs(page, (x) => x['chart.toggles']?.patterns === true && x['chart.toggles']?.signals === true);
-      checkTrue('[PREF] the chart\'s ticked items are saved for the user',
-        savedToggles['chart.toggles']?.patterns === true && savedToggles['chart.toggles']?.signals === true && Array.isArray(savedToggles['chart.selectedPatterns.v2']),
-        { toggles: savedToggles['chart.toggles'], patterns: savedToggles['chart.selectedPatterns.v2']?.length });
+      const savedToggles = await waitForSavedPrefs(page, (x) => (x['chart.selectedSignals']?.length ?? 0) > 20);
+      checkTrue('[PREF] the chart\'s ticked signals and patterns are saved for the user',
+        (savedToggles['chart.selectedSignals']?.length ?? 0) > 20 && Array.isArray(savedToggles['chart.selectedPatterns.v2']),
+        { signals: savedToggles['chart.selectedSignals']?.length, patterns: savedToggles['chart.selectedPatterns.v2']?.length });
       await setIndicatorsMode(chart, 'hidden');
 
       // hover across the price pane until a marker's names show
@@ -809,7 +812,8 @@ async function restorePrefs() {
       const allDots = () => page.evaluate(async (sym) => {
         const c = await (await fetch(`/api/candles?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&days=21`)).json();
         const m = (await (await fetch(`/api/candles/markers?symbol=${sym}&exchange_segment=NSE_EQ&timeframe=1min&from=${c.candles[0].ts}`)).json()).markers;
-        return new Set(m.map((x) => x.ts)).size;
+        const codes = new Set((await (await fetch('/api/strategy-elements')).json()).filter((e) => e.element_type === 'event').map((e) => e.code));
+        return new Set(m.filter((x) => x.activity_type === 'pattern' || codes.has(x.activity)).map((x) => x.ts)).size;
       }, symbol);
       let expectedDots = marks.all;
       await eventually(async () => await dotCount() === (expectedDots = await allDots()), 25000);
