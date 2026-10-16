@@ -463,6 +463,8 @@ async function graphOnlyOff(card) {
         return NaN
       }
       const zoomIn = async (scope) => {
+        // the chart can sit below the window (13 rows on live) -- wheel turns must land on it
+        await scope.locator('[data-chart-stack]').first().scrollIntoViewIfNeeded()
         const b = await scope.locator('[data-chart-stack] canvas').first().boundingBox()
         await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
         for (let i = 0; i < 45; i++) { await page.mouse.wheel(0, -400); await page.waitForTimeout(40) }
