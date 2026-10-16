@@ -35,7 +35,7 @@ import {
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
-import { DEFAULT_BODY_RATIO, ThinCandleSeries } from './thinCandleSeries.js'
+import { DEFAULT_BODY_RATIO, ThinCandleSeries, markWidth } from './thinCandleSeries.js'
 import { getPref, setPref } from '../preferences.js'
 import { openReview } from '../api/client.js'
 import IndicatorPanelTabs from './IndicatorPanelTabs.jsx'
@@ -109,8 +109,9 @@ function istDayStartIso(ts) {
 }
 
 function toBar(candle) {
+  const time = Math.floor(new Date(candle.ts).getTime() / 1000)
   return {
-    time: Math.floor(new Date(candle.ts).getTime() / 1000),
+    time, t: time, // t: the candle series' own copy (the library strips `time` before draw)
     open: candle.open, high: candle.high, low: candle.low, close: candle.close,
   }
 }
@@ -171,11 +172,6 @@ const PANEL_DEFS = [
 ]
 
 // pattern dots by type (ALGO-34) -- same pink/red as the colour scale
-// Mark sizes that LOOK equal (user, 2026-10-16: the square looked bigger than
-// the circle). lightweight-charts draws a circle 0.8 x its size wide, a square
-// 0.7 x (same area, but the corners read bigger) and an arrow 1.0 x, so the
-// square and triangle get smaller settings. Same-candle marks stack above the bar.
-const MARK_SIZE = { circle: 0.7, square: 0.56, triangle: 0.5 }
 const PATTERN_DOT_COLOR = { bullish: '#1f9d55', bearish: '#d64545', caution: '#e48aae', avoid: '#8e1b1b' }
 
 export default function CandleChart({
@@ -209,6 +205,7 @@ export default function CandleChart({
   const daySepRef = useRef(null)
   const diagramRef = useRef(null)
   const tooltipRef = useRef(null)
+  const marksVersionRef = useRef(0) // bumped to repaint after the marks change
   const priceZoomRef = useRef(0) // ALGO-26 vertical zoom in whole wheel steps; 0 = auto-fit (factor 0.9^steps)
   const selectedPatternsRef = useRef(getPref('chart.selectedPatterns.v2', null) ?? []) // pattern keys ticked on the Patterns tab (all enabled until changed)
   const selectedStrategiesRef = useRef([]) // strategy ids ticked on the Strategies tab
@@ -323,7 +320,8 @@ export default function CandleChart({
     c.bbFillUpper = c.main.addAreaSeries({ lineVisible: false, topColor: tok('--ind-bb') + '22', bottomColor: tok('--ind-bb') + '22', priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
     c.bbFillLower = c.main.addAreaSeries({ lineVisible: false, topColor: tok('--chart-bg'), bottomColor: tok('--chart-bg'), priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
     // thin-bodied candles (custom series): body ~60% of its slot, like Dhan (2026-10-16)
-    c.candle = c.main.addCustomSeries(new ThinCandleSeries(), { upColor: tok('--up'), downColor: tok('--down'), bodyRatio: CANDLE_BODY_RATIO })
+    c.candleView = new ThinCandleSeries() // also draws the event marks, at candle-body width
+    c.candle = c.main.addCustomSeries(c.candleView, { upColor: tok('--up'), downColor: tok('--down'), bodyRatio: CANDLE_BODY_RATIO })
     c.volume = c.main.addHistogramSeries({ priceScaleId: 'volume', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false })
     c.volume.priceScale().applyOptions({ scaleMargins: { top: 0.88, bottom: 0 } })
     c.vwap = c.main.addLineSeries({ color: tok('--ind-vwap'), lineWidth: 2, priceLineVisible: false, lastValueVisible: false })
@@ -700,6 +698,8 @@ export default function CandleChart({
     if (range) layer.dataset.barsVisible = (range.to - range.from).toFixed(1)
     if (range) layer.dataset.rangeFrom = range.from.toFixed(1)
     if (range) layer.dataset.barSpacing = (plotWidth() / (range.to - range.from)).toFixed(2)
+    layer.dataset.marksDrawn = String(c.candleView?._renderer?.marksDrawn ?? 0)
+    if (range) layer.dataset.markWidth = markWidth(plotWidth() / (range.to - range.from), CANDLE_BODY_RATIO).toFixed(2)
     if (range) layer.dataset.candleBody = (plotWidth() / (range.to - range.from) * CANDLE_BODY_RATIO).toFixed(2)
     layer.dataset.bodyRatio = String(c.candle.options().bodyRatio)
     if (range) layer.dataset.pxPerMinute = (plotWidth() / (range.to - range.from) / (TF_MINUTES[timeframeRef.current] ?? 1)).toFixed(2)
@@ -841,21 +841,26 @@ export default function CandleChart({
         const signals = events.filter((e) => e.activity_type !== 'pattern' && e.activity_type !== 'strategy')
         if (signals.length) {
           const net = signals.reduce((n, e) => n + (e.direction === 'bull' ? 1 : e.direction === 'bear' ? -1 : 0), 0)
-          dots.push({ time, position: 'aboveBar', shape: 'circle', size: MARK_SIZE.circle, color: net > 0 ? tok('--good') : net < 0 ? tok('--critical') : tok('--accent') })
+          dots.push({ time, shape: 'circle', color: net > 0 ? tok('--good') : net < 0 ? tok('--critical') : tok('--accent') })
         }
         if (patterns.length) {
           // the top pattern's colour -- green bullish, red bearish, pink caution, dark red avoid
           const top = [...patterns].sort((x, y) => (y.score ?? 0) - (x.score ?? 0))[0]
-          dots.push({ time, position: 'aboveBar', shape: 'square', size: MARK_SIZE.square, color: PATTERN_DOT_COLOR[top.pattern_type] ?? tok('--accent') })
+          dots.push({ time, shape: 'square', color: PATTERN_DOT_COLOR[top.pattern_type] ?? tok('--accent') })
         }
         if (strategies.length) {
           const bear = strategies.some((e) => e.direction === 'bear')
-          dots.push({ time, position: bear ? 'aboveBar' : 'belowBar', shape: bear ? 'arrowDown' : 'arrowUp', size: MARK_SIZE.triangle, color: bear ? tok('--critical') : tok('--good') })
+          dots.push({ time, shape: bear ? 'triangleDown' : 'triangleUp', color: bear ? tok('--critical') : tok('--good') })
         }
       }
       dots.sort((x, y) => x.time - y.time)
     }
-    charts.current.candle?.setMarkers(dots)
+    // drawn by the candle series itself, at the candle body's width (3-12 px)
+    const byCandle = new Map()
+    for (const d of dots) byCandle.set(d.time, [...(byCandle.get(d.time) ?? []), d])
+    charts.current.candleView?.setMarks(byCandle)
+    marksVersionRef.current += 1
+    charts.current.candle?.applyOptions({ marksVersion: marksVersionRef.current }) // repaint
     const layer = diagramRef.current
     // candles marked (one hover list each); the marks per kind for the UI suite
     if (layer) {

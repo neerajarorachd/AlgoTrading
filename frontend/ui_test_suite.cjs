@@ -850,7 +850,10 @@ async function restorePrefs() {
       check('[ALGO-34] by default the chart shows only pattern dots (raw events off)', await dots34(), marks.patterns);
       const shapes = async () => JSON.parse((await layer34.getAttribute('data-mark-shapes')) || '{}');
       const s0 = await shapes();
-      checkTrue('[MARK] patterns are squares (no circles while raw signals are off)', (marks.patterns === 0 || s0.square > 0) && !s0.circle && !s0.arrowUp && !s0.arrowDown, s0);
+      checkTrue('[MARK] patterns are squares (no circles while raw signals are off)', (marks.patterns === 0 || s0.square > 0) && !s0.circle && !s0.triangleUp && !s0.triangleDown, s0);
+      const mw = Number(await layer34.getAttribute('data-mark-width'));
+      const body = Number(await layer34.getAttribute('data-candle-body'));
+      checkTrue('[MARK] a mark is as wide as the candle body, kept within 3-12 px', mw >= 3 && mw <= 12 && Math.abs(mw - Math.min(12, Math.max(3, body))) < 0.05, { mw, body });
       checkTrue('[ALGO-34] pattern hits carry a direction from their type', marks.directions.some((d) => d === 'bull' || d === 'bear'), marks.directions);
       await setIndicatorsMode(chart, 'right');
       const rail34 = chart.locator('[data-indicator-tabs]');
