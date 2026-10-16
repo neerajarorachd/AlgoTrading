@@ -93,9 +93,17 @@ def test_recently_default_n_comes_from_the_pattern_lookback():
     assert as_list(got) == [False, True, True, False, False]
 
 
-def test_recently_stops_at_the_day_boundary():
+def test_recently_sees_the_previous_session():
+    # running data spans sessions (2026-10-16): a cross on day 1's last candle
+    # is "recent" on day 2's first
     df = frame(rsi=[40.0, 50.0, 50.0], **{TRADING_DATE_COLUMN: [0, 0, 1]})
-    assert as_list(parse_and_evaluate("RECENTLY(CROSSED_UP(RSI, 45), 10)", df)) == [False, True, False]
+    assert as_list(parse_and_evaluate("RECENTLY(CROSSED_UP(RSI, 45), 10)", df)) == [False, True, True]
+
+
+def test_recently_with_vwap_stays_inside_the_session():
+    df = frame(close=[9.0, 11.0, 11.0], vwap=[10.0, 10.0, 12.0], **{TRADING_DATE_COLUMN: [0, 0, 1]})
+    # close crossed above VWAP on day 1; on day 2 VWAP restarted -- not "recent"
+    assert as_list(parse_and_evaluate("RECENTLY(CROSSED_UP(CLOSE, VWAP), 10)", df)) == [False, True, False]
 
 
 def test_for_needs_every_candle_in_the_window():

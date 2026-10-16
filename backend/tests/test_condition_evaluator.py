@@ -227,7 +227,9 @@ def test_mean_rejects_a_non_field_first_argument(df):
         parse_and_evaluate("mean(close - open, 2)", df)
 
 
-def test_mean_does_not_leak_across_a_trading_day_boundary():
+def test_mean_runs_across_the_trading_day_boundary():
+    # running data spans sessions (2026-10-16): day 2's first candle averages
+    # day 1's last two candles with its own
     import datetime as dt
     df = pd.DataFrame({
         "volume": [100.0, 200.0, 300.0, 400.0],
@@ -235,9 +237,24 @@ def test_mean_does_not_leak_across_a_trading_day_boundary():
     })
     result = parse_and_evaluate("mean(volume, 3)", df)
     assert result.iloc[2] == pytest.approx((100.0 + 200.0 + 300.0) / 3)
-    # day 2's own first candle -- only 1 value available in ITS OWN day, not
-    # a 3-candle window reaching back into day 1
-    assert pd.isna(result.iloc[3])
+    assert result.iloc[3] == pytest.approx((200.0 + 300.0 + 400.0) / 3)
+
+
+def test_vwap_stays_inside_its_session():
+    # VWAP restarts every morning: its offsets and averages never read yesterday
+    import datetime as dt
+    df = pd.DataFrame({
+        "vwap": [10.0, 11.0, 20.0, 21.0],
+        "close": [10.5, 11.5, 19.0, 22.0],
+        TRADING_DATE_COLUMN: [dt.date(2026, 1, 1), dt.date(2026, 1, 1), dt.date(2026, 1, 2), dt.date(2026, 1, 2)],
+    })
+    assert pd.isna(parse_and_evaluate("vwap[-1]", df).iloc[2])
+    assert pd.isna(parse_and_evaluate("mean(vwap, 2)", df).iloc[2])
+    # a cross of VWAP on the opening candle would compare against yesterday's
+    # VWAP: not a cross; the second candle's real cross still counts
+    crossed = parse_and_evaluate("CROSSED_UP(CLOSE, VWAP)", df).tolist()
+    assert crossed[2] is False or crossed[2] == False  # noqa: E712
+    assert bool(crossed[3]) is True
 
 
 def test_context_constant_is_usable_in_a_formula(df):
@@ -257,15 +274,15 @@ def test_unknown_name_error_lists_context_keys_when_provided(df):
         parse_and_evaluate("not_a_field", df, context={"order_size": 5000})
 
 
-def test_offset_does_not_leak_across_a_trading_day_boundary():
-    # day 1: two candles, day 2: one candle -- close[-1] on day 2's first
-    # candle must be NaN, not day 1's last close
+def test_offset_runs_across_the_trading_day_boundary():
+    # day 1: two candles, day 2: one -- close[-1] on day 2's first candle is
+    # day 1's last close (running data spans sessions, 2026-10-16)
     import datetime as dt
     df = pd.DataFrame({
         "close": [10.0, 11.0, 20.0],
         TRADING_DATE_COLUMN: [dt.date(2026, 1, 1), dt.date(2026, 1, 1), dt.date(2026, 1, 2)],
     })
     result = parse_and_evaluate("close[-1]", df)
-    assert pd.isna(result.iloc[0])  # first candle of day 1 -- no prior candle at all
-    assert result.iloc[1] == 10.0  # second candle of day 1 -- day 1's own first close
-    assert pd.isna(result.iloc[2])  # first candle of day 2 -- must NOT see day 1's 11.0
+    assert pd.isna(result.iloc[0])  # first candle of all -- no prior candle at all
+    assert result.iloc[1] == 10.0
+    assert result.iloc[2] == 11.0  # day 2's first candle sees day 1's last close

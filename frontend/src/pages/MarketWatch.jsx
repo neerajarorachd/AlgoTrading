@@ -13,6 +13,7 @@ import PageTitleBar from '../components/PageTitleBar.jsx'
 import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import TimeframeBar from '../components/TimeframeBar.jsx'
+import HitReview from '../components/HitReview.jsx'
 import { withinColour } from '../components/colourSort.js'
 import PanelToggle from '../components/PanelToggle.jsx'
 import { getPref, setPref, usePreference } from '../preferences.js'
@@ -89,6 +90,9 @@ export default function MarketWatch() {
   const [depthModeById, setDepthModeById] = useState({})
   // per-symbol detail tabs, independent of the below-grid chart cards above
   const [tabs, setTabs] = useState([])
+  // hit-review tabs (2026-10-16), opened from a count in the chart's Signals /
+  // Patterns tabs; saved per user like the instrument tabs
+  const [reviewTabs, setReviewTabs] = usePreference('workspace.reviewTabs', [], (v) => Array.isArray(v))
   const [activeTabId, setActiveTabId] = useState(null) // null = the Market Watch grid tab
   const feed = useFeedStatus()
   const [liveEvents, setLiveEvents] = useState([]) // newest first, from the `activity` WS event
@@ -233,10 +237,25 @@ export default function MarketWatch() {
 
   // drop the active tab if what it points at is no longer open
   useEffect(() => {
-    if (activeTabId !== null && !tabs.some((s) => s.id === activeTabId)) {
+    if (activeTabId !== null && !tabs.some((s) => s.id === activeTabId) && !reviewTabs.some((t) => t.id === activeTabId)) {
       setActiveTabId(null)
     }
-  }, [tabs, activeTabId])
+  }, [tabs, reviewTabs, activeTabId])
+
+  // a count clicked in a chart: open (or re-open) that review as a tab
+  useEffect(() => {
+    function onOpenReview(e) {
+      const d = e.detail
+      const id = `review:${d.kind}:${d.key}:${d.symbol}`
+      setReviewTabs((prev) => (prev.some((t) => t.id === id) ? prev : [...prev, {
+        id, kind: d.kind, key: d.key, symbol: d.symbol, exchange_segment: d.exchange_segment,
+        label: `Review: ${d.name ?? d.key} · ${d.symbol}`,
+      }]))
+      setActiveTabId(id)
+    }
+    window.addEventListener('algo:open-review', onOpenReview)
+    return () => window.removeEventListener('algo:open-review', onOpenReview)
+  }, [setReviewTabs])
 
   // persist both the chart selection and the tab selection so they survive a
   // page refresh — gated on the restore attempt above having already run,
@@ -365,9 +384,11 @@ export default function MarketWatch() {
 
   function handleCloseTab(id) {
     setTabs((prev) => prev.filter((s) => s.id !== id))
+    setReviewTabs((prev) => prev.filter((t) => t.id !== id))
   }
 
   const activeTabInstrument = tabs.find((s) => s.id === activeTabId) ?? null
+  const activeReview = reviewTabs.find((t) => t.id === activeTabId) ?? null
 
   return (
     <>
@@ -400,9 +421,11 @@ export default function MarketWatch() {
           }
         }
       `}</style>
-      <PageTabBar tabs={tabs} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleCloseTab} />
+      <PageTabBar tabs={[...tabs, ...reviewTabs]} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleCloseTab} />
 
-      {activeTabInstrument ? (
+      {activeReview ? (
+        <HitReview key={activeReview.id} kind={activeReview.kind} code={activeReview.key} symbol={activeReview.symbol} exchangeSegment={activeReview.exchange_segment} />
+      ) : activeTabInstrument ? (
         <InstrumentDetail
           instrument={activeTabInstrument}
           tick={liveTicks[activeTabInstrument.symbol]}

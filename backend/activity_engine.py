@@ -1362,6 +1362,8 @@ class ActivityEngine:
         # reach the DB only on the scheduled flush, so the live recommendation
         # rule gate (rule_gate.py) reads THIS, never the DB, for same-day data.
         self._frame_rows: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=120))
+        # instrument key -> today's raw signals, each with its strength numbers (/api/review)
+        self.signal_explanations: Dict[InstrumentKey, List[dict]] = {}
         # price-action state, one series per (symbol, exchange_segment, timeframe).
         # _closes holds _MA_LONG_PERIOD candles (the longest window any
         # indicator here needs) — BB(20) reads only the tail slice it needs.
@@ -2015,6 +2017,33 @@ class ActivityEngine:
 
         return self._finish_candle(symbol, exchange_segment, candle, buffer_start)
 
+    def _explain_signals(self, key, rows, new, timeframe) -> None:
+        """Keep, per raw signal just detected, its strength measures with the
+        minimum and actual value (hit_explain; read by /api/review, 2026-10-16)."""
+        from condition_evaluator import frame_from_rows
+        from hit_explain import explain_signal, strength_ok
+        from signal_strength import STRENGTH_MEASURES
+        acts = [a for a in new if a.get("activity_type") != "pattern"]
+        if not acts or not self._evaluate_patterns:  # live / today's part only, not the history warm-up
+            return
+        try:
+            window = list(rows)[-60:]  # enough for every measure's average, across sessions
+            df = frame_from_rows(window)
+            index_of = {_as_utc(r["ts"]): i for i, r in enumerate(window)}
+            evaluator = self.pattern_evaluator
+            strength = (evaluator.strength.get(timeframe, {}) if evaluator is not None else {})
+            store = self.signal_explanations.setdefault(key, [])
+            latest_day = (_as_utc(window[-1]["ts"]) + _IST).date()
+            store[:] = [e for e in store if (_as_utc(e["ts"]) + _IST).date() == latest_day]
+            for act in acts:
+                i = index_of.get(_as_utc(act["ts"]))
+                measures = STRENGTH_MEASURES.get(act["activity"], {})
+                explained = explain_signal(act["activity"], df, strength.get(act["activity"], {}), measures, i) if i is not None and measures else []
+                store.append({"ts": act["ts"], "timeframe": timeframe, "signal": act["activity"],
+                              "kind": act.get("activity_type"), "measures": explained, "strong": strength_ok(explained)})
+        except Exception:
+            logger.exception("Explaining raw signals failed for %s", key)
+
     def _finish_candle(self, symbol: str, exchange_segment: str, candle: Candle, buffer_start: int) -> List[dict]:
         """Last step of every candle (ALGO-32): note this candle's raw events
         on its frame row (a swing lands on its own, earlier, candle's row),
@@ -2031,6 +2060,7 @@ class ActivityEngine:
                 row = by_ts.get(_as_utc(act["ts"]))
                 if row is not None:
                     row.setdefault("_events", set()).add(act["activity"])
+            self._explain_signals(key, rows, new, candle.timeframe)
         evaluator = self.pattern_evaluator
         if evaluator is not None and self._evaluate_patterns and rows and _as_utc(rows[-1]["ts"]) == _as_utc(candle.timestamp):
             try:

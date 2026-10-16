@@ -704,6 +704,74 @@ async function restorePrefs() {
     await page.close();
   }
 
+  // ==================== hit review from the chart's counts (2026-10-16) ====================
+  {
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page.waitForFunction(() => document.querySelectorAll('[data-instrument-grid] tbody tr').length > 1, null, { timeout: 30000 });
+    if (!(await page.locator('.chart-grid .chart-card').count())) await page.locator('[data-instrument-grid] tbody tr').first().click();
+    const card = page.locator('.chart-grid .chart-card').first();
+    await card.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 });
+    await page.waitForTimeout(2500);
+    await setIndicatorsMode(card, 'right');
+    const win = card.locator('[data-indicators-window]');
+    const tfShown = await card.locator('[data-chart-tf][aria-pressed="true"]').first().getAttribute('data-chart-tf');
+    const tryKind = async (tab, prefix) => {
+      await win.locator(`[data-panel-tab="${tab}"]`).click();
+      await eventually(async () => await win.locator(`[data-hit-count^="${prefix}:"]`).count() > 0, 15000);
+      const counts = await win.locator(`[data-hit-count^="${prefix}:"]`).evaluateAll((els) => els.map((e) => ({ id: e.dataset.hitCount, n: Number(e.innerText), enabled: !e.disabled })));
+      const pick = counts.find((c) => c.n > 0 && c.enabled);
+      if (!pick) return { skipped: true, counts: counts.length };
+      await win.locator(`[data-hit-count="${pick.id}"]`).click();
+      const review = page.locator('[data-hit-review]');
+      const opened = await eventually(async () => await review.count() === 1, 10000);
+      const tabLabel = await page.locator('[data-tab-pane] button', { hasText: 'Review:' }).last().innerText().catch(() => '');
+      // the count was this chart's timeframe; the review shows all three -- narrow it to compare
+      await review.locator(`[data-review-tf="${tfShown}"]`).click();
+      await page.waitForTimeout(300);
+      const rows = await review.locator('[data-review-hit]').count();
+      const total = Number(await review.locator('[data-review-total]').innerText());
+      const hasNumbers = await review.locator('[data-review-hit] td[data-met]').count() > 0 || prefix === 'signal';
+      return { opened, tabLabel, rows, total, n: pick.n, hasNumbers, id: pick.id };
+    };
+    const pat = await tryKind('patterns', 'pattern');
+    if (pat.skipped) console.log('SKIP  [REVIEW] no pattern hits on this chart to click');
+    else {
+      checkTrue('[REVIEW] clicking a pattern count opens a "Review:" Workspace tab', pat.opened && /^Review: .+ · /.test(pat.tabLabel), pat);
+      checkTrue('[REVIEW] ...showing that many hits on this timeframe, with each condition\'s numbers', pat.rows === pat.n && pat.total >= pat.n && pat.hasNumbers, pat);
+    }
+    // back to the grid tab, open a signal count
+    await page.locator('[data-tab-pane] button', { hasText: 'Market Watch' }).first().click();
+    await page.waitForTimeout(800);
+    const card2 = page.locator('.chart-grid .chart-card').first();
+    await card2.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 });
+    await setIndicatorsMode(card2, 'right');
+    const sig = await (async () => {
+      const w2 = card2.locator('[data-indicators-window]');
+      await w2.locator('[data-panel-tab="signals"]').click();
+      await eventually(async () => await w2.locator('[data-hit-count^="signal:"]').count() > 0, 15000);
+      const counts = await w2.locator('[data-hit-count^="signal:"]').evaluateAll((els) => els.map((e) => ({ id: e.dataset.hitCount, n: Number(e.innerText), enabled: !e.disabled })));
+      const pick = counts.find((c) => c.n > 0 && c.enabled);
+      if (!pick) return { skipped: true };
+      await w2.locator(`[data-hit-count="${pick.id}"]`).click();
+      const opened = await eventually(async () => await page.locator('[data-hit-review^="signal:"]').count() === 1, 10000);
+      return { opened, id: pick.id };
+    })();
+    if (sig.skipped) console.log('SKIP  [REVIEW] no raw signals on this chart to click');
+    else checkTrue('[REVIEW] clicking a signal count opens its review', sig.opened, sig);
+    const reviewTabs = await page.locator('[data-tab-pane] button', { hasText: 'Review:' }).count();
+    checkTrue('[REVIEW] review tabs sit in the Workspace tab bar', reviewTabs >= (pat.skipped ? 0 : 1) + (sig.skipped ? 0 : 1), reviewTabs);
+    // close them again
+    for (let i = 0; i < reviewTabs; i++) {
+      await page.locator('[data-tab-pane] button', { hasText: 'Review:' }).first().locator('span[title^="Close"]').click();
+      await page.waitForTimeout(200);
+    }
+    checkTrue('[REVIEW] no page errors', errors.length === 0, errors);
+    await page.close();
+  }
+
   // ==================== multi-day chart (step 4, 2026-10-08) ====================
   // Needs a stock with several stored sessions; CHART_SYMBOL picks it (the
   // test stack is seeded with BANKBARODA). Skipped if that row isn't there.
@@ -777,8 +845,8 @@ async function restorePrefs() {
       }
       await rail34.locator('[data-panel-tab="signals"]').click();
       // tick every raw signal: each group's "all" switch (Signals tab, 2026-10-16)
-      await eventually(async () => await rail34.locator('[data-signal-group-all]').count() > 0, 10000);
-      for (const box of await rail34.locator('[data-signal-group-all]').all()) await box.check();
+      await eventually(async () => await rail34.locator('[data-group-all^="signal-"]').count() > 0, 10000);
+      for (const box of await rail34.locator('[data-group-all^="signal-"]').all()) await box.check();
       let allNow = marks.all; // a new candle can close mid-test on live: re-read
       await eventually(async () => {
         allNow = await page.evaluate(async (sym) => {

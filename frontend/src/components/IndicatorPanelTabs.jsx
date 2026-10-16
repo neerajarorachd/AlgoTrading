@@ -5,7 +5,7 @@
 // per viewer and reported through onPatternsChange/onStrategiesChange so the
 // chart can mark them (pattern marks arrive with pattern evaluation, ALGO-32).
 import { useEffect } from 'react'
-import PatternPicker, { Note } from './PatternPicker.jsx'
+import PatternPicker, { Note, ShowToggle } from './PatternPicker.jsx'
 import StrategyPicker from './StrategyPicker.jsx'
 import { usePatterns } from './patternData.js'
 import { usePreference } from '../preferences.js'
@@ -20,7 +20,9 @@ function toggled(list, id) {
   return list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
 }
 
-export default function IndicatorPanelTabs({ children, onPatternsChange, onStrategiesChange }) {
+// show / onShowChange(tab, on): each tab's "Show on graph" box (2026-10-16),
+// owned by the chart so it applies with the window closed too
+export default function IndicatorPanelTabs({ children, onPatternsChange, onStrategiesChange, show = {}, onShowChange, patternCounts, onOpenReview }) {
   // the user's last choices (preferences.js). Patterns: every enabled pattern
   // is ticked until the user changes the selection (ALGO-34 default: the chart
   // shows pattern dots, raw events off).
@@ -56,16 +58,17 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
       </div>
 
       <div role="tabpanel" data-panel={tab} style={{ overflowY: 'auto', minHeight: 0, flex: '1 1 auto' }}>
+        {onShowChange && <ShowToggle id={tab} on={show[tab] !== false} onChange={(on) => onShowChange(tab, on)} />}
         {tab === 'signals' && children}
         {tab === 'patterns' && (
           <>
-            <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} />
+            <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} onChange={setPatterns} disabled={show.patterns === false} counts={patternCounts} onOpenReview={onOpenReview} />
             <Note>Ticked patterns get a dot where they form. Raw signals (Signals tab) are off unless ticked there.</Note>
           </>
         )}
         {tab === 'strategies' && (
           <>
-            <StrategyPicker selected={strategies} onToggle={(id) => setStrategies((prev) => toggled(prev, id))} />
+            <StrategyPicker selected={strategies} onToggle={(id) => setStrategies((prev) => toggled(prev, id))} onChange={setStrategies} disabled={show.strategies === false} />
             <Note>Strategy entries and exits are marked once strategies use patterns.</Note>
           </>
         )}

@@ -111,10 +111,11 @@ def test_rule_for_an_unknown_measure_is_rejected(session_factory):
         ops.set_rule(session_factory, "doji", "wick_ratio", 2)
 
 
-def test_a_market_open_formation_is_not_blocked_by_an_unmeasurable_volume_average():
-    # first candles of the day: mean(VOLUME, 20) is not available yet
+def test_an_unmeasurable_strength_minimum_is_not_met():
+    # user, 2026-10-16: "None is always true, remove from everywhere" -- a
+    # measure that can't be computed (no 20-candle volume average yet) fails
     df = frame([candle(100, 100.05, 99.55, 100.04)], [{"hammer"}])
     rules = {"strength_rules": {"hammer": {"range_pct": 0.2, "volume_ratio": 1.0}}}
-    assert parse_and_evaluate("EVENT(hammer)", df, rules).iloc[0]  # range 0.5% decides
-    tiny = frame([candle(100, 100.02, 99.95, 100.01)], [{"hammer"}])
-    assert not parse_and_evaluate("EVENT(hammer)", tiny, rules).iloc[0]
+    assert not parse_and_evaluate("EVENT(hammer)", df, rules).iloc[0]
+    only_range = {"strength_rules": {"hammer": {"range_pct": 0.2}}}
+    assert parse_and_evaluate("EVENT(hammer)", df, only_range).iloc[0]  # measurable minimum alone decides

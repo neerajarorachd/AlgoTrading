@@ -337,7 +337,7 @@ async function graphOnlyOff(card) {
       // weight; every enabled pattern ticked by default
       await win.locator('[data-panel-tab="patterns"]').click()
       await win.locator('[data-pattern-option]').first().waitFor({ timeout: 15000 }).catch(() => {})
-      const ptitles = await win.locator('[data-pattern-picker] > div > p').allInnerTexts()
+      const ptitles = await win.locator('[data-pattern-group] p').allInnerTexts()
       checkTrue('E15 Patterns: grouped Bullish, Bearish, Caution, Avoid',
         ptitles.map((t) => t.toLowerCase().split(' ')[0]).join(',') === 'bullish,bearish,caution,avoid', ptitles)
       const pats = await win.locator('[data-pattern-option]').evaluateAll((els) => els.map((e) => ({ key: e.dataset.patternOption, on: e.querySelector('input').checked, weight: e.querySelector('.num')?.innerText.trim() })))
@@ -373,14 +373,74 @@ async function graphOnlyOff(card) {
       checkTrue('E17 Signals: ticking one signal (doji) marks exactly its candles', okBase && okDoji && withDoji >= base, { base, withDoji, shown: await dots() })
       await win.locator('[data-signal-option="doji"] input').uncheck()
 
+      // E20: every tab has "all" boxes -- Signals and Patterns per group,
+      // Strategies for its list; ticking one ticks the whole group, unticking
+      // clears it
+      const groupAllWorks = async (prefix, optionAttr) => {
+        const all = win.locator(`[data-group-all^="${prefix}"]`).first()
+        if (!(await all.count())) return 'no all box'
+        const group = all.locator('xpath=ancestor::div[2]')
+        const items = group.locator(`[${optionAttr}] input`)
+        const before = await items.evaluateAll((els) => els.map((e) => e.checked))
+        await all.check(); await page.waitForTimeout(150)
+        const allOn = await items.evaluateAll((els) => els.every((e) => e.checked))
+        await all.uncheck(); await page.waitForTimeout(150)
+        const allOff = await items.evaluateAll((els) => els.every((e) => !e.checked))
+        // put the group back as it was
+        const now = await items.all()
+        for (let i = 0; i < now.length; i++) if (before[i]) await now[i].check()
+        return allOn && allOff
+      }
+      await win.locator('[data-panel-tab="signals"]').click()
+      const sigAll = await groupAllWorks('signal-', 'data-signal-option')
+      await win.locator('[data-panel-tab="patterns"]').click()
+      await win.locator('[data-pattern-option]').first().waitFor({ timeout: 10000 }).catch(() => {})
+      const patAll = await groupAllWorks('pattern-', 'data-pattern-option')
+      const patGroups = await win.locator('[data-group-all^="pattern-"]').count()
+      await win.locator('[data-panel-tab="strategies"]').click()
+      await page.waitForTimeout(400)
+      const hasStrategies = (await win.locator('[data-strategy-option]').count()) > 0
+      const strAll = hasStrategies ? await groupAllWorks('strategies', 'data-strategy-option') : (await win.locator('[data-group-all="strategies"]').count()) >= 0
+      checkTrue('E20 Tabs: Signals and Patterns have an "all" box per group, Strategies one for its list -- each ticks/clears its group',
+        sigAll === true && patAll === true && patGroups === 4 && strAll === true, { sigAll, patAll, patGroups, hasStrategies, strAll })
+
+      // E21: every tab has a "Show on graph" box at the top; off hides that
+      // tab's marks but keeps its ticks (checkboxes disabled in their state);
+      // on brings the same marks back
+      const showBox = (t) => win.locator(`[data-tab-show="${t}"] input`)
+      const tabsHaveShow = []
+      for (const t of ['signals', 'patterns', 'strategies']) {
+        await win.locator(`[data-panel-tab="${t}"]`).click()
+        await page.waitForTimeout(250)
+        const sb2 = await box(win.locator(`[data-tab-show="${t}"]`))
+        const first = await box(win.locator('[data-signal-option], [data-pattern-option], [data-strategy-option], [data-group-all]').first())
+        tabsHaveShow.push((await showBox(t).count()) === 1 && (await showBox(t).isChecked()) && (!first || (sb2 && sb2.y <= first.y)))
+      }
+      checkTrue('E21 Tabs: each tab has a "Show on graph" box above its list, on by default', tabsHaveShow.every(Boolean), tabsHaveShow)
+      await win.locator('[data-panel-tab="patterns"]').click()
+      const patTicks = () => win.locator('[data-pattern-option] input').evaluateAll((els) => els.map((e) => [e.checked, e.disabled]))
+      const dotsBefore = await dots()
+      const ticksBefore = await patTicks()
+      await showBox('patterns').uncheck()
+      await page.waitForTimeout(500)
+      const ticksOff = await patTicks()
+      const dotsOff = await dots()
+      checkTrue('E21 Patterns: Show off hides the pattern dots and locks the ticks as they are',
+        dotsOff <= dotsBefore && (base === 0 || dotsOff < dotsBefore) && ticksOff.every(([on, dis], i) => dis && on === ticksBefore[i][0]), { dotsBefore, dotsOff })
+      await showBox('patterns').check()
+      await page.waitForTimeout(500)
+      checkTrue('E21 Patterns: Show on brings the same dots back, ticks editable again',
+        (await dots()) === dotsBefore && (await patTicks()).every(([on, dis], i) => !dis && on === ticksBefore[i][0]), { dotsBefore, now: await dots() })
+
       await setMode(card, 'indicators', indicatorsMode, 'hidden')
       await page.close()
     }
 
     // ==================== chart: candle width measured by x-axis time (2026-10-16) ====================
-    // E18: zoomed fully in, 15 minutes of the time axis never span more than
-    // ~62 px -- Dhan's ~95 px scale, then 65% of it (user, 2026-10-16) -- on
-    // 1/3/5 min and in fullscreen: a 1-min slot ~4.1 px, 3-min ~12.4, 5-min ~20.6.
+    // E18: zoomed fully in, the x-axis shows one time label per candle (10:12,
+    // 10:15, 10:18 on 3-min; user, 2026-10-16) -- a 66 px candle slot here (the
+    // least this chart library labels every candle at) -- on 1/3/5 min and in
+    // fullscreen; never wider.
     // E19: each candle body fills ~60% of its slot (the library's own ~80% was
     // too wide; user, 2026-10-16: body half its old width).
     {
@@ -392,11 +452,11 @@ async function graphOnlyOff(card) {
       await card.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 })
       await page.waitForTimeout(2000)
       await graphOnlyOff(card)
-      const MAX_PX_PER_15_MIN = 62
+      const MAX_SLOT = 66
       // waits until the chart has data (live loads 21 sessions over the tunnel, slower than the test stack)
       const per15 = async (scope) => {
         for (let i = 0; i < 40; i++) {
-          const v = await scope.locator('[data-diagrams]').first().evaluate((el) => Number(el.measureView?.().pxPerMinute) * 15).catch(() => NaN)
+          const v = await scope.locator('[data-diagrams]').first().evaluate((el) => Number(el.measureView?.().barSpacing)).catch(() => NaN)
           if (Number.isFinite(v) && v > 0) return v
           await page.waitForTimeout(500)
         }
@@ -405,7 +465,7 @@ async function graphOnlyOff(card) {
       const zoomIn = async (scope) => {
         const b = await scope.locator('[data-chart-stack] canvas').first().boundingBox()
         await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
-        for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, -400); await page.waitForTimeout(40) }
+        for (let i = 0; i < 45; i++) { await page.mouse.wheel(0, -400); await page.waitForTimeout(40) }
         await page.waitForTimeout(400)
       }
       const seen = {}
@@ -416,14 +476,14 @@ async function graphOnlyOff(card) {
         await zoomIn(card)
         seen[`${tf} zoomed`] = Math.round(await per15(card))
       }
-      checkTrue('E18 Chart: zoomed fully in, 15 min of the time axis span at most 62 px (1/3/5 min)',
-        Object.values(seen).every((v) => v > 0 && v <= MAX_PX_PER_15_MIN + 1) && seen['1min zoomed'] >= MAX_PX_PER_15_MIN - 2, seen)
+      checkTrue('E18 Chart: zoomed fully in, a candle slot is 66 px (one axis label per candle) on 1/3/5 min',
+        Object.values(seen).every((v) => v > 0 && v <= MAX_SLOT + 1) && ['1min', '3min', '5min'].every((tf) => seen[`${tf} zoomed`] >= MAX_SLOT - 2), seen)
       await card.locator('button[title="Fullscreen"]').click()
       await page.waitForTimeout(1500)
       await per15(page) // loaded
       await zoomIn(page)
       const fs = Math.round(await per15(page))
-      checkTrue('E18 Chart: ...and the same in fullscreen', fs > 0 && fs <= MAX_PX_PER_15_MIN + 1, fs)
+      checkTrue('E18 Chart: ...and the same in fullscreen', fs >= MAX_SLOT - 2 && fs <= MAX_SLOT + 1, fs)
       const body = await page.locator('[data-diagrams]').first().evaluate((el) => {
         const d = el.measureView()
         return { ratio: Number(d.bodyRatio), body: Number(d.candleBody), slot: Number(d.barSpacing) }

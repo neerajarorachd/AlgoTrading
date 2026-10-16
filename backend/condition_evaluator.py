@@ -21,12 +21,16 @@ Candle offset: `FIELD` alone means the current (most recent closed) candle,
 implemented as `df[field].shift(-offset)` at read time (shift by the
 POSITIVE offset since more-negative-in-formula means further back in the
 chronologically-ascending DataFrame), directly matching the "get_df[VWAP-1]"
-framing from the request. Offsets never leak across a trading-day boundary
-(explicit instruction, 2026-09-18: "this is an intraday strategy... VWAP is
-applicable only with intraday") -- build_indicator_dataframe() always adds
-TRADING_DATE_COLUMN (the candle's own IST calendar date), and _series_for
-group-shifts by it, so a market-open candle's FIELD[-1] is NaN rather than
-reaching into the prior session's last candle.
+framing from the request. Running data spans sessions (user, 2026-10-16:
+"if something technically should be counted on running data from prev day,
+include 2 days candles"): FIELD[-1] on the market-open candle is the previous
+session's last candle, mean(VOLUME, 20) at 09:17 averages yesterday's closing
+candles with today's, RECENTLY/COUNT/FOR can see yesterday's last candles.
+Session-anchored values stay inside today's session (SESSION_FIELDS: VWAP
+restarts every morning -- 2026-09-18: "VWAP is applicable only with
+intraday"): any offset, window or crossover whose formula mentions VWAP is
+grouped by TRADING_DATE_COLUMN, so VWAP[-1] at 09:15 is unknown rather than
+yesterday's VWAP. A missing value never counts as met.
 
 `slope(FIELD, N)` — `(FIELD - FIELD[-N]) / N` — explicit instruction,
 2026-09-18: "add slopes also." `mean(FIELD, N)` — the rolling average of
@@ -177,6 +181,8 @@ class _Column:
 
 
 TRADING_DATE_COLUMN = "_trading_date"
+# values that restart every session: never read across the day boundary
+SESSION_FIELDS = frozenset({"vwap"})
 
 
 def _series_for(df: pd.DataFrame, column: _Column) -> pd.Series:
@@ -203,7 +209,7 @@ def _series_for(df: pd.DataFrame, column: _Column) -> pd.Series:
         series = df[column.name]
     if not column.offset:
         return series
-    if TRADING_DATE_COLUMN in df.columns:
+    if column.name in SESSION_FIELDS and TRADING_DATE_COLUMN in df.columns:
         return series.groupby(df[TRADING_DATE_COLUMN]).shift(column.offset)
     return series.shift(column.offset)
 
@@ -222,7 +228,7 @@ def _rolling_mean(df: pd.DataFrame, column: _Column, n: int) -> pd.Series:
     are -- grouped by TRADING_DATE_COLUMN when present so a new session's
     first few candles never average in the prior day's closing values."""
     series = _series_for(df, _Column(column.name, 0))
-    if TRADING_DATE_COLUMN in df.columns:
+    if column.name in SESSION_FIELDS and TRADING_DATE_COLUMN in df.columns:
         return series.groupby(df[TRADING_DATE_COLUMN]).transform(lambda s: s.rolling(n, min_periods=n).mean())
     return series.rolling(n, min_periods=n).mean()
 
@@ -250,24 +256,39 @@ def _as_bool(value, df: pd.DataFrame, where: str) -> pd.Series:
     raise FormulaError(f"{where} needs a condition (a comparison), not a number")
 
 
-def _shift(series: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
-    key = _day_key(df)
+def _mentions_session_field(node: ast.AST) -> bool:
+    """True when the expression reads a session-anchored value (VWAP): its
+    windows and crossovers then stay inside today's session."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name):
+            try:
+                if _resolve_field_token(n.id) in SESSION_FIELDS:
+                    return True
+            except FormulaError:
+                continue
+    return False
+
+
+# `bounded`: stay inside each trading day (session-anchored values only);
+# otherwise the window runs across sessions (2026-10-16)
+def _shift(series: pd.Series, df: pd.DataFrame, n: int, bounded: bool = False) -> pd.Series:
+    key = _day_key(df) if bounded else None
     return series.groupby(key).shift(n) if key is not None else series.shift(n)
 
 
-def _rolling(series: pd.Series, df: pd.DataFrame, n: int, how: str, min_periods: int) -> pd.Series:
+def _rolling(series: pd.Series, df: pd.DataFrame, n: int, how: str, min_periods: int, bounded: bool = False) -> pd.Series:
     def roll(s):
         return getattr(s.astype(float).rolling(n, min_periods=min_periods), how)()
-    key = _day_key(df)
+    key = _day_key(df) if bounded else None
     return series.groupby(key).transform(roll) if key is not None else roll(series)
 
 
-def _bars_since(cond: pd.Series, df: pd.DataFrame) -> pd.Series:
-    """Candles since `cond` was last true (0 = now); NaN if not yet today."""
+def _bars_since(cond: pd.Series, df: pd.DataFrame, bounded: bool = False) -> pd.Series:
+    """Candles since `cond` was last true (0 = now); NaN if it never was in the frame."""
     def since(s):
         pos = pd.Series(range(len(s)), index=s.index, dtype=float)
         return pos - pos.where(s.astype(bool)).ffill()
-    key = _day_key(df)
+    key = _day_key(df) if bounded else None
     return cond.groupby(key).transform(since) if key is not None else since(cond)
 
 
@@ -322,15 +343,17 @@ def _eval_event(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[d
     for measure, minimum in minimums.items():
         if measure in measures:
             value = _as_series(_eval_node(ast.parse(_normalize(measures[measure]), mode="eval"), df, context), df)
-            # a measure that can't be computed yet (e.g. the volume average in the
-            # session's first minutes) doesn't block; the measurable ones decide
-            qualified = qualified & ((value >= minimum) | value.isna())
+            # a measure that can't be computed is NOT met (user, 2026-10-16: "None
+            # is always true, remove from everywhere"); with running data spanning
+            # sessions, the volume average etc. exist from the first candle
+            qualified = qualified & (value >= minimum).fillna(False)
     return qualified
 
 
 def _eval_call(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[dict]):
     """The whitelisted functions -- still one evaluator, just known names."""
     ev = lambda n: _eval_node(n, df, context)  # noqa: E731
+    bounded = _mentions_session_field(node)  # VWAP inside: stay within today's session
     if name == "abs":
         (x,) = _arity(node, name, {1})
         value = ev(x)
@@ -344,16 +367,16 @@ def _eval_call(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[di
         if name == "mean":
             return _rolling_mean(df, _Column(field_name, 0), n)
         if name == "median":
-            return _rolling(_series_for(df, _Column(field_name, 0)), df, n, "median", n)
+            return _rolling(_series_for(df, _Column(field_name, 0)), df, n, "median", n, bounded)
         return (_series_for(df, _Column(field_name, 0)) - _series_for(df, _Column(field_name, n))) / n
     if name in ("highest", "lowest"):
         expr, n_node = _arity(node, name, {2})
         n = _positive_int(n_node, f"{name.upper()}(...)'s candle count")
-        return _rolling(_as_series(ev(expr), df), df, n, "max" if name == "highest" else "min", n)
+        return _rolling(_as_series(ev(expr), df), df, n, "max" if name == "highest" else "min", n, bounded)
     if name in ("crossed_up", "crossed_down"):
         a_node, b_node = _arity(node, name, {2})
         a, b = _as_series(ev(a_node), df), _as_series(ev(b_node), df)
-        a1, b1 = _shift(a, df, 1), _shift(b, df, 1)
+        a1, b1 = _shift(a, df, 1, bounded), _shift(b, df, 1, bounded)
         return (a > b) & (a1 <= b1) if name == "crossed_up" else (a < b) & (a1 >= b1)
     if name in ("event", "event_any"):
         return _eval_event(node, name, df, context)
@@ -362,24 +385,24 @@ def _eval_call(node: ast.Call, name: str, df: pd.DataFrame, context: Optional[di
         default = (context or {}).get("lookback", DEFAULT_RECENTLY_CANDLES)
         n = _positive_int(args[1], "RECENTLY(...)'s candle count") if len(args) == 2 else int(default)
         cond = _as_bool(ev(args[0]), df, "RECENTLY(...)")
-        return _rolling(cond, df, n, "max", 1) > 0
+        return _rolling(cond, df, n, "max", 1, bounded) > 0
     if name == "for":
         cond_node, n_node = _arity(node, name, {2})
         n = _positive_int(n_node, "FOR(...)'s candle count")
-        return _rolling(_as_bool(ev(cond_node), df, "FOR(...)"), df, n, "min", n) > 0
+        return _rolling(_as_bool(ev(cond_node), df, "FOR(...)"), df, n, "min", n, bounded) > 0
     if name == "count":
         cond_node, n_node = _arity(node, name, {2})
         n = _positive_int(n_node, "COUNT(...)'s candle count")
-        return _rolling(_as_bool(ev(cond_node), df, "COUNT(...)"), df, n, "sum", 1)
+        return _rolling(_as_bool(ev(cond_node), df, "COUNT(...)"), df, n, "sum", 1, bounded)
     if name == "bars_since":
         (cond_node,) = _arity(node, name, {1})
-        return _bars_since(_as_bool(ev(cond_node), df, "BARS_SINCE(...)"), df)
+        return _bars_since(_as_bool(ev(cond_node), df, "BARS_SINCE(...)"), df, bounded)
     if name == "then":
         a_node, b_node, n_node = _arity(node, name, {3})
         n = _positive_int(n_node, "THEN(...)'s candle count")
         a = _as_bool(ev(a_node), df, "THEN(...)'s first condition")
         b = _as_bool(ev(b_node), df, "THEN(...)'s second condition")
-        a_before = _rolling(_shift(a.astype(float), df, 1), df, n, "max", 1) > 0  # a in the n candles before now
+        a_before = _rolling(_shift(a.astype(float), df, 1, bounded), df, n, "max", 1, bounded) > 0  # a in the n candles before now
         return b & a_before
     raise FormulaError(f"unknown function {name!r} -- allowed: {', '.join(f['name'] for f in FUNCTIONS)}")
 

@@ -13,10 +13,10 @@ export default function PageTabBar({ tabs, activeId, onSelect, onClose, onAddTab
       </TabButton>
       {tabs.map((tab) => (
         <TabButton key={tab.id} active={activeId === tab.id} onClick={() => onSelect(tab.id)}>
-          {tab.symbol}
+          {tab.label ?? tab.symbol}
           <span
             onClick={(e) => { e.stopPropagation(); onClose(tab.id) }}
-            title={`Close ${tab.symbol} tab`}
+            title={`Close ${tab.label ?? tab.symbol} tab`}
             style={{ marginLeft: 8, color: 'var(--text-faint)', fontWeight: 700 }}
           >
             ×

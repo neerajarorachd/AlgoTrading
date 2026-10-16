@@ -16,6 +16,18 @@ export const listSymbols = () => request('/api/symbols')
 // the condition language's ready reckoner (docs/condition_ready_reckoner.md)
 export const getConditionReckoner = () => request('/api/condition-reckoner')
 
+// why today's hits of one pattern / raw signal fired (the hit review, 2026-10-16)
+export const getReview = (params) => {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''))
+  return request(`/api/review?${q.toString()}`)
+}
+
+// asks the Workspace to open a review tab -- an app event, so a chart doesn't
+// need to know where it is embedded (Workspace card, instrument tab)
+export function openReview(detail) {
+  window.dispatchEvent(new CustomEvent('algo:open-review', { detail }))
+}
+
 // Recent events for one instrument (doji formed, MACD crossover, etc, newest
 // first) -- the Market Watch per-row events list.
 export const getRecentActivities = (instrumentId, limit) => {

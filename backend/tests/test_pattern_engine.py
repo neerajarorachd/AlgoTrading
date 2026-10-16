@@ -144,3 +144,34 @@ def test_engine_without_an_evaluator_is_unchanged(factory):
     for c in _candles(5):
         engine.on_candle_closed("X", "NSE_EQ", c)
     assert all(a["activity_type"] != "pattern" for a in engine._buffer)
+
+
+def test_a_hit_keeps_each_conditions_numbers(factory):
+    # hit review (2026-10-16): why it formed -- required and actual per condition
+    _pattern(factory, "five", ["RSI > 10", "RSI > 20", "RSI > 30", "RSI > 40", "RSI > 60"], weight=5)
+    ev = PatternEvaluator(factory)
+    key = ("X", "NSE_EQ", "1min")
+    ev.on_candle(key, _rows([45]), "1min")
+    (hit,) = ev.explanations[key]
+    assert (hit["pattern"], hit["met"], hit["of"]) == ("five", 4, 5)
+    last = hit["conditions"][-1]
+    assert (last["formula"], last["required"], last["actual"], last["met"]) == ("RSI > 60", "> 60.0", 45.0, False)
+
+
+def test_running_data_reaches_into_the_previous_session(factory):
+    # 2026-10-16: the market-open candle reads yesterday's last one (RSI[-1])
+    _pattern(factory, "rising", ["RSI > RSI[-1]"])
+    ev = PatternEvaluator(factory)
+    key = ("X", "NSE_EQ", "1min")
+    yesterday = _rows([40, 50], start=OPEN - timedelta(days=1))
+    today = _rows([55], start=OPEN)
+    assert [h["key"] for h in ev.on_candle(key, yesterday + today, "1min")] == ["rising"]  # 55 > yesterday's 50
+
+
+def test_only_two_sessions_are_read(factory):
+    # three sessions back is not "running data": the window is today + the previous session
+    _pattern(factory, "recent_high", ["RECENTLY(RSI > 90, 10)"])
+    ev = PatternEvaluator(factory)
+    key = ("X", "NSE_EQ", "1min")
+    rows = _rows([95], start=OPEN - timedelta(days=2)) + _rows([40], start=OPEN - timedelta(days=1)) + _rows([40], start=OPEN)
+    assert ev.on_candle(key, rows, "1min") == []

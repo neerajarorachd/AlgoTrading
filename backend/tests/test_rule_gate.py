@@ -49,10 +49,12 @@ def test_operands_unavailable_when_an_indicator_value_is_missing():
     assert formula_operands_available("macd_line", df) is False
 
 
-def test_offsets_do_not_reach_into_the_previous_day():
+def test_offsets_reach_into_the_previous_session():
+    # running data spans sessions (2026-10-16): today's first candle can read
+    # yesterday's last one
     rows = _rows([100, 200], day_offset=-1) + _rows([300], day_offset=0)
     df = frame_from_rows(rows)
-    assert formula_operands_available("volume[-1]", df) is False  # today has only its own first candle
+    assert formula_operands_available("volume[-1]", df) is True
 
 
 # ------------------------------------------------------------------ evaluate_rule / evaluate_rules

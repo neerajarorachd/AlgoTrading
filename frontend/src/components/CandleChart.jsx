@@ -37,6 +37,7 @@ import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
 import { DEFAULT_BODY_RATIO, ThinCandleSeries } from './thinCandleSeries.js'
 import { getPref, setPref } from '../preferences.js'
+import { openReview } from '../api/client.js'
 import IndicatorPanelTabs from './IndicatorPanelTabs.jsx'
 import IndicatorStrip from './IndicatorStrip.jsx'
 import SignalPicker from './SignalPicker.jsx'
@@ -50,11 +51,13 @@ const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const INITIAL_DAYS = 21 // previous 20 sessions + today (ALGO-3)
 const MORE_DAYS = 10
 const DIAGRAM_SECONDS = 5 // a clicked dot's diagrams stay this long (ALGO-25)
-// Zoom limit measured by TIME on the x-axis (user, 2026-10-16): first Dhan's
-// scale (15 min = ~95 px), then "space 65% of that, candle body half": 15 min
-// span at most ~62 px -- a 1-min slot ~4.1 px, 3-min ~12.4 px, 5-min ~20.6 px --
-// and each body fills CANDLE_BODY_RATIO of its slot (was the library's ~80%).
-const MAX_PX_PER_MINUTE = (95 / 15) * 0.65
+// Zoom limit (user, 2026-10-16): fully zoomed in, the x-axis shows one time
+// label per candle -- 10:12, 10:15, 10:18 on 3-min candles, every minute on
+// 1-min -- as on Dhan (same TradingView engine; ~61 px slots there). This
+// library needs a 66 px slot to label every candle (61 still skips every
+// other one -- checked on screenshots). Each body fills CANDLE_BODY_RATIO of
+// its slot (the library's own candles fill ~80%).
+const MAX_BAR_SPACING = 66
 const CANDLE_BODY_RATIO = DEFAULT_BODY_RATIO
 const TF_MINUTES = { '1min': 1, '3min': 3, '5min': 5 }
 const RIGHT_COLUMN_WIDTH = 260 // Depth (top) + Indicators window (below) share this column
@@ -141,7 +144,9 @@ function sharedChartOptions() {
     layout: { background: { color: tok('--chart-bg') }, textColor: tok('--chart-text'), fontFamily: 'inherit', attributionLogo: false },
     grid: { vertLines: { color: tok('--chart-grid') }, horzLines: { color: tok('--chart-grid') } },
     rightPriceScale: { borderColor: tok('--chart-border') },
-    timeScale: { borderColor: tok('--chart-border'), timeVisible: true, secondsVisible: false, tickMarkFormatter: tickFormatter },
+    // labels are "10:06" or "12 Oct" (<= 6 chars): telling the library so lets it
+    // fit one label per candle at full zoom, as on Dhan (default reserves 8)
+    timeScale: { borderColor: tok('--chart-border'), timeVisible: true, secondsVisible: false, tickMarkFormatter: tickFormatter, tickMarkMaxCharacterLength: 6 },
     localization: { timeFormatter: crosshairFormatter },
     crosshair: { mode: CrosshairMode.Normal },
   }
@@ -209,10 +214,26 @@ export default function CandleChart({
   // structure" / "Strategy signals") stands for every signal in it.
   const [selectedSignals, setSelectedSignalsState] = useState(() => getPref('chart.selectedSignals', null))
   const [signalCounts, setSignalCounts] = useState({}) // today's count per signal code
+  const [patternCounts, setPatternCounts] = useState({}) // today's count per pattern key
+  // a count's click: open the hit review for this stock as a Workspace tab
+  const reviewFor = (kind, key, name) => openReview({ kind, key, name, symbol: instrument.symbol, exchange_segment: instrument.exchange_segment })
   const allSignals = useSignals()
   const effectiveSignals = selectedSignals ?? (allSignals ?? [])
     .filter((sig) => (sig.kind === 'indicator' ? isOn('signals', false) : isOn('patterns', false)))
     .map((sig) => sig.code)
+  // each tab's "Show on graph" box (2026-10-16): off hides its marks, keeps its ticks
+  const [showMarks, setShowMarks] = useState(() => ({
+    signals: getPref('chart.showSignals', true) !== false,
+    patterns: getPref('chart.showPatterns', true) !== false,
+    strategies: getPref('chart.showStrategies', true) !== false,
+  }))
+  const showMarksRef = useRef(showMarks)
+  showMarksRef.current = showMarks
+  const setShowMark = (tab, on) => {
+    setPref(`chart.show${tab[0].toUpperCase()}${tab.slice(1)}`, on)
+    setShowMarks((prev) => ({ ...prev, [tab]: on }))
+  }
+  useEffect(() => { refreshMarkers() }, [showMarks.signals, showMarks.patterns]) // eslint-disable-line react-hooks/exhaustive-deps
   const shownSignalsRef = useRef(new Set())
   shownSignalsRef.current = new Set(effectiveSignals)
   const setSelectedSignals = (codes) => {
@@ -649,13 +670,12 @@ export default function CandleChart({
     const w = containerRef.current?.clientWidth ?? 0
     return Math.max(0, w - (c.main?.priceScale('right').width() ?? 0))
   }
-  // Candles never wider than MAX_PX_PER_MINUTE x the timeframe's minutes
-  // (2026-10-16). lightweight-charts 4.x has no maxBarSpacing option (it came
+  // Candle slots never wider than MAX_BAR_SPACING (2026-10-16). lightweight-charts 4.x has no maxBarSpacing option (it came
   // in 5.x), so a too-narrow visible range is widened to the left, keeping the
   // right edge (the latest candle) where it is. Returns true when it changed
   // the range.
   function maxBarSpacing() {
-    return MAX_PX_PER_MINUTE * (TF_MINUTES[timeframeRef.current] ?? 1)
+    return MAX_BAR_SPACING
   }
   function capBarSpacing(range) {
     const c = charts.current
@@ -779,16 +799,21 @@ export default function CandleChart({
     // readout counts: the current session only
     const current = currentRows.current.markers
     const counts = {}
-    for (const r of current) if (r.activity_type !== 'pattern') counts[r.activity] = (counts[r.activity] ?? 0) + 1
+    const pcounts = {}
+    for (const r of current) {
+      if (r.activity_type === 'pattern') pcounts[r.activity] = (pcounts[r.activity] ?? 0) + 1
+      else counts[r.activity] = (counts[r.activity] ?? 0) + 1
+    }
     setSignalCounts(counts)
+    setPatternCounts(pcounts)
     refreshMarkers()
   }
 
   // ONE dot per candle with any shown event (ALGO-25), coloured by the net
   // direction of its events; names and details live in the hover list.
   function refreshMarkers() {
-    const shownSignals = shownSignalsRef.current
-    const shownPatterns = new Set(selectedPatternsRef.current)
+    const shownSignals = showMarksRef.current.signals ? shownSignalsRef.current : new Set()
+    const shownPatterns = new Set(showMarksRef.current.patterns ? selectedPatternsRef.current : [])
     // every event on the nearest candle of this timeframe (a 3/5-min event
     // can fall where no candle exists); re-snapped whenever candles change
     snappedEventsRef.current = snapToCandles(allEventsRef.current, lastCandles.current)
@@ -1179,8 +1204,8 @@ export default function CandleChart({
         }}
       >
         {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
-        <IndicatorPanelTabs onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
-          <SignalPicker selected={effectiveSignals} onChange={setSelectedSignals} counts={signalCounts} />
+        <IndicatorPanelTabs show={showMarks} onShowChange={setShowMark} patternCounts={patternCounts} onOpenReview={reviewFor} onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
+          <SignalPicker selected={effectiveSignals} onChange={setSelectedSignals} counts={signalCounts} disabled={!showMarks.signals} onOpenReview={reviewFor} />
         </IndicatorPanelTabs>
       </div>
     )

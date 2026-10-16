@@ -60,6 +60,9 @@ class PatternEvaluator:
         self._index: Dict[tuple, int] = {}  # instrument key -> candles seen today
         self._day: Dict[tuple, object] = {}
         self.scores: Dict[tuple, Dict[str, float]] = {}  # instrument key -> {pattern key: match %}
+        # instrument key -> today's hits, each with every condition's numbers
+        # (hit_explain; read by /api/review, 2026-10-16)
+        self.explanations: Dict[tuple, List[dict]] = {}
         self.reload()
 
     # ---- definitions ----
@@ -91,6 +94,22 @@ class PatternEvaluator:
             if p.key == key:
                 return p.name or p.key, p.pattern_type
         return None
+
+    def _explain(self, key, latest, p, df, timeframe, match) -> None:
+        """Keep why this hit formed: each condition's required and actual value."""
+        from hit_explain import explain_pattern
+        try:
+            context = {"strength_rules": self.strength.get(timeframe, {}), "lookback": p.lookback}
+            conditions = explain_pattern(p.formulas, df, context)
+        except Exception:
+            logger.exception("Explaining pattern %s failed", p.key)
+            return
+        self.explanations.setdefault(key, []).append({
+            "ts": latest["ts"], "timeframe": timeframe, "pattern": p.key, "name": p.name or p.key,
+            "type": p.pattern_type, "weight": p.weight, "match": round(match, 4), "score": round(p.weight * match, 4),
+            "met": sum(1 for c in conditions if c["met"]), "of": len(conditions),
+            "close": latest.get("close"), "conditions": conditions,
+        })
 
     def _maybe_reload(self) -> None:
         if time.monotonic() - self._loaded_at > RELOAD_SECONDS:
@@ -134,9 +153,14 @@ class PatternEvaluator:
             self._index[key] = 0
             for p in self.patterns:
                 self._state.pop((key, p.id), None)
+            self.explanations[key] = []
         self._index[key] = self._index.get(key, 0) + 1
         index = self._index[key]
-        window = [r for r in list(rows)[-self.window:] if (r["ts"] + IST).date() == day]
+        # the latest `window` rows from today AND the previous session: running
+        # data spans sessions (2026-10-16); dots are still marked per day (above)
+        recent = list(rows)[-self.window:]
+        days = sorted({(r["ts"] + IST).date() for r in recent})[-2:]
+        window = [r for r in recent if (r["ts"] + IST).date() in days]
         df = frame_from_rows(window)
         if EVENTS_COLUMN not in df.columns:
             df[EVENTS_COLUMN] = [frozenset()] * len(df)
@@ -150,6 +174,7 @@ class PatternEvaluator:
                 cooled = st["last_hit"] is None or index - st["last_hit"] > p.cooldown
                 if cooled:
                     st["last_hit"] = index
+                    self._explain(key, latest, p, df, timeframe, match)
                     if record:
                         hits.append({"pattern": p, "key": k, "pattern_type": p.pattern_type,
                                      "match": round(match, 4), "score": round(p.weight * match, 4)})
