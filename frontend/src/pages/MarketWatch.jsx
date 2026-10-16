@@ -169,12 +169,18 @@ export default function MarketWatch() {
     [scores],
   )
 
+  // A colour tile's click filters the grid. On "All" the tiles count each
+  // timeframe (1m · 3m · 5m), so the filter keeps a stock that has the colour
+  // on ANY timeframe -- the most timeframes first -- not only stocks whose
+  // combined colour it is (that showed 0 rows under a 0 · 1 · 0 tile, 2026-10-16).
   const visibleSymbols = useMemo(() => {
     if (!selectedBucket) return symbols
+    const tfsWith = (s) => ['1min', '3min', '5min'].filter((t) => scoreByInstrument[s.id]?.by_timeframe?.[t]?.colour === selectedBucket).length
+    const has = screenTimeframe === 'all' ? (s) => tfsWith(s) > 0 : (s) => scoreByInstrument[s.id]?.bucket === selectedBucket
     return symbols
-      .filter((s) => scoreByInstrument[s.id]?.bucket === selectedBucket)
-      .sort((a, b) => withinColour(scoreByInstrument[a.id], scoreByInstrument[b.id]))
-  }, [symbols, selectedBucket, scoreByInstrument])
+      .filter(has)
+      .sort((a, b) => (screenTimeframe === 'all' ? tfsWith(b) - tfsWith(a) : 0) || withinColour(scoreByInstrument[a.id], scoreByInstrument[b.id]))
+  }, [symbols, selectedBucket, scoreByInstrument, screenTimeframe])
 
   // The Sort dropdown, applied on top of the bucket filter above. Stable:
   // equal values keep registration order; missing values always sort last.
@@ -502,7 +508,7 @@ export default function MarketWatch() {
                 )}
                 {selectedBucket && (
                   <div style={{ margin: '0 var(--space-3) var(--space-2)', fontSize: 13, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Showing <b style={{ color: 'var(--text)' }}>{visibleSymbols.length}</b> of {symbols.length}, sorted by {selectedBucket.replace('_', ' ')}
+                    Showing <b style={{ color: 'var(--text)' }}>{visibleSymbols.length}</b> of {symbols.length}{screenTimeframe === 'all' ? ' with this colour on any timeframe' : ''}, sorted by {selectedBucket.replace('_', ' ')}
                     <Button variant="secondary" onClick={() => setSelectedBucket(null)}>Clear filter</Button>
                   </div>
                 )}
@@ -521,6 +527,7 @@ export default function MarketWatch() {
                   scoreByInstrument={scoreByInstrument}
                   bucketColors={bucketColors}
                   timeframe={screenTimeframe}
+                  emptyMessage={selectedBucket ? `No instruments are ${selectedBucket.replace('_', ' ')}${screenTimeframe === 'all' ? ' on any timeframe' : ` on ${screenTimeframe.replace('min', 'm')}`} right now` : undefined}
                   showAll={showAllRows}
                   embedded
                   externalSortMode={sortMode}

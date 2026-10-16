@@ -88,7 +88,7 @@ function compareValues(a, b) {
 // parent to reset its dropdown.
 export default function InstrumentGrid({
   symbols, liveTicks, backfillStatus, openSymbols, onToggleOpen, onRemove, onOpenTab,
-  focusedIndex, onFocusedIndexChange, elements = [], strategies = [], scoreByInstrument = {}, bucketColors = {}, timeframe,
+  focusedIndex, onFocusedIndexChange, elements = [], strategies = [], scoreByInstrument = {}, bucketColors = {}, timeframe, emptyMessage,
   showAll = false, embedded = false, externalSortMode = '', onColumnSort,
 }) {
   const containerRef = useRef(null)
@@ -290,7 +290,7 @@ export default function InstrumentGrid({
             )
           })}
           {rows.length === 0 && (
-            <tr><td colSpan={COLUMNS.length + 1} style={{ textAlign: 'center', color: 'var(--text-faint)', padding: 'var(--space-4)' }}>No instruments registered yet</td></tr>
+            <tr><td colSpan={COLUMNS.length + 1} style={{ textAlign: 'center', color: 'var(--text-faint)', padding: 'var(--space-4)' }}>{emptyMessage ?? 'No instruments registered yet'}</td></tr>
           )}
         </tbody>
       </table>

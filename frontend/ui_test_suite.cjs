@@ -396,6 +396,30 @@ async function restorePrefs() {
       return texts.length === 7 && texts.every((t) => /^\d+ · \d+ · \d+$/.test(t));
     }));
     checkTrue('[TF] All asks the API for timeframe=all', scoreCalls.some((u) => u.includes('timeframe=all')), scoreCalls);
+    // on All a tile counts each timeframe, so its filter keeps stocks with that
+    // colour on ANY timeframe (2026-10-16: a 0 · 1 · 0 tile showed 0 rows)
+    {
+      const expectRows = await page.evaluate(async () => {
+        const [symbols, scores] = await Promise.all([fetch('/api/symbols').then((r) => r.json()), fetch('/api/watch-scores?timeframe=all').then((r) => r.json())]);
+        const out = {};
+        for (const c of ['dark_green', 'light_green', 'orange', 'yellow', 'white', 'pink', 'red']) {
+          out[c] = symbols.filter((s) => { const sc = scores.scores.find((x) => x.instrument_id === s.id); return ['1min', '3min', '5min'].some((t) => sc?.by_timeframe?.[t]?.colour === c); }).length;
+        }
+        return out;
+      });
+      const bad = [];
+      for (const [colour, n] of Object.entries(expectRows)) {
+        const tile = page.locator(`[data-bucket="${colour}"]`);
+        const tileSum = (await tile.innerText()).split('·').reduce((t, x) => t + Number(x.trim() || 0), 0);
+        await tile.click();
+        await page.waitForTimeout(300);
+        const rows = await page.locator('[data-instrument-grid] tbody tr').evaluateAll((trs) => trs.filter((tr) => tr.cells.length > 1).length);
+        if (rows !== n || (tileSum > 0 && rows === 0)) bad.push({ colour, tileSum, expected: n, rows });
+        await tile.click(); // clear
+        await page.waitForTimeout(200);
+      }
+      checkTrue('[TF] on All, a colour tile shows every stock with that colour on any timeframe', bad.length === 0, bad);
+    }
     await eventually(async () => (rowBad = await rowColours('all')).length === 0, 6000);
     checkTrue('[TF] on All each row shows three dots: its 1m, 3m and 5m colours', rowBad.length === 0, rowBad);
     // colour sort: colour order first, then within a colour the most green
@@ -824,6 +848,9 @@ async function restorePrefs() {
       }, symbol);
       await eventually(async () => await dots34() === marks.patterns, 25000);
       check('[ALGO-34] by default the chart shows only pattern dots (raw events off)', await dots34(), marks.patterns);
+      const shapes = async () => JSON.parse((await layer34.getAttribute('data-mark-shapes')) || '{}');
+      const s0 = await shapes();
+      checkTrue('[MARK] patterns are squares (no circles while raw signals are off)', (marks.patterns === 0 || s0.square > 0) && !s0.circle && !s0.arrowUp && !s0.arrowDown, s0);
       checkTrue('[ALGO-34] pattern hits carry a direction from their type', marks.directions.some((d) => d === 'bull' || d === 'bear'), marks.directions);
       await setIndicatorsMode(chart, 'right');
       const rail34 = chart.locator('[data-indicator-tabs]');
@@ -858,6 +885,8 @@ async function restorePrefs() {
         return await dots34() === allNow;
       }, 8000);
       check('[ALGO-34] ticking the raw events adds them (one dot per candle with anything ticked)', await dots34(), allNow);
+      const s1 = await shapes();
+      checkTrue('[MARK] raw signals are circles, alongside the pattern squares', s1.circle > 0 && (marks.patterns === 0 || s1.square > 0), s1);
       const savedToggles = await waitForSavedPrefs(page, (x) => (x['chart.selectedSignals']?.length ?? 0) > 20);
       checkTrue('[PREF] the chart\'s ticked signals and patterns are saved for the user',
         (savedToggles['chart.selectedSignals']?.length ?? 0) > 20 && Array.isArray(savedToggles['chart.selectedPatterns.v2']),

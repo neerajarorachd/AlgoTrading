@@ -827,25 +827,36 @@ export default function CandleChart({
     markerEventsRef.current = byTime
     const dots = []
     if (isOn('events', true)) {
+      // one mark per KIND on a candle (user, 2026-10-16): circle = raw signal,
+      // square = pattern, triangle = strategy (the library's arrow shapes: up
+      // below the bar for buy, down above it for sell). Hover/click stay per candle.
       for (const [time, events] of byTime) {
-        // a pattern hit leads its candle (ALGO-34): bigger dot, the top
-        // pattern's colour -- green bullish, red bearish, pink caution, dark red avoid
-        const top = events.filter((e) => e.activity_type === 'pattern').sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0]
-        if (top) {
-          dots.push({ time, position: 'aboveBar', shape: 'circle', size: 1.1, color: PATTERN_DOT_COLOR[top.pattern_type] ?? tok('--accent') })
-          continue
+        const strategies = events.filter((e) => e.activity_type === 'strategy')
+        const patterns = events.filter((e) => e.activity_type === 'pattern')
+        const signals = events.filter((e) => e.activity_type !== 'pattern' && e.activity_type !== 'strategy')
+        if (signals.length) {
+          const net = signals.reduce((n, e) => n + (e.direction === 'bull' ? 1 : e.direction === 'bear' ? -1 : 0), 0)
+          dots.push({ time, position: 'aboveBar', shape: 'circle', size: 0.7, color: net > 0 ? tok('--good') : net < 0 ? tok('--critical') : tok('--accent') })
         }
-        const net = events.reduce((n, e) => n + (e.direction === 'bull' ? 1 : e.direction === 'bear' ? -1 : 0), 0)
-        dots.push({
-          time, position: 'aboveBar', shape: 'circle', size: 0.7,
-          color: net > 0 ? tok('--good') : net < 0 ? tok('--critical') : tok('--accent'),
-        })
+        if (patterns.length) {
+          // the top pattern's colour -- green bullish, red bearish, pink caution, dark red avoid
+          const top = [...patterns].sort((x, y) => (y.score ?? 0) - (x.score ?? 0))[0]
+          dots.push({ time, position: 'aboveBar', shape: 'square', size: 1, color: PATTERN_DOT_COLOR[top.pattern_type] ?? tok('--accent') })
+        }
+        if (strategies.length) {
+          const bear = strategies.some((e) => e.direction === 'bear')
+          dots.push({ time, position: bear ? 'aboveBar' : 'belowBar', shape: bear ? 'arrowDown' : 'arrowUp', size: 1, color: bear ? tok('--critical') : tok('--good') })
+        }
       }
       dots.sort((x, y) => x.time - y.time)
     }
     charts.current.candle?.setMarkers(dots)
     const layer = diagramRef.current
-    if (layer) layer.dataset.dotCount = String(dots.length)
+    // candles marked (one hover list each); the marks per kind for the UI suite
+    if (layer) {
+      layer.dataset.dotCount = String(new Set(dots.map((d) => d.time)).size)
+      layer.dataset.markShapes = JSON.stringify(dots.reduce((m, d) => ({ ...m, [d.shape]: (m[d.shape] ?? 0) + 1 }), {}))
+    }
     drawDiagrams()
   }
 
@@ -863,7 +874,7 @@ export default function CandleChart({
       if (isPattern) row.setAttribute('data-pattern-row', e.activity)
       row.style.cssText = 'display:flex;align-items:center;gap:6px;white-space:nowrap'
       const dot = document.createElement('span')
-      dot.style.cssText = `width:7px;height:7px;border-radius:50%;flex:none;background:${isPattern && PATTERN_DOT_COLOR[e.pattern_type] ? PATTERN_DOT_COLOR[e.pattern_type] : e.direction === 'bull' ? 'var(--good)' : e.direction === 'bear' ? 'var(--critical)' : 'var(--text-faint)'}`
+      dot.style.cssText = `width:7px;height:7px;border-radius:${isPattern ? '1px' : '50%'};flex:none;background:${isPattern && PATTERN_DOT_COLOR[e.pattern_type] ? PATTERN_DOT_COLOR[e.pattern_type] : e.direction === 'bull' ? 'var(--good)' : e.direction === 'bear' ? 'var(--critical)' : 'var(--text-faint)'}`
       const name = document.createElement('span')
       name.textContent = isPattern ? (e.name ?? humanize(e.activity)) : humanize(e.activity)
       if (isPattern) name.style.fontWeight = '700'
