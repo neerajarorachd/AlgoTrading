@@ -469,6 +469,22 @@ async function restorePrefs() {
     let tallestActions = await tallest();
     await eventually(async () => (tallestActions = await tallest()).h < 48, 4000);
     checkTrue('[new] Actions cells stay on one line (no wrapping)', tallestActions.h < 48, tallestActions);
+    // every grid row the same height, also in a narrow window -- a taller row
+    // (backfill note, wrapped number) moved the whole screen (2026-10-27)
+    {
+      const heights = async () => page.$$eval('[data-instrument-grid] tbody tr', (rows) => rows.map((r) => Math.round(r.getBoundingClientRect().height)));
+      const wide = await heights();
+      const vp = page.viewportSize();
+      await page.setViewportSize({ width: 900, height: vp.height });
+      await page.waitForTimeout(400);
+      const narrow = await heights();
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(300);
+      checkTrue('[GRID] every row is the same height (wide and narrow window)',
+        wide.length > 0 && new Set(wide).size === 1 && new Set(narrow).size === 1 && narrow[0] === wide[0], { wide: [...new Set(wide)], narrow: [...new Set(narrow)] });
+      checkTrue('[GRID] the stock cell never holds a second line (backfill status is an inline icon)',
+        await page.$$eval('[data-instrument-grid] tbody tr td:first-child div', (els) => els.length) === 0);
+    }
     const holdBtn = page.locator('[data-row-action="hold"]').first();
     if (await holdBtn.count() > 0) {
       await holdBtn.click();
@@ -947,6 +963,43 @@ async function restorePrefs() {
       checkTrue('[ALGO-25] Diagrams toggle draws all diagrams in view', allDrawn > drawn, { allDrawn, drawn });
       await tool('diagrams').click(); await page.waitForTimeout(200);
       check('[ALGO-25] Diagrams toggle off clears them', await diagramCount(), 0);
+      // ---- click a line to select it; a mark's diagrams only from the mark itself (2026-10-16) ----
+      {
+        const stackBox = await chart.locator('[data-chart-stack]').boundingBox();
+        const pane = await layer.boundingBox();
+        const pt = await layer.evaluate((el) => el.linePoint('vwap'));
+        const label = chart.locator('[data-selected-line-label]');
+        if (!pt) console.log('SKIP  [LINE] no VWAP point in view');
+        else {
+          await page.mouse.click(pane.x + pt.x, pane.y + pt.y);
+          await page.waitForTimeout(300);
+          const shown = await label.isVisible();
+          const text = shown ? await label.innerText() : '';
+          checkTrue('[LINE] clicking on the VWAP line selects it (name + value label)', shown && (await label.getAttribute('data-selected-line')) === 'vwap' && /^VWAP · \d/.test(text), { text });
+          checkTrue('[LINE] ...without drawing any candle diagrams', (await diagramCount()) === 0, await diagramCount());
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(200);
+          checkTrue('[LINE] Esc clears the selection', !(await label.isVisible()));
+          // a click on the line BETWEEN two candles counts too (2026-10-27)
+          const mid = await layer.evaluate((el) => el.lineMidPoint('vwap'));
+          if (mid) {
+            await page.mouse.click(pane.x + mid.x, pane.y + mid.y);
+            await page.waitForTimeout(300);
+            checkTrue('[LINE] clicking the line between two candles selects it too', (await label.getAttribute('data-selected-line')) === 'vwap' && await label.isVisible(), mid);
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(200);
+          }
+        }
+        const mp = await layer.evaluate((el) => el.markPoint());
+        if (!mp) console.log('SKIP  [LINE] no mark in view');
+        else {
+          await page.mouse.click(pane.x + mp.x, pane.y + mp.y);
+          await page.waitForTimeout(300);
+          checkTrue('[LINE] clicking ON a mark still draws its diagrams', (await diagramCount()) > 0, { mp, drawn: await diagramCount() });
+          await page.waitForTimeout(5300); // they clear after 5 s
+        }
+        void stackBox;
+      }
       // 5. Event marking toggle hides and shows the dots
       await tool('events').click(); await page.waitForTimeout(200);
       check('[ALGO-25] Event marking off hides every dot', await dotCount(), 0);

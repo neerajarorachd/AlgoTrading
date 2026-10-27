@@ -19,7 +19,27 @@
 export const DEFAULT_BODY_RATIO = 0.6
 export const MARK_MIN = 3
 export const MARK_MAX = 12
-const MARK_GAP = 2 // px between the bar and a mark, and between stacked marks
+// space between the wick tip and the first mark, and between stacked marks:
+// half a mark's width, at least 3 px (user, 2026-10-27: "a little distance,
+// like candle high wick + some ratio")
+export function markGap(w) {
+  return Math.max(3, w * 0.5)
+}
+
+/** Where each of a candle's marks sits (CSS px boxes), the same layout the
+ * renderer paints -- for click hit-testing. highY/lowY: the bar's high/low. */
+export function markBoxes(marks, cx, highY, lowY, w) {
+  const gap = markGap(w)
+  let above = Math.min(highY, lowY) - gap
+  let below = Math.max(highY, lowY) + gap
+  return marks.map((m) => {
+    const up = m.shape === 'triangleUp'
+    const y0 = up ? below : above - w
+    if (up) below += w + gap
+    else above -= w + gap
+    return { ...m, x0: cx - w / 2, x1: cx + w / 2, y0, y1: y0 + w }
+  })
+}
 
 /** A mark's width (CSS px) for a bar spacing: the body width, kept in [MARK_MIN, MARK_MAX]. */
 export function markWidth(barSpacing, bodyRatio = DEFAULT_BODY_RATIO) {
@@ -75,8 +95,9 @@ class ThinCandleRenderer {
   }
 
   _drawMarks(ctx, marks, cx, top, bottom, barSpacing, bodyRatio, hr, vr) {
-    const w = markWidth(barSpacing, bodyRatio) * hr
-    const gap = MARK_GAP * vr
+    const wCss = markWidth(barSpacing, bodyRatio)
+    const w = wCss * hr
+    const gap = markGap(wCss) * vr
     let above = top - gap // next free spot above the high
     let below = bottom + gap // and below the low
     for (const m of marks) {

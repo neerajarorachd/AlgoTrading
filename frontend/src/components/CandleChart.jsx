@@ -35,7 +35,7 @@ import {
 import { getSocket } from '../api/ws.js'
 import { useTheme } from '../ThemeContext.jsx'
 import ChartToolButton from './ChartToolButton.jsx'
-import { DEFAULT_BODY_RATIO, ThinCandleSeries, markWidth } from './thinCandleSeries.js'
+import { DEFAULT_BODY_RATIO, ThinCandleSeries, markBoxes, markWidth } from './thinCandleSeries.js'
 import { getPref, setPref } from '../preferences.js'
 import { openReview } from '../api/client.js'
 import IndicatorPanelTabs from './IndicatorPanelTabs.jsx'
@@ -206,6 +206,8 @@ export default function CandleChart({
   const diagramRef = useRef(null)
   const tooltipRef = useRef(null)
   const marksVersionRef = useRef(0) // bumped to repaint after the marks change
+  const selectedLineRef = useRef(null) // the clicked line: { key, label, series, width }
+  const selectedLabelRef = useRef(null)
   const priceZoomRef = useRef(0) // ALGO-26 vertical zoom in whole wheel steps; 0 = auto-fit (factor 0.9^steps)
   const selectedPatternsRef = useRef(getPref('chart.selectedPatterns.v2', null) ?? []) // pattern keys ticked on the Patterns tab (all enabled until changed)
   const selectedStrategiesRef = useRef([]) // strategy ids ticked on the Strategies tab
@@ -399,6 +401,10 @@ export default function CandleChart({
     // mid-session backend restart). Draws nothing.
     const spacerOptions = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
     c.spacers = [c.rsi, c.macd, c.stoch].map((chart) => chart.addLineSeries(spacerOptions))
+    // no dot riding each line under the mouse (user, 2026-10-27: "always moves
+    // with the mouse pointer, which is annoying"); crosshair lines + labels stay
+    ;[c.vwap, c.bbUpper, c.bbMiddle, c.bbLower, c.ema5, c.ema14, c.ema21, c.ema50, c.ma21, c.ma50,
+      c.rsiLine, c.macdLine, c.macdSignal, c.stochK, c.stochD].forEach((s) => s?.applyOptions({ crosshairMarkerVisible: false }))
 
     // keep every pane's visible time range in lockstep
     const allPanes = [c.main, c.rsi, c.macd, c.stoch]
@@ -435,9 +441,18 @@ export default function CandleChart({
       if (range && range.from < LOAD_MORE_EDGE_BARS) loadOlderRef.current?.()
     })
     c.main.timeScale().subscribeVisibleLogicalRangeChange(() => drawDiagrams())
+    // Click (2026-10-16): ON a mark -> that candle's diagrams; on a line ->
+    // select it (thicker + name/value label); on empty chart -> clear. Before,
+    // any click in a marked candle's column drew diagrams, so a line next to
+    // the marks could not be picked.
     c.main.subscribeClick((param) => {
-      if (param.time == null || !markerEventsRef.current.get(param.time)?.length) return
-      showDotDiagrams(param.time)
+      if (param.point && param.time != null && markHit(param.time, param.point)) {
+        showDotDiagrams(param.time)
+        return
+      }
+      const line = lineAt(param) ?? lineFor(param.hoveredSeries)
+      if (line) selectLine(line, param)
+      else clearSelectedLine()
     })
     c.main.subscribeCrosshairMove((param) => {
       const tip = tooltipRef.current
@@ -451,6 +466,8 @@ export default function CandleChart({
       tip.style.top = `${Math.max(param.point.y - 34, 4)}px`
     })
 
+    const onKey = (e) => { if (e.key === 'Escape') clearSelectedLine() }
+    document.addEventListener('keydown', onKey)
     const resizeObserver = new ResizeObserver(() => resizeCharts())
     resizeObserver.observe(containerRef.current)
     const railObserver = new ResizeObserver(() => syncRailHeight())
@@ -470,6 +487,7 @@ export default function CandleChart({
 
     return () => {
       resizeObserver.disconnect()
+      document.removeEventListener('keydown', onKey)
       host.removeEventListener('wheel', onAxisWheel, { capture: true })
       host.removeEventListener('dblclick', onAxisDblClick, { capture: true })
       listeners.forEach(([el, fn]) => ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'touchmove'].forEach((ev) => el?.removeEventListener(ev, fn)))
@@ -667,6 +685,92 @@ export default function CandleChart({
     charts.current.candle.applyOptions({ color: colour, priceLineColor: colour })
   }
 
+  // ---- line selection + mark hit-testing (2026-10-16) ----
+  function lineSeries() {
+    const c = charts.current
+    return [
+      ['vwap', 'VWAP', c.vwap], ['ema5', 'EMA 5', c.ema5], ['ema14', 'EMA 14', c.ema14], ['ema21', 'EMA 21', c.ema21],
+      ['ema50', 'EMA 50', c.ema50], ['ma21', 'MA 21', c.ma21], ['ma50', 'MA 50', c.ma50],
+      ['bbUpper', 'BB upper', c.bbUpper], ['bbMiddle', 'BB middle', c.bbMiddle], ['bbLower', 'BB lower', c.bbLower],
+    ].filter(([, , s]) => s)
+  }
+  function lineFor(series) {
+    if (!series) return null
+    const hit = lineSeries().find(([, , s]) => s === series)
+    return hit ? { key: hit[0], label: hit[1], series: hit[2] } : null
+  }
+  // The visible line nearest the click, within 6 px of the line AS DRAWN:
+  // the segment between its two data points either side of the click, so a
+  // click anywhere along a line counts, not only at a candle (2026-10-27).
+  // Our own hit test -- the library's hover detection stopped finding lines
+  // once their crosshair dots were off.
+  function lineAt(param) {
+    const c = charts.current
+    if (!param?.point || !c.main) return null
+    const ts = c.main.timeScale()
+    const logical = ts.coordinateToLogical(param.point.x)
+    if (logical == null) return null
+    const i0 = Math.floor(logical)
+    let best = null
+    for (const [key, label, series] of lineSeries()) {
+      if (series.options().visible === false) continue
+      const pts = []
+      for (const i of [i0 - 1, i0, i0 + 1, i0 + 2]) {
+        const row = series.dataByIndex?.(i)
+        const x = ts.logicalToCoordinate(i)
+        const y = row?.value != null ? series.priceToCoordinate(row.value) : null
+        if (x != null && y != null) pts.push({ x, y })
+      }
+      for (let k = 0; k + 1 < pts.length; k++) {
+        const d = distToSegment(param.point, pts[k], pts[k + 1])
+        if (d <= 6 && (!best || d < best.d)) best = { key, label, series, d }
+      }
+    }
+    return best && { key: best.key, label: best.label, series: best.series }
+  }
+  function distToSegment(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y
+    const len2 = dx * dx + dy * dy
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+  }
+  function selectLine(line, param) {
+    clearSelectedLine()
+    const width = line.series.options().lineWidth ?? 1
+    selectedLineRef.current = { ...line, width }
+    line.series.applyOptions({ lineWidth: width + 2 })
+    const value = param?.seriesData?.get(line.series)?.value
+    const el = selectedLabelRef.current
+    if (el) {
+      el.textContent = `${line.label}${value != null ? ` · ${Number(value).toFixed(2)}` : ''}`
+      el.style.color = line.series.options().color
+      el.dataset.selectedLine = line.key
+      el.hidden = false
+    }
+  }
+  function clearSelectedLine() {
+    const sel = selectedLineRef.current
+    if (sel) sel.series.applyOptions({ lineWidth: sel.width })
+    selectedLineRef.current = null
+    const el = selectedLabelRef.current
+    if (el) { el.hidden = true; delete el.dataset.selectedLine }
+  }
+  // is `point` (CSS px in the price pane) on one of this candle's marks?
+  function markHit(time, point) {
+    const c = charts.current
+    const marks = c.candleView?._renderer?._marks?.get(time)
+    const bar = lastCandles.current.find((k) => toUnix(k.ts) === time)
+    if (!marks?.length || !bar || !c.main) return false
+    const cx = c.main.timeScale().timeToCoordinate(time)
+    const hy = c.candle.priceToCoordinate(bar.high)
+    const ly = c.candle.priceToCoordinate(bar.low)
+    if (cx == null || hy == null || ly == null) return false
+    const range = c.main.timeScale().getVisibleLogicalRange()
+    const w = markWidth(range ? plotWidth() / (range.to - range.from) : 6, CANDLE_BODY_RATIO)
+    const pad = 2
+    return markBoxes(marks, cx, hy, ly, w).some((b) => point.x >= b.x0 - pad && point.x <= b.x1 + pad && point.y >= b.y0 - pad && point.y <= b.y1 + pad)
+  }
+
   // the price plot's width (the chart minus its right-hand price axis)
   function plotWidth() {
     const c = charts.current
@@ -710,6 +814,47 @@ export default function CandleChart({
     if (top != null && bottom != null) layer.dataset.priceSpan = (top - bottom).toFixed(3)
     layer.dataset.priceZoom = String(priceZoomRef.current === 0 ? 1 : 0.9 ** priceZoomRef.current)
     layer.measureView = () => { recordView(); return { ...layer.dataset } } // fresh read for the UI suite
+    // for the UI suite: a point on a line / on a mark, in the pane's CSS px
+    layer.linePoint = (key) => {
+      const s = lineSeries().find(([k]) => k === key)?.[2]
+      const range = c.main.timeScale().getVisibleLogicalRange()
+      if (!s || !range) return null
+      for (let i = Math.floor(range.to) - 3; i > range.from; i--) {
+        const row = s.dataByIndex?.(i)
+        if (row?.value == null) continue
+        const x = c.main.timeScale().logicalToCoordinate(i)
+        const y = s.priceToCoordinate(row.value)
+        if (x != null && y != null && !markHit(row.time, { x, y })) return { x, y }
+      }
+      return null
+    }
+    layer.lineMidPoint = (key) => {
+      const s = lineSeries().find(([k]) => k === key)?.[2]
+      const range = c.main.timeScale().getVisibleLogicalRange()
+      if (!s || !range) return null
+      for (let i = Math.floor(range.to) - 3; i > range.from + 1; i--) {
+        const a = s.dataByIndex?.(i - 1), b = s.dataByIndex?.(i)
+        if (a?.value == null || b?.value == null) continue
+        const x0 = c.main.timeScale().logicalToCoordinate(i - 1), x1 = c.main.timeScale().logicalToCoordinate(i)
+        const y0 = s.priceToCoordinate(a.value), y1 = s.priceToCoordinate(b.value)
+        if ([x0, x1, y0, y1].some((v) => v == null)) continue
+        const p = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+        if (!markHit(a.time, p) && !markHit(b.time, p)) return p
+      }
+      return null
+    }
+    layer.markPoint = () => {
+      const range = c.main.timeScale().getVisibleLogicalRange()
+      const w = range ? markWidth(plotWidth() / (range.to - range.from), CANDLE_BODY_RATIO) : 6
+      for (const [time, marks] of [...(c.candleView?._renderer?._marks ?? [])].reverse()) {
+        const bar = lastCandles.current.find((k) => toUnix(k.ts) === time)
+        const cx = c.main.timeScale().timeToCoordinate(time)
+        if (!bar || cx == null || cx < 10 || cx > plotWidth() - 10) continue
+        const b = markBoxes(marks, cx, c.candle.priceToCoordinate(bar.high), c.candle.priceToCoordinate(bar.low), w)[0]
+        if (b && b.y0 > 5) return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 }
+      }
+      return null
+    }
   }
 
   // faint vertical line + date at the first bar of each IST day
@@ -1177,6 +1322,8 @@ export default function CandleChart({
                 fullscreen never grew (caught by ui_test_suite.cjs). */}
             <div ref={containerRef} style={{ width: '100%', height: fillHeight ? '100%' : undefined, overflow: fillHeight ? 'hidden' : undefined }} />
             <div ref={daySepRef} data-day-separators aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none', overflow: 'hidden' }} />
+            <div ref={selectedLabelRef} data-selected-line-label hidden
+              style={{ position: 'absolute', top: 6, left: 8, zIndex: 4, fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--surface)', border: '1px solid var(--border)', pointerEvents: 'none' }} />
             <div ref={diagramRef} data-diagrams aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none', overflow: 'hidden' }} />
             <div
               ref={tooltipRef} data-marker-tooltip role="tooltip"

@@ -166,7 +166,7 @@ export default function InstrumentGrid({
       tabIndex={0}
       onKeyDown={handleKeyDown}
       style={{
-        maxHeight: showAll ? 'none' : (measuredCap ?? (VISIBLE_ROWS + 1) * ROW_HEIGHT_PX), overflowY: 'auto', background: 'var(--surface)',
+        maxHeight: showAll ? 'none' : (measuredCap ?? (VISIBLE_ROWS + 1) * ROW_HEIGHT_PX), overflowY: 'auto', overflowX: 'auto', background: 'var(--surface)',
         border: embedded ? 'none' : '1px solid var(--border)', borderRadius: embedded ? 0 : 'var(--radius-md)', outline: 'none',
       }}
     >
@@ -205,18 +205,23 @@ export default function InstrumentGrid({
                 onClick={() => onToggleOpen(row)}
                 onMouseEnter={() => onFocusedIndexChange(index)}
                 title={atCapacity ? `Max ${MAX_OPEN_CHARTS} charts open at once` : undefined}
+                // one fixed height and no wrapping in any cell (user, 2026-10-27):
+                // a row that grew for a backfill note or a wrapped number moved
+                // the whole screen and the chart up and down
                 style={{
                   cursor: 'pointer', borderTop: '1px solid var(--border)',
                   background: isOpen ? 'var(--accent-soft)' : isFocused ? 'var(--surface-alt)' : undefined,
-                  opacity: atCapacity ? 0.55 : 1,
+                  opacity: atCapacity ? 0.55 : 1, height: ROW_HEIGHT_PX, whiteSpace: 'nowrap',
                 }}
               >
                 <td style={{ padding: '7px 10px', fontWeight: 600 }}>
                   {row.symbol}
+                  {/* backfill status as a small inline icon, message on hover -- never an extra line */}
                   {status && status.status !== 'done' && (
-                    <div style={{ fontSize: 11, color: status.status === 'failed' ? 'var(--critical)' : 'var(--text-faint)', fontWeight: 400 }}>
-                      {status.message}
-                    </div>
+                    <span
+                      data-backfill-status={status.status} title={status.message}
+                      style={{ marginLeft: 6, fontSize: 11, fontWeight: 400, cursor: 'help', color: status.status === 'failed' ? 'var(--critical)' : 'var(--text-faint)' }}
+                    >{status.status === 'failed' ? '⚠' : '⟳'}</span>
                   )}
                 </td>
                 <td style={{ padding: '7px 10px', color: 'var(--text-dim)' }}>{row.exchange}</td>
