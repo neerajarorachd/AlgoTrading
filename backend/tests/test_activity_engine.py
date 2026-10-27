@@ -1967,3 +1967,132 @@ def test_engine_flushes_indicator_snapshots_with_values_matching_independent_com
         expected_atr = update_atr(atr_state, c.high, c.low, c.close)
     assert float(last.rsi) == pytest.approx(expected_rsi)
     assert float(last.atr) == pytest.approx(expected_atr)
+
+
+# ---- MACD cross-then-widening (2026-10-27) ----
+
+from activity_engine import CROSS_WIDENING_CANDLES, step_cross_widening
+
+
+def _run_widening(cross_dir, diffs):
+    """Feed a cross candle then the following diffs; return the fire flags."""
+    watch, fired = step_cross_widening(None, cross_dir, diffs[0])
+    flags = [fired]
+    for d in diffs[1:]:
+        watch, fired = step_cross_widening(watch, 0, d)
+        flags.append(fired)
+    return flags, watch
+
+
+def test_cross_widening_fires_on_third_candle_when_gap_keeps_growing():
+    assert CROSS_WIDENING_CANDLES == 3
+    flags, watch = _run_widening(1, [0.1, 0.2, 0.25, 0.3])
+    assert flags == [False, False, False, True]
+    assert watch is None  # one-shot: the watch ends once it has decided
+
+
+def test_cross_widening_bearish_mirror():
+    flags, _ = _run_widening(-1, [-0.1, -0.2, -0.25, -0.3])
+    assert flags == [False, False, False, True]
+
+
+def test_cross_widening_ends_if_lines_touch_back():
+    flags, watch = _run_widening(1, [0.1, 0.2, 0.0])
+    assert flags == [False, False, False]
+    assert watch is None
+    # later candles cannot revive it
+    assert step_cross_widening(watch, 0, 0.5) == (None, False)
+
+
+def test_cross_widening_needs_third_wider_than_second():
+    flags, _ = _run_widening(1, [0.1, 0.2, 0.3, 0.29])
+    assert flags[-1] is False
+
+
+def test_cross_widening_needs_third_wider_than_cross_candle():
+    # 3rd beats the 2nd but not the cross candle's own gap
+    flags, _ = _run_widening(1, [0.5, 0.2, 0.1, 0.3])
+    assert flags[-1] is False
+
+
+def test_new_cross_restarts_the_watch():
+    watch, _ = step_cross_widening(None, 1, 0.1)
+    watch, _ = step_cross_widening(watch, 0, 0.2)
+    watch, fired = step_cross_widening(watch, -1, -0.05)  # crossed back down
+    assert fired is False and watch == {"dir": -1, "gaps": [0.05]}
+
+
+def test_engine_fires_macd_bullish_cross_widening_after_the_cross(session_factory):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+
+    engine = ActivityEngine(session_factory)
+    # Same shape as the crossover test above: a declining zigzag, then a
+    # sustained rise -- the MACD line crosses up and keeps pulling away.
+    seed = []
+    base = 100.0
+    for i in range(60):
+        base += -0.6 if i % 2 == 0 else 0.4
+        seed.append(round(base, 4))
+    rise = [round(seed[-1] + 0.5 * i, 4) for i in range(1, 40)]
+    for i, close in enumerate(seed + rise, start=1):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, close))
+    engine.flush()
+
+    with session_factory() as session:
+        rows = session.query(InstrumentActivity).all()
+    by_name = {}
+    for row in rows:
+        by_name.setdefault(row.activity, []).append(row)
+    assert "macd_bullish_cross" in by_name
+    assert "macd_bullish_cross_widening" in by_name
+    assert "macd_bearish_cross_widening" not in by_name
+    cross_at = min(r.ts for r in by_name["macd_bullish_cross"])
+    widen_at = min(r.ts for r in by_name["macd_bullish_cross_widening"])
+    assert widen_at > cross_at
+    assert all(r.intensity > 0 for r in by_name["macd_bullish_cross_widening"])
+
+
+def _widening_rows(session_factory, closes):
+    with session_factory() as session:
+        session.add(SubscribedSymbol(
+            symbol=SYMBOL, exchange="NSE", segment="EQUITY", exchange_segment=SEG,
+            security_id="2885", previous_close=100.0,
+        ))
+        session.commit()
+    engine = ActivityEngine(session_factory)
+    for i, close in enumerate(closes, start=1):
+        engine.on_candle_closed(SYMBOL, SEG, _pc(i, close))
+    engine.flush()
+    by_name = {}
+    with session_factory() as session:
+        for row in session.query(InstrumentActivity).all():
+            by_name.setdefault(row.activity, []).append(row.ts)
+    return by_name
+
+
+def test_engine_fires_ma_golden_cross_widening_three_candles_after_the_cross(session_factory):
+    seed = []
+    base = 100.0
+    for i in range(60):
+        base += -0.6 if i % 2 == 0 else 0.4
+        seed.append(round(base, 4))
+    rise = [round(seed[-1] + 0.5 * i, 4) for i in range(1, 40)]
+    by_name = _widening_rows(session_factory, seed + rise)
+    assert "ma_death_cross_widening" not in by_name
+    cross_at = min(by_name["ma_golden_cross"])
+    assert min(by_name["ma_golden_cross_widening"]) == cross_at + timedelta(minutes=3)
+
+
+def test_engine_fires_stoch_bullish_cross_widening_after_a_turn_from_oversold(session_factory):
+    # 20 falling candles pin %K low, then a steady climb: %K pulls away from
+    # the slower %D for 3 candles before both flatten out.
+    closes = [100.0 - i for i in range(20)] + [81.0 + 0.5 * i for i in range(1, 12)]
+    by_name = _widening_rows(session_factory, closes)
+    assert "stoch_bearish_cross_widening" not in by_name
+    cross_at = min(by_name["stoch_bullish_cross"])
+    assert min(by_name["stoch_bullish_cross_widening"]) == cross_at + timedelta(minutes=3)

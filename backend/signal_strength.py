@@ -36,8 +36,14 @@ STRENGTH_MEASURES = {
     # ---- crossovers: how fast the lines separate ----
     "macd_bullish_cross": {"separation_pct": "abs(MACD_HIST - MACD_HIST[-1]) / CLOSE * 100"},
     "macd_bearish_cross": {"separation_pct": "abs(MACD_HIST - MACD_HIST[-1]) / CLOSE * 100"},
+    "macd_bullish_cross_widening": {"gap_pct": "abs(MACD_HIST) / CLOSE * 100"},
+    "macd_bearish_cross_widening": {"gap_pct": "abs(MACD_HIST) / CLOSE * 100"},
     "stoch_bullish_cross": {"gap": "abs(STOCH_K - STOCH_D)"},
     "stoch_bearish_cross": {"gap": "abs(STOCH_K - STOCH_D)"},
+    "stoch_bullish_cross_widening": {"gap": "abs(STOCH_K - STOCH_D)"},
+    "stoch_bearish_cross_widening": {"gap": "abs(STOCH_K - STOCH_D)"},
+    "ma_golden_cross_widening": {"gap_pct": "abs(MA21 - MA50) / CLOSE * 100"},
+    "ma_death_cross_widening": {"gap_pct": "abs(MA21 - MA50) / CLOSE * 100"},
     # ---- Bollinger ----
     "bb_widening": {"width_change": "abs(BB_WIDTH - BB_WIDTH[-1])"},
     "bb_squeeze": {"width_change": "abs(BB_WIDTH - BB_WIDTH[-1])"},

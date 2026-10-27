@@ -38,8 +38,11 @@ def _median(values: List[float]) -> Optional[float]:
 _ACTIVITY_LABEL_OVERRIDES = {
     "doji": "Doji formed", "hammer": "Hammer formed", "shooting_star": "Shooting star formed",
     "macd_bullish_cross": "MACD bullish crossover", "macd_bearish_cross": "MACD bearish crossover",
+    "macd_bullish_cross_widening": "MACD bullish cross, widening", "macd_bearish_cross_widening": "MACD bearish cross, widening",
     "stoch_bullish_cross": "Stochastic bullish crossover", "stoch_bearish_cross": "Stochastic bearish crossover",
     "ma_golden_cross": "Golden cross (MA21/MA50)", "ma_death_cross": "Death cross (MA21/MA50)",
+    "stoch_bullish_cross_widening": "Stochastic bullish cross, widening", "stoch_bearish_cross_widening": "Stochastic bearish cross, widening",
+    "ma_golden_cross_widening": "Golden cross (MA21/MA50), widening", "ma_death_cross_widening": "Death cross (MA21/MA50), widening",
     "swing_high": "Swing high confirmed", "swing_low": "Swing low confirmed",
     "bb_squeeze": "Bollinger Band squeeze", "bb_widening": "Bollinger Band widening",
 }

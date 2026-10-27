@@ -137,8 +137,8 @@ PREDICTION_SETTING_DEFAULTS: Dict[str, float] = {
 # direction — the classification itself belongs here either way, not
 # duplicated a third time.
 BULLISH_PATTERNS = {
-    "rsi_cross_above_60", "macd_bullish_cross", "ma_golden_cross",
-    "stoch_bullish_cross", "double_bottom", "triple_bottom",
+    "rsi_cross_above_60", "macd_bullish_cross", "macd_bullish_cross_widening", "ma_golden_cross",
+    "ma_golden_cross_widening", "stoch_bullish_cross", "stoch_bullish_cross_widening", "double_bottom", "triple_bottom",
     "bullish_structure_shift", "bullish_break_of_structure",
     "ascending_triangle", "falling_wedge",
     # Single/multi-candle patterns with an established directional bias
@@ -162,8 +162,8 @@ BULLISH_PATTERNS = {
     "double_bottom_ed",
 }
 BEARISH_PATTERNS = {
-    "rsi_cross_below_40", "macd_bearish_cross", "ma_death_cross",
-    "stoch_bearish_cross", "double_top", "triple_top",
+    "rsi_cross_below_40", "macd_bearish_cross", "macd_bearish_cross_widening", "ma_death_cross",
+    "ma_death_cross_widening", "stoch_bearish_cross", "stoch_bearish_cross_widening", "double_top", "triple_top",
     "bearish_structure_shift", "bearish_break_of_structure",
     "descending_triangle", "rising_wedge",
     "shooting_star", "bearish_engulfing", "dark_cloud_cover", "tweezer_top",

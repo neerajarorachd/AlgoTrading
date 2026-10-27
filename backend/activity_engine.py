@@ -1217,10 +1217,16 @@ PATTERN_CATALOG = [
     ("rsi_cross_below_40", "indicator", "RSI(14) crosses below 40 — momentum turning bearish"),
     ("macd_bullish_cross", "indicator", "MACD line crosses above its signal line — bullish momentum shift"),
     ("macd_bearish_cross", "indicator", "MACD line crosses below its signal line — bearish momentum shift"),
+    ("macd_bullish_cross_widening", "indicator", "MACD bullish cross, then the lines kept apart for 3 candles (never touching back) and the 3rd candle's gap is wider than the 2nd's and the cross candle's — momentum confirming the cross"),
+    ("macd_bearish_cross_widening", "indicator", "macd_bullish_cross_widening's mirror after a MACD bearish cross"),
     ("ma_golden_cross", "indicator", "MA21 crosses above MA50 — short-term trend turning bullish relative to the longer-term trend"),
     ("ma_death_cross", "indicator", "MA21 crosses below MA50 — short-term trend turning bearish relative to the longer-term trend"),
     ("stoch_bullish_cross", "indicator", "Stochastic %K crosses above %D — short-term momentum turning bullish"),
     ("stoch_bearish_cross", "indicator", "Stochastic %K crosses below %D — short-term momentum turning bearish"),
+    ("ma_golden_cross_widening", "indicator", "MA21/MA50 golden cross, then the lines kept apart for 3 candles (never touching back) and the 3rd candle's gap is wider than the 2nd's and the cross candle's"),
+    ("ma_death_cross_widening", "indicator", "ma_golden_cross_widening's mirror after an MA21/MA50 death cross"),
+    ("stoch_bullish_cross_widening", "indicator", "Stochastic bullish cross, then %K and %D kept apart for 3 candles (never touching back) and the 3rd candle's gap is wider than the 2nd's and the cross candle's"),
+    ("stoch_bearish_cross_widening", "indicator", "stoch_bullish_cross_widening's mirror after a Stochastic bearish cross"),
     ("swing_high", "structure", "A confirmed local price peak — the highest high across a window of candles on both sides of it"),
     ("swing_low", "structure", "A confirmed local price trough — the lowest low across a window of candles on both sides of it"),
     ("double_top", "graph_formation", "Two comparable swing highs with a meaningfully lower swing low between them — a classic bearish reversal shape"),
@@ -1240,6 +1246,33 @@ PATTERN_CATALOG = [
     ("rising_wedge", "graph_formation", "Both trendlines rising but support rising faster (narrowing) — bearish reversal despite the upward drift"),
     ("falling_wedge", "graph_formation", "Both trendlines falling but resistance falling faster (narrowing) — bullish reversal despite the downward drift"),
 ]
+
+
+# Cross-then-widening (user, 2026-10-27): after a cross, the lines must stay
+# apart on the next CROSS_WIDENING_CANDLES candles (never touching back), and
+# the last one's gap must be wider than the one before it and than the cross
+# candle's. No minimum widening yet -- to be calibrated later.
+CROSS_WIDENING_CANDLES = 3
+
+
+def step_cross_widening(watch: Optional[dict], cross_dir: int, diff: float) -> Tuple[Optional[dict], bool]:
+    """One candle of the cross-widening watch.
+
+    watch: the running watch ({"dir": +1/-1, "gaps": [...]}) or None.
+    cross_dir: +1 if a bullish cross fired on this candle, -1 bearish, 0 none.
+    diff: line minus signal on this candle.
+    Returns (watch to keep, whether the widening signal fires now)."""
+    if cross_dir:
+        return {"dir": cross_dir, "gaps": [cross_dir * diff]}, False
+    if watch is None:
+        return None, False
+    gap = watch["dir"] * diff
+    if gap <= 0:  # touched or crossed back -- the watch ends
+        return None, False
+    gaps = watch["gaps"] + [gap]
+    if len(gaps) - 1 < CROSS_WIDENING_CANDLES:
+        return {"dir": watch["dir"], "gaps": gaps}, False
+    return None, gaps[-1] > gaps[-2] and gaps[-1] > gaps[0]
 
 
 def seed_pattern_definitions(session_factory) -> None:
@@ -1377,6 +1410,10 @@ class ActivityEngine:
         self._stoch_state: Dict[InstrumentKey, StochasticState] = defaultdict(StochasticState)
         self._prev_rsi: Dict[InstrumentKey, float] = {}
         self._prev_macd: Dict[InstrumentKey, Tuple[float, float]] = {}
+        # running cross-widening watch per instrument (see step_cross_widening)
+        self._macd_widening: Dict[InstrumentKey, dict] = {}
+        self._stoch_widening: Dict[InstrumentKey, dict] = {}
+        self._ma_widening: Dict[InstrumentKey, dict] = {}
         self._prev_stoch: Dict[InstrumentKey, Tuple[float, float]] = {}
         self._prev_ma: Dict[InstrumentKey, Tuple[float, float]] = {}
         # swing-high/swing-low (structure) — rolling 2*swing_lookback+1 window
@@ -1722,10 +1759,18 @@ class ActivityEngine:
                 prev_macd = self._prev_macd.get(key)
                 if prev_macd is not None:
                     prev_line, prev_signal = prev_macd
+                    cross_dir = 0
                     if crossed_above(prev_line, prev_signal, macd_line, macd_signal):
                         found.append(("indicator", "macd_bullish_cross", cross_intensity(prev_line, prev_signal, macd_line, macd_signal)))
+                        cross_dir = 1
                     if crossed_below(prev_line, prev_signal, macd_line, macd_signal):
                         found.append(("indicator", "macd_bearish_cross", cross_intensity(prev_line, prev_signal, macd_line, macd_signal)))
+                        cross_dir = -1
+                    # Cross-then-widening: lines kept apart for 3 candles after the cross.
+                    if candle.close:
+                        self._step_widening(found, self._macd_widening, key, cross_dir, macd_line - macd_signal,
+                                            "macd_bullish_cross_widening", "macd_bearish_cross_widening",
+                                            abs(macd_line - macd_signal) / candle.close * 100)
                 self._prev_macd[key] = (macd_line, macd_signal)
         except Exception:
             logger.exception("Activity engine: macd crossover failed for %s (%s)", symbol, exchange_segment)
@@ -1736,10 +1781,17 @@ class ActivityEngine:
                 prev_stoch = self._prev_stoch.get(key)
                 if prev_stoch is not None:
                     prev_k, prev_d = prev_stoch
+                    cross_dir = 0
                     if crossed_above(prev_k, prev_d, stoch_k, stoch_d):
                         found.append(("indicator", "stoch_bullish_cross", cross_intensity(prev_k, prev_d, stoch_k, stoch_d)))
+                        cross_dir = 1
                     if crossed_below(prev_k, prev_d, stoch_k, stoch_d):
                         found.append(("indicator", "stoch_bearish_cross", cross_intensity(prev_k, prev_d, stoch_k, stoch_d)))
+                        cross_dir = -1
+                    # Stochastic is already 0-100, so the gap itself is the intensity.
+                    self._step_widening(found, self._stoch_widening, key, cross_dir, stoch_k - stoch_d,
+                                        "stoch_bullish_cross_widening", "stoch_bearish_cross_widening",
+                                        abs(stoch_k - stoch_d))
                 self._prev_stoch[key] = (stoch_k, stoch_d)
         except Exception:
             logger.exception("Activity engine: stochastic crossover failed for %s (%s)", symbol, exchange_segment)
@@ -1765,10 +1817,17 @@ class ActivityEngine:
             prev_ma = self._prev_ma.get(key)
             if prev_ma is not None:
                 prev_ma21, prev_ma50 = prev_ma
+                cross_dir = 0
                 if crossed_above(prev_ma21, prev_ma50, ma21, ma50):
                     found.append(("indicator", "ma_golden_cross", cross_intensity(prev_ma21, prev_ma50, ma21, ma50)))
+                    cross_dir = 1
                 if crossed_below(prev_ma21, prev_ma50, ma21, ma50):
                     found.append(("indicator", "ma_death_cross", cross_intensity(prev_ma21, prev_ma50, ma21, ma50)))
+                    cross_dir = -1
+                if candle.close:
+                    self._step_widening(found, self._ma_widening, key, cross_dir, ma21 - ma50,
+                                        "ma_golden_cross_widening", "ma_death_cross_widening",
+                                        abs(ma21 - ma50) / candle.close * 100)
             self._prev_ma[key] = (ma21, ma50)
 
         # Snapshot every one of this candle's indicator values,
@@ -2113,6 +2172,17 @@ class ActivityEngine:
             state.cum_pv += typical_price * candle.volume
             state.cum_vol += candle.volume
         return state.cum_pv / state.cum_vol if state.cum_vol > 0 else None
+
+    @staticmethod
+    def _step_widening(found, store, key, cross_dir, diff, bull_name, bear_name, intensity) -> None:
+        """Advance one instrument's cross-widening watch (step_cross_widening)
+        and append the bull/bear widening signal to `found` if it fires."""
+        before = store.pop(key, None)
+        watch, fired = step_cross_widening(before, cross_dir, diff)
+        if watch is not None:
+            store[key] = watch
+        if fired:
+            found.append(("indicator", bull_name if before["dir"] > 0 else bear_name, intensity))
 
     def _lookup_instrument_id(self, symbol: str, exchange_segment: str):
         cache_key = (symbol, exchange_segment)
