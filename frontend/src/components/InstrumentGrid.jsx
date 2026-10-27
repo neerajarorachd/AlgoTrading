@@ -3,7 +3,9 @@ import OrderPopup from './OrderPopup.jsx'
 import { DIRECTION_COLOR, EventsCell, WatchSelectionCell } from './symbolCells.jsx'
 
 const VISIBLE_ROWS = 5
-const ROW_HEIGHT_PX = 33
+// every row exactly this tall, button or not (Buy/Sell rows were 41 px, Hold 39,
+// none 36 -- a row changed height when its button came or went, 2026-10-27)
+const ROW_HEIGHT_PX = 42
 const MAX_OPEN_CHARTS = 4
 
 const BUCKET_DOT_FALLBACK = 'var(--text-faint)'
