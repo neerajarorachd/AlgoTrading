@@ -1000,6 +1000,28 @@ async function restorePrefs() {
         }
         void stackBox;
       }
+      // ---- one vertical crosshair line across all blocks (2026-10-27) ----
+      {
+        const stack = chart.locator('[data-chart-stack]');
+        const vline = chart.locator('[data-crosshair-line]');
+        const sb = await stack.boundingBox();
+        const pane = await layer.boundingBox();
+        const widths = JSON.parse((await layer.getAttribute('data-axis-widths')) || '[]').filter((w) => w != null);
+        checkTrue('[CROSS] every block has the same price-axis width', widths.length > 1 && widths.every((w) => w === widths[0]), widths);
+        const hoverX = pane.x + pane.width * 0.5;
+        await page.mouse.move(hoverX, pane.y + pane.height * 0.5);
+        await page.waitForTimeout(200);
+        const a = await vline.boundingBox();
+        checkTrue('[CROSS] hovering the price block shows one line over the whole stack', !!a && a.height >= sb.height - 4, { a, sb });
+        const lowY = sb.y + sb.height - 50; // inside the bottom block's plot, above its time axis
+        await page.mouse.move(hoverX, lowY);
+        await page.waitForTimeout(200);
+        const b = await vline.boundingBox();
+        checkTrue('[CROSS] hovering a lower block keeps the line at the same candle (same x)', !!a && !!b && Math.abs(a.x - b.x) <= 1, { a: a?.x, b: b?.x });
+        await page.mouse.move(sb.x + sb.width / 2, sb.y - 40); // off the chart
+        await page.waitForTimeout(200);
+        checkTrue('[CROSS] the line goes away when the mouse leaves the chart', !(await vline.isVisible()));
+      }
       // 5. Event marking toggle hides and shows the dots
       await tool('events').click(); await page.waitForTimeout(200);
       check('[ALGO-25] Event marking off hides every dot', await dotCount(), 0);

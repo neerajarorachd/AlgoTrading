@@ -58,6 +58,7 @@ const DIAGRAM_SECONDS = 5 // a clicked dot's diagrams stay this long (ALGO-25)
 // other one -- checked on screenshots). Each body fills CANDLE_BODY_RATIO of
 // its slot (the library's own candles fill ~80%).
 const MAX_BAR_SPACING = 66
+const PRICE_AXIS_WIDTH = 72 // px, every block (price labels like 12,345.60 fit)
 const CANDLE_BODY_RATIO = DEFAULT_BODY_RATIO
 const TF_MINUTES = { '1min': 1, '3min': 3, '5min': 5 }
 const RIGHT_COLUMN_WIDTH = 260 // Depth (top) + Indicators window (below) share this column
@@ -144,12 +145,16 @@ function sharedChartOptions() {
   return {
     layout: { background: { color: tok('--chart-bg') }, textColor: tok('--chart-text'), fontFamily: 'inherit', attributionLogo: false },
     grid: { vertLines: { color: tok('--chart-grid') }, horzLines: { color: tok('--chart-grid') } },
-    rightPriceScale: { borderColor: tok('--chart-border') },
+    // the same price-axis width in every block, so a candle sits at the same x
+    // in price, RSI, MACD and Stoch -- one crosshair line can cross them all
+    rightPriceScale: { borderColor: tok('--chart-border'), minimumWidth: PRICE_AXIS_WIDTH },
     // labels are "10:06" or "12 Oct" (<= 6 chars): telling the library so lets it
     // fit one label per candle at full zoom, as on Dhan (default reserves 8)
     timeScale: { borderColor: tok('--chart-border'), timeVisible: true, secondsVisible: false, tickMarkFormatter: tickFormatter, tickMarkMaxCharacterLength: 6 },
     localization: { timeFormatter: crosshairFormatter },
-    crosshair: { mode: CrosshairMode.Normal },
+    // each block's own vertical line off -- one line over the whole stack instead
+    // (user, 2026-10-27: "it should be single line across the blocks")
+    crosshair: { mode: CrosshairMode.Normal, vertLine: { visible: false, labelVisible: true } },
   }
 }
 
@@ -207,6 +212,7 @@ export default function CandleChart({
   const tooltipRef = useRef(null)
   const marksVersionRef = useRef(0) // bumped to repaint after the marks change
   const selectedLineRef = useRef(null) // the clicked line: { key, label, series, width }
+  const vlineRef = useRef(null) // the one vertical crosshair line over all blocks
   const selectedLabelRef = useRef(null)
   const priceZoomRef = useRef(0) // ALGO-26 vertical zoom in whole wheel steps; 0 = auto-fit (factor 0.9^steps)
   const selectedPatternsRef = useRef(getPref('chart.selectedPatterns.v2', null) ?? []) // pattern keys ticked on the Patterns tab (all enabled until changed)
@@ -454,6 +460,22 @@ export default function CandleChart({
       if (line) selectLine(line, param)
       else clearSelectedLine()
     })
+    // one vertical crosshair line across every block, at the candle under the
+    // mouse in whichever block it is. Only the block that drew it may hide
+    // it, so leaving one block for the next never blanks the line.
+    let vlineOwner = null
+    allPanes.forEach((chart) => chart.subscribeCrosshairMove((param) => {
+      const line = vlineRef.current
+      if (!line) return
+      const x = param.point && param.time != null ? chart.timeScale().timeToCoordinate(param.time) : null
+      if (x == null) {
+        if (vlineOwner === chart) { line.style.display = 'none'; vlineOwner = null }
+        return
+      }
+      vlineOwner = chart
+      line.style.left = `${Math.round(x)}px`
+      line.style.display = 'block'
+    }))
     c.main.subscribeCrosshairMove((param) => {
       const tip = tooltipRef.current
       if (!tip) return
@@ -803,6 +825,7 @@ export default function CandleChart({
     if (range) layer.dataset.rangeFrom = range.from.toFixed(1)
     if (range) layer.dataset.barSpacing = (plotWidth() / (range.to - range.from)).toFixed(2)
     layer.dataset.marksDrawn = String(c.candleView?._renderer?.marksDrawn ?? 0)
+    layer.dataset.axisWidths = JSON.stringify([c.main, c.rsi, c.macd, c.stoch].map((ch) => ch?.priceScale('right').width() ?? null))
     if (range) layer.dataset.markWidth = markWidth(plotWidth() / (range.to - range.from), CANDLE_BODY_RATIO).toFixed(2)
     if (range) layer.dataset.candleBody = (plotWidth() / (range.to - range.from) * CANDLE_BODY_RATIO).toFixed(2)
     layer.dataset.bodyRatio = String(c.candle.options().bodyRatio)
@@ -1314,7 +1337,9 @@ export default function CandleChart({
           column was then sized to that stretched frame (2026-10-15).
           Fullscreen still stretches -- the chart fills the screen there. */}
       <div style={{ display: 'flex', gap: 14, alignItems: fillHeight ? 'stretch' : 'flex-start', flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
-        <div ref={stackRef} data-chart-stack style={{ flex: '1 1 auto', minWidth: 0, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', display: fillHeight ? 'flex' : undefined, flexDirection: fillHeight ? 'column' : undefined }}>
+        <div ref={stackRef} data-chart-stack style={{ position: 'relative', flex: '1 1 auto', minWidth: 0, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', display: fillHeight ? 'flex' : undefined, flexDirection: fillHeight ? 'column' : undefined }}>
+          <div ref={vlineRef} data-crosshair-line aria-hidden="true"
+            style={{ position: 'absolute', top: 0, bottom: 0, width: 0, borderLeft: '1px dashed var(--text-faint)', pointerEvents: 'none', zIndex: 6, display: 'none' }} />
           <div style={{ position: 'relative', flex: fillHeight ? '1 1 auto' : undefined, minHeight: fillHeight ? 0 : undefined }}>
             {/* height:100% in fullscreen so the price pane fills whatever the
                 sub-panels leave -- without it this div only ever wraps the
