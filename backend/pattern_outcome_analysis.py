@@ -28,6 +28,7 @@ from indicators import (
     INDICATOR_TREND_LOOKBACK, classify_macd, classify_rsi, classify_series_trend, classify_stochastic,
 )
 from prediction_tracker import BEARISH_PATTERNS, BULLISH_PATTERNS
+from story.point_events import ALL_EVENT_NAMES as STORY_POINT_EVENTS
 
 # 5/10/15/20/30 candles ahead (explicit instruction, 2026-09-15: "analyze
 # 5, 10, 15, 20, 30 candles") — a short/medium/long horizon ladder so a
@@ -215,6 +216,8 @@ def analyze_instrument(
     candle_ts = [c[0] for c in candles]
     results: List[dict] = []
     for ts, pattern, activity_type, entry_price in activities:
+        if pattern in STORY_POINT_EVENTS:
+            continue  # market-story events (~100 a day per stock): not part of this analysis
         pos = bisect.bisect_right(candle_ts, ts)  # first candle strictly after this activity's own ts
         window = candles[pos:pos + max_window]
         window = _truncate_at_data_gap(ts, window)

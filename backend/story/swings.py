@@ -45,6 +45,30 @@ class Swing:
 
 HIGH_LABELS = ("HH", "LH", "EH")
 LOW_LABELS = ("HL", "LL", "EL")
+EQUAL_PCT = 0.05
+
+
+def label_swing(kind: str, price: float, prev_same: Optional[float], prev_other: Optional[float],
+                prev_other_leg: Optional[float], equal_pct: float = EQUAL_PCT):
+    """(label, leg_pct, ratio) for a new swing. Shared by SwingTracker and the
+    live ActivityEngine so both label swings the same way.
+    label: vs the previous swing of the same kind (EH/EL within equal_pct %);
+    leg_pct: signed % move from the previous opposite swing;
+    ratio: |this leg| / |the previous opposite swing's own leg|."""
+    label = leg = ratio = None
+    if prev_same:
+        diff = (price - prev_same) / prev_same * 100
+        if abs(diff) <= equal_pct:
+            label = "EH" if kind == "high" else "EL"
+        elif kind == "high":
+            label = "HH" if diff > 0 else "LH"
+        else:
+            label = "HL" if diff > 0 else "LL"
+    if prev_other:
+        leg = (price - prev_other) / prev_other * 100
+        if prev_other_leg:
+            ratio = abs(leg) / abs(prev_other_leg)
+    return label, leg, ratio
 
 
 @dataclass
@@ -153,18 +177,13 @@ class SwingTracker:
             if leg < self.min_leg_pct:
                 return None
         s = Swing(kind=kind, price=price, ts=ts, index=index, confirm_index=self._i, replaced=replaced)
-        if prev_same is not None and prev_same.price:
-            diff = (price - prev_same.price) / prev_same.price * 100
-            if abs(diff) <= self.equal_pct:
-                s.label = "EH" if kind == "high" else "EL"
-            elif kind == "high":
-                s.label = "HH" if diff > 0 else "LH"
-            else:
-                s.label = "HL" if diff > 0 else "LL"
-        if prev_other is not None and prev_other.price:
-            s.leg_pct = (price - prev_other.price) / prev_other.price * 100
-            if prev_other.leg_pct:
-                s.ratio = abs(s.leg_pct) / abs(prev_other.leg_pct)
+        s.label, s.leg_pct, s.ratio = label_swing(
+            kind, price,
+            prev_same.price if prev_same else None,
+            prev_other.price if prev_other else None,
+            prev_other.leg_pct if prev_other else None,
+            self.equal_pct,
+        )
         self.swings.append(s)
         if len(self.swings) > 50:
             del self.swings[:-50]

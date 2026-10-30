@@ -375,6 +375,11 @@ class InstrumentActivity(Base):
     neckline_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
     stop_loss_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
     target_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    # Swing labels (market story P1, 2026-10-30): for swing_hh/_lh/_hl/_ll/
+    # _eh/_el rows, the signed % move from the previous opposite swing and
+    # the swing ratio (this leg / the previous leg). NULL for everything else.
+    leg_pct: Mapped[float | None] = mapped_column(Numeric(9, 4), nullable=True)
+    swing_ratio: Mapped[float | None] = mapped_column(Numeric(9, 4), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(

@@ -52,6 +52,15 @@ from indicators import (
     update_rsi,
     update_stochastic,
 )
+from story.point_events import (
+    DEFAULT_CLEAR_PCT,
+    DEFAULT_TOUCH_PCT,
+    SWING_LABEL_EVENTS,
+    DayLevels,
+    catalog as point_events_catalog,
+    line_events,
+)
+from story.swings import label_swing
 
 logger = logging.getLogger(__name__)
 
@@ -1248,6 +1257,10 @@ PATTERN_CATALOG = [
     ("rising_wedge", "graph_formation", "Both trendlines rising but support rising faster (narrowing) — bearish reversal despite the upward drift"),
     ("falling_wedge", "graph_formation", "Both trendlines falling but resistance falling faster (narrowing) — bullish reversal despite the downward drift"),
 ]
+# Market story P1 (2026-10-30): line cross/bounce/touch, day levels, swing
+# labels. Listed (so they appear in the Signals picker) even while the
+# `point_events_v2` setting is off; they only fire when it is on.
+PATTERN_CATALOG += point_events_catalog()
 
 
 # Cross-then-widening (user, 2026-10-27): after a cross, the lines must stay
@@ -1295,6 +1308,11 @@ def seed_pattern_definitions(session_factory) -> None:
 # same mechanism incrementally, not all at once.
 ENGINE_SETTING_DEFAULTS: Dict[str, float] = {
     "swing_lookback": float(_SWING_LOOKBACK),
+    # market story P1 (2026-10-30), off until switched on (1)
+    "point_events_v2": 0.0,
+    "line_touch_pct": DEFAULT_TOUCH_PCT,
+    "line_clear_pct": DEFAULT_CLEAR_PCT,
+    "line_touch_events": 0.0,
 }
 
 # Human-readable text for the Engine Settings admin page (routes_engine_
@@ -1307,6 +1325,17 @@ ENGINE_SETTING_DESCRIPTIONS: Dict[str, str] = {
         "Compare candidate values per-run via Strategy.swing_lookback in a backtest "
         "before promoting a winner here for live."
     ),
+    "point_events_v2": (
+        "1 = record the market-story point events: line cross/bounce for VWAP, Bollinger Bands, "
+        "MA21, MA50 and EMA50; day and previous-day high/low breaks; swing labels (HH/LH/HL/LL) "
+        "with leg % and swing ratio. 0 = off. Needs migrate_swing_label_columns.py run first."
+    ),
+    "line_touch_pct": "A candle within this % of a line counts as reaching it (line events).",
+    "line_clear_pct": (
+        "A bounce needs the closes before and after at least this % away from the line, so price "
+        "hovering around a line is not counted as repeated bounces."
+    ),
+    "line_touch_events": "1 = also store plain touches (many rows: ~70 per stock per day on 5-min). 0 = off.",
 }
 
 
@@ -1361,9 +1390,19 @@ class ActivityEngine:
         # so a backtest sweep can never affect the live engine's own value.
         if swing_lookback is not None:
             self.swing_lookback = int(swing_lookback)
+            settings: Dict[str, float] = {}  # backtests: market-story events stay off
         else:
             settings = load_engine_settings(session_factory)
             self.swing_lookback = int(settings.get("swing_lookback", ENGINE_SETTING_DEFAULTS["swing_lookback"]))
+
+        def _setting(name):
+            return float(settings.get(name, ENGINE_SETTING_DEFAULTS[name]))
+        self.point_events_v2 = _setting("point_events_v2") >= 1
+        self.line_touch_pct = _setting("line_touch_pct")
+        self.line_clear_pct = _setting("line_clear_pct")
+        self.line_touch_events = _setting("line_touch_events") >= 1
+        self._day_levels: Dict[InstrumentKey, DayLevels] = defaultdict(DayLevels)
+        self._swing_leg: Dict[InstrumentKey, Dict[str, float]] = defaultdict(dict)
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
         # Today's store (2026-10-08, live_pattern_store_and_grid_window_plan):
@@ -1875,6 +1914,21 @@ class ActivityEngine:
         except Exception:
             logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)
 
+        # Market story P1 point events: line cross/bounce(/touch) and day levels.
+        if self.point_events_v2:
+            try:
+                frame = self._frame_rows.get(key)
+                if frame and frame[-1]["ts"] == candle.timestamp:
+                    prev_row = frame[-2] if len(frame) >= 2 else None
+                    for ev in line_events(prev_row, frame[-1], self.line_touch_pct, self.line_clear_pct):
+                        if ev[1].endswith("_touch") and not self.line_touch_events:
+                            continue
+                        found.append(ev)
+                day = (_as_utc(candle.timestamp) + _IST).date()
+                found.extend(self._day_levels[key].update(day, candle.high, candle.low, candle.close))
+            except Exception:
+                logger.exception("Activity engine: point events failed for %s (%s)", symbol, exchange_segment)
+
         try:
             window = self._swing_window[key]
             window.append(candle)
@@ -1907,6 +1961,31 @@ class ActivityEngine:
                         swing_point = SwingPoint(kind=kind, price=price, candle=swing_candle)
                         points.append(swing_point)
                         points_list = list(points)
+
+                        # Market story P1: HH/LH/EH, HL/LL/EL with leg % and swing ratio
+                        if self.point_events_v2:
+                            try:
+                                other = "low" if kind == "high" else "high"
+                                same_seq = self._recent_highs[key] if kind == "high" else self._recent_lows[key]
+                                prev_other = next((p for p in reversed(points_list[:-1]) if p.kind == other), None)
+                                legs = self._swing_leg[key]
+                                label, leg, ratio = label_swing(
+                                    kind, price, same_seq[-1].price if same_seq else None,
+                                    prev_other.price if prev_other else None, legs.get(other))
+                                legs[kind] = leg
+                                if ratio is not None:
+                                    ratio = min(ratio, 9999.0)  # a near-zero previous leg; fits NUMERIC(9,4)
+                                if label:
+                                    self._buffer.append({
+                                        "instrument_id": instrument_id, "timeframe": candle.timeframe,
+                                        "ts": swing_candle.timestamp,
+                                        "activity_type": "structure", "activity": SWING_LABEL_EVENTS[label],
+                                        "intensity": leg, "leg_pct": leg, "swing_ratio": ratio,
+                                        "open_price": swing_candle.open, "high_price": swing_candle.high,
+                                        "low_price": swing_candle.low, "close_price": swing_candle.close,
+                                    })
+                            except Exception:
+                                logger.exception("Activity engine: swing label failed for %s (%s)", symbol, exchange_segment)
 
                         # double_top_ed/double_bottom_ed watch lifecycle --
                         # this new point either resolves an ALREADY-fired
