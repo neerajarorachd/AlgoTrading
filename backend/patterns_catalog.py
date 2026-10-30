@@ -73,6 +73,27 @@ SYSTEM_PATTERNS = (
     ("vwap_rejection", "VWAP rejection", "bearish", "price_action", 3, 10, 5,
      "Price poked above VWAP recently and has closed back below it on strong volume.",
      ["RECENTLY(CLOSE > VWAP, 5)", "CLOSE < VWAP", f"VOLUME > 1.5 * {AVG_VOLUME}"]),
+    # ---- trend-filtered setups from the 2-year backtest (2026-10-30) ----
+    # 13 stocks, Sep 2024 - Sep 2026, intraday, stop 2xATR / target 10xATR,
+    # else day-end exit (memory: cross_widening_signal). Four conditions
+    # each, so the 80% formed rule means ALL four must hold, exactly as
+    # backtested. EVENT_ANY: the backtest used no signal-strength minimum.
+    # Results per pattern live in pattern_backtest_results.
+    ("macd_widening_trend_bull", "MACD widening with trend (bullish)", "bullish", "indicator", 5, 10, 0,
+     "5-min MACD crossed up and the lines kept widening for 3 candles, in an up-trend: price above a rising "
+     "EMA50, ADX 30-40 with +DI above -DI, entered 09:30-14:45. Backtested best setup.",
+     ["EVENT_ANY(macd_bullish_cross_widening)", "CLOSE > EMA50 and EMA50 > EMA50[-10]",
+      "ADX >= 30 and ADX < 40 and PLUS_DI > MINUS_DI", "TF_MINUTES == 5 and TIME >= 930 and TIME < 1445"]),
+    ("macd_widening_trend_bear", "MACD widening with trend (bearish)", "bearish", "indicator", 5, 10, 0,
+     "5-min MACD crossed down and the lines kept widening for 3 candles, in a down-trend: price below a falling "
+     "EMA50, ADX 30-40 with -DI above +DI, entered 09:30-14:45. Backtested best setup.",
+     ["EVENT_ANY(macd_bearish_cross_widening)", "CLOSE < EMA50 and EMA50 < EMA50[-10]",
+      "ADX >= 30 and ADX < 40 and MINUS_DI > PLUS_DI", "TF_MINUTES == 5 and TIME >= 930 and TIME < 1445"]),
+    ("ma_death_cross_trend", "MA death cross with trend", "bearish", "indicator", 4, 10, 0,
+     "3- or 5-min MA21 crossed below MA50 in a down-trend: price below a falling EMA50, ADX 30-40 with -DI "
+     "above +DI, entered 09:30-14:45.",
+     ["EVENT_ANY(ma_death_cross)", "CLOSE < EMA50 and EMA50 < EMA50[-10]",
+      "ADX >= 30 and ADX < 40 and MINUS_DI > PLUS_DI", "TF_MINUTES >= 3 and TIME >= 930 and TIME < 1445"]),
     # ---- caution (pink) ----
     ("bb_squeeze_tight", "Bollinger squeeze, no room", "caution", "volatility", 0, 10, 5,
      "Bands narrowing for 4 candles and under 0.6% wide: not enough room for a trade.",

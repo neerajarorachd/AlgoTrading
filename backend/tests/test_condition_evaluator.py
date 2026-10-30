@@ -24,7 +24,8 @@ def test_field_enum_values_are_the_dataframe_column_names(df):
         assert field.value in df.columns or field.value in ("macd_line", "macd_signal", "stoch_d",
                                                               "ma21", "ma50", "atr", "bb_upper",
                                                               "bb_middle", "bb_lower", "volume",
-                                                              "ema5", "ema14", "ema21", "ema50")
+                                                              "ema5", "ema14", "ema21", "ema50",
+                                                              "adx", "plus_di", "minus_di")
 
 
 def test_bare_field_reads_the_current_candle(df):

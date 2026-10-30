@@ -48,6 +48,9 @@ Status key: **✓ works today** · **◐ planned (pattern table, ALGO-5)**.
 | `BODY` | \|CLOSE − OPEN\| |
 | `UPPER_WICK` `LOWER_WICK` | Wick lengths |
 | `RANGE` | HIGH − LOW |
+| `ADX` `PLUS_DI` `MINUS_DI` | Trend strength, Wilder ADX(14), with its +DI / −DI. ADX ≥ 25–30 = a real trend; +DI above −DI = up-trend. e.g. `ADX >= 30 and ADX < 40 and PLUS_DI > MINUS_DI` |
+| `TIME` | Candle start time in IST as HHMM: 930 = 09:30, 1445 = 14:45. e.g. `TIME >= 930 and TIME < 1445` |
+| `TF_MINUTES` | The candle timeframe in minutes (1, 3 or 5). e.g. `TF_MINUTES == 5` |
 
 ---
 

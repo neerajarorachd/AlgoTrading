@@ -394,6 +394,7 @@ def _num(value) -> float | None:
 _INDICATOR_FIELDS = (
     "rsi", "macd_line", "macd_signal", "stoch_k", "stoch_d", "vwap", "ma21", "ma50",
     "ema5", "ema14", "ema21", "ema50", "atr", "bb_upper", "bb_middle", "bb_lower",
+    "adx", "plus_di", "minus_di",
 )
 
 

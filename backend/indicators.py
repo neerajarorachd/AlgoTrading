@@ -206,6 +206,64 @@ def update_atr(state: AtrState, high: float, low: float, close: float, period: i
     return state.avg_tr
 
 
+# --------------------------------------------------------------------- ADX / +DI / -DI (Wilder's)
+
+ADX_PERIOD = 14
+
+
+class AdxState:
+    __slots__ = ("prev", "count", "tr", "plus_dm", "minus_dm", "seed_dx", "adx")
+
+    def __init__(self):
+        self.prev: Optional[tuple] = None  # previous (high, low, close)
+        self.count = 0
+        self.tr = self.plus_dm = self.minus_dm = 0.0
+        self.seed_dx: list = []
+        self.adx: Optional[float] = None
+
+
+def update_adx(state: AdxState, high: float, low: float, close: float,
+               period: int = ADX_PERIOD) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Wilder's ADX with its +DI / -DI, one candle at a time. Returns
+    (adx, plus_di, minus_di). +DI/-DI appear after `period` candles; ADX
+    (a Wilder average of DX) after about 2 x `period`. ADX measures trend
+    STRENGTH in either direction; +DI above -DI says the trend is up.
+    Added 2026-10-30 for the "ADX 30-40, DI agrees" rule: the 2-year
+    backtest found MACD widening works with a firm but not exhausted trend
+    (ADX >= 40 added losses)."""
+    if state.prev is None:
+        state.prev = (high, low, close)
+        return None, None, None
+    ph, pl, pc = state.prev
+    state.prev = (high, low, close)
+    tr = max(high - low, abs(high - pc), abs(low - pc))
+    up, down = high - ph, pl - low
+    plus_dm = up if up > down and up > 0 else 0.0
+    minus_dm = down if down > up and down > 0 else 0.0
+    state.count += 1
+    if state.count <= period:  # seed: plain sums of the first `period`
+        state.tr += tr; state.plus_dm += plus_dm; state.minus_dm += minus_dm
+        if state.count < period:
+            return None, None, None
+    else:  # Wilder smoothing of the running sums
+        state.tr += tr - state.tr / period
+        state.plus_dm += plus_dm - state.plus_dm / period
+        state.minus_dm += minus_dm - state.minus_dm / period
+    if state.tr == 0:
+        return state.adx, None, None
+    plus_di = 100 * state.plus_dm / state.tr
+    minus_di = 100 * state.minus_dm / state.tr
+    total = plus_di + minus_di
+    dx = 100 * abs(plus_di - minus_di) / total if total else 0.0
+    if state.adx is None:
+        state.seed_dx.append(dx)
+        if len(state.seed_dx) == period:
+            state.adx = statistics.fmean(state.seed_dx)
+    else:
+        state.adx = (state.adx * (period - 1) + dx) / period
+    return state.adx, plus_di, minus_di
+
+
 # --------------------------------------------------------------------- EMA (standalone, any period)
 
 class EmaState:

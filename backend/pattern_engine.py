@@ -26,7 +26,8 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from condition_evaluator import EVENTS_COLUMN, FormulaError, _eval_node, _normalize, frame_from_rows, required_lookback
+from condition_evaluator import (EVENTS_COLUMN, FormulaError, _eval_node, _normalize, frame_from_rows, required_lookback,
+                                 timeframe_minutes)
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,7 @@ class PatternEvaluator:
         df = frame_from_rows(window)
         if EVENTS_COLUMN not in df.columns:
             df[EVENTS_COLUMN] = [frozenset()] * len(df)
+        df["tf_minutes"] = float(timeframe_minutes(timeframe))  # TF_MINUTES in conditions
         results = self.match_percentages(df, timeframe)
         self.scores[key] = {k: m for k, (_, m) in results.items()}
         hits = []

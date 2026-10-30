@@ -301,6 +301,12 @@ class CandleIndicators(Base):
     ema14: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
     ema21: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
     ema50: Mapped[float | None] = mapped_column(Numeric(9, 2), nullable=True)
+    # Added 2026-10-30: Wilder ADX(14) with +DI/-DI, for the "ADX 30-40, DI
+    # agrees" pattern rule. Existing tables need
+    # scripts/migrate_adx_columns.py (SQL Server) before the app restarts.
+    adx: Mapped[float | None] = mapped_column(Numeric(9, 4), nullable=True)
+    plus_di: Mapped[float | None] = mapped_column(Numeric(9, 4), nullable=True)
+    minus_di: Mapped[float | None] = mapped_column(Numeric(9, 4), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("instrument_id", "timeframe", "ts", name="uq_candle_indicators"),
@@ -1913,6 +1919,54 @@ class PatternStockWeight(Base):
     __table_args__ = (
         UniqueConstraint("pattern_id", "instrument_id", "owner_id", name="uq_pattern_stock_weight"),
     )
+
+
+class PatternBacktestResult(Base):
+    """One backtest result for a pattern combination (2026-10-30): the
+    pattern's conditions, the timeframe, the stocks, the exit rule, the money
+    settings and what it made. One row for the whole stock set (scope
+    "set") plus one row per stock (scope "stock", symbol filled) per run.
+    Money figures are rupees for the given capital/leg_size; y1/y2 split the
+    period into two ~1-year halves so a reader can see it held in both.
+    Pattern.win_rate/avg_move_pct/sample_size carry the latest "set" row."""
+
+    __tablename__ = "pattern_backtest_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_label: Mapped[str] = mapped_column(String(64), nullable=False)  # groups the rows of one run
+    pattern_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    pattern_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    combination: Mapped[str] = mapped_column(String(1024), nullable=False)  # the conditions, " AND "-joined
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False)  # "5min", or "3min,5min"
+    scope: Mapped[str] = mapped_column(String(8), nullable=False)  # set | stock
+    stock_set: Mapped[str] = mapped_column(String(512), nullable=False, default="")  # symbols, comma-separated
+    symbol: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # scope "stock" only
+    exit_rule: Mapped[str] = mapped_column(String(128), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    capital: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    leg_size: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    cost_model: Mapped[str] = mapped_column(String(64), nullable=False)
+    slippage_pct: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False, default=0)
+    trades: Mapped[int] = mapped_column(Integer, nullable=False)
+    skipped_no_money: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    win_rate: Mapped[Optional[float]] = mapped_column(Numeric(6, 4), nullable=True)
+    avg_gross_pct: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
+    avg_net_pct: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
+    gross_rupees: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    costs_rupees: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    net_rupees: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    net_after_slippage_rupees: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    worst_drawdown_rupees: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    quarters_positive: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quarters_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    y1_net_rupees: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    y2_net_rupees: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    notes: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    owner_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (Index("ix_pattern_backtest_results_pattern", "pattern_key", "run_at"),)
 
 
 class SignalStrengthRule(Base):

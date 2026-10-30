@@ -102,6 +102,10 @@ class Field(str, Enum):
     EMA14 = "ema14"
     EMA21 = "ema21"
     EMA50 = "ema50"
+    # Trend strength (added 2026-10-30): Wilder ADX(14) and its +DI / -DI
+    ADX = "adx"
+    PLUS_DI = "plus_di"
+    MINUS_DI = "minus_di"
 
 
 # Derived fields (ALGO-30): computed from the stored ones on demand, so they
@@ -115,6 +119,13 @@ DERIVED_FIELDS = {
     "upper_wick": lambda df: df["high"] - df[["open", "close"]].max(axis=1),
     "lower_wick": lambda df: df[["open", "close"]].min(axis=1) - df["low"],
     "range": lambda df: df["high"] - df["low"],
+    # candle time of day in IST as HHMM (09:30 -> 930, 14:45 -> 1445), for
+    # entry windows like "TIME >= 930 and TIME < 1445" (2026-10-30)
+    "time": lambda df: _ist_hhmm(df),
+    # the candle timeframe in minutes (1/3/5). Frame builders that know the
+    # timeframe set this column directly (pattern_engine, build_indicator_
+    # dataframe); otherwise it is read off the candle spacing.
+    "tf_minutes": lambda df: _tf_minutes_from_spacing(df),
 }
 DERIVED_DESCRIPTIONS = {
     "macd_hist": "MACD line minus signal",
@@ -123,7 +134,32 @@ DERIVED_DESCRIPTIONS = {
     "upper_wick": "HIGH - max(OPEN, CLOSE)",
     "lower_wick": "min(OPEN, CLOSE) - LOW",
     "range": "HIGH - LOW",
+    "time": "candle start time in IST as HHMM, e.g. 930 = 09:30, 1445 = 14:45",
+    "tf_minutes": "the candle timeframe in minutes: 1, 3 or 5",
 }
+
+
+def timeframe_minutes(timeframe: str) -> int:
+    """'5min' -> 5."""
+    return int(str(timeframe).lower().replace("min", ""))
+
+
+def _ist_hhmm(df: pd.DataFrame) -> pd.Series:
+    if "ts" not in df.columns:  # e.g. the validator's sample frame: unknown, not an error
+        return pd.Series(float("nan"), index=df.index, dtype=float)
+    local = pd.to_datetime(df["ts"], utc=True) + IST_OFFSET
+    return (local.dt.hour * 100 + local.dt.minute).astype(float)
+
+
+def _tf_minutes_from_spacing(df: pd.DataFrame) -> pd.Series:
+    """Smallest positive gap between consecutive candles, in minutes --
+    the timeframe whenever the frame has two candles in a row."""
+    if "ts" not in df.columns:
+        return pd.Series(float("nan"), index=df.index, dtype=float)
+    gaps = pd.to_datetime(df["ts"], utc=True).diff().dt.total_seconds() / 60
+    gaps = gaps[gaps > 0]
+    value = float(gaps.min()) if len(gaps) else float("nan")
+    return pd.Series(value, index=df.index, dtype=float)
 
 # Raw events fired on a candle (hammer, macd_bullish_cross, bb_squeeze...),
 # as a set per row -- read by EVENT(name). Frame builders fill it when asked.
@@ -776,9 +812,12 @@ def build_indicator_dataframe(session, symbol: str, exchange_segment: str, timef
             Field.BB_MIDDLE.value: float(ind.bb_middle) if ind and ind.bb_middle is not None else None,
             Field.BB_LOWER.value: float(ind.bb_lower) if ind and ind.bb_lower is not None else None,
             **{f.value: (float(getattr(ind, f.value)) if ind and getattr(ind, f.value, None) is not None else None)
-               for f in (Field.EMA5, Field.EMA14, Field.EMA21, Field.EMA50)},
+               for f in (Field.EMA5, Field.EMA14, Field.EMA21, Field.EMA50,
+                         Field.ADX, Field.PLUS_DI, Field.MINUS_DI)},
         })
     df = pd.DataFrame.from_records(records)
+    if not df.empty:
+        df["tf_minutes"] = float(timeframe_minutes(timeframe))
     if include_events and not df.empty:
         # EVENT(name) reads the candle's raw events (instrument_activity)
         from db.models import InstrumentActivity

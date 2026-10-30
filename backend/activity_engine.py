@@ -38,12 +38,14 @@ from indicators import (
     EmaState,
     MacdState,
     RsiState,
+    AdxState,
     StochasticState,
     classify_trend,
     cross_intensity,
     crossed_above,
     crossed_below,
     trend_intensity,
+    update_adx,
     update_atr,
     update_ema,
     update_macd,
@@ -1443,6 +1445,9 @@ class ActivityEngine:
         # module needing to know PredictionTracker exists
         self._atr_state: Dict[InstrumentKey, AtrState] = defaultdict(AtrState)
         self._latest_atr: Dict[InstrumentKey, float] = {}
+        # ADX / +DI / -DI (2026-10-30): trend strength + direction, for the
+        # "ADX 30-40, DI agrees" pattern rule (cross_widening_signal backtest)
+        self._adx_state: Dict[InstrumentKey, AdxState] = defaultdict(AdxState)
         # EMA overlay lines (live chart, memory: live_indicators_phase1_priority)
         # -- genuinely separate state from ma21/ma50 above: those are SMAs read
         # off the _closes window, these are their own recursive EmaState per
@@ -1739,6 +1744,7 @@ class ActivityEngine:
         # further down, right before the `if not found` early return.
         rsi = macd_line = macd_signal = stoch_k = stoch_d = atr = ma21 = ma50 = None
         ema5 = ema14 = ema21 = ema50 = None
+        adx = plus_di = minus_di = None
 
         try:
             rsi = update_rsi(self._rsi_state[key], candle.close)
@@ -1804,6 +1810,11 @@ class ActivityEngine:
             logger.exception("Activity engine: ATR update failed for %s (%s)", symbol, exchange_segment)
 
         try:
+            adx, plus_di, minus_di = update_adx(self._adx_state[key], candle.high, candle.low, candle.close)
+        except Exception:
+            logger.exception("Activity engine: ADX update failed for %s (%s)", symbol, exchange_segment)
+
+        try:
             ema5 = update_ema(self._ema5_state[key], candle.close, period=5)
             ema14 = update_ema(self._ema14_state[key], candle.close, period=14)
             ema21 = update_ema(self._ema21_state[key], candle.close, period=21)
@@ -1848,6 +1859,7 @@ class ActivityEngine:
                     "bb_middle": bb.middle if bb else None,
                     "bb_lower": bb.lower if bb else None,
                     "ema5": ema5, "ema14": ema14, "ema21": ema21, "ema50": ema50,
+                    "adx": adx, "plus_di": plus_di, "minus_di": minus_di,
                 })
             self._frame_rows[key].append({
                 "ts": candle.timestamp, "open": candle.open, "high": candle.high, "low": candle.low,
@@ -1857,6 +1869,7 @@ class ActivityEngine:
                 "bb_upper": bb.upper if bb else None, "bb_middle": bb.middle if bb else None,
                 "bb_lower": bb.lower if bb else None,
                 "ema5": ema5, "ema14": ema14, "ema21": ema21, "ema50": ema50,
+                "adx": adx, "plus_di": plus_di, "minus_di": minus_di,
                 "_events": set(),  # this candle's raw events, filled in _finish_candle (EVENT() in patterns)
             })
         except Exception:
