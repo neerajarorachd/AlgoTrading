@@ -1,5 +1,12 @@
 # AlgoTrading — Project Guide
 
+> **Rule book (read first, 2026-10-30):** the standing working rules and every
+> finalized decision live in `docs/RULEBOOK.md`, loaded below. Follow it in
+> every session, whatever the model or account, and update it whenever a
+> discussion is finalized.
+>
+> @docs/RULEBOOK.md
+
 > **Product name, 2026-10-05**: the app is user-facing-branded **AlgoParakh**
 > ("Algo" + "Parakh", Hindi/Sanskrit for judge/test/discern) — see
 > `frontend/index.html`'s `<title>` and `AppShell.jsx`'s sidebar wordmark.
