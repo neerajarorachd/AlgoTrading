@@ -1,0 +1,54 @@
+﻿== Part 1: U-turns. Trades by the best profit they reached (close basis), all 13 stocks, 2 years
+best profit  trades ended avg ended < 0 gave back >50%
+   0-0.25  %     348    -0.583       98%            51%
+0.25-0.5   %     120    -0.255       62%            78%
+ 0.5-1.0   %     150    -0.051       45%            65%
+ 1.0-1.5   %     107    +0.581       18%            36%
+ 1.5-2.5   %     106    +1.323        4%            19%
+ 2.5-99    %      76    +2.847        4%            13%
+
+== Part 2, 7 plan stocks: net Rs Y1 / Y2, and trades helped / hurt vs base
+variant                             Y1 net    Y2 net  helped   hurt
+base                               118,251   163,706       0      0
+arm 0.5% giveback 33%               17,128    36,441      68    126
+arm 0.5% giveback 50%               32,183    37,691      58    102
+arm 0.5% giveback 67%               54,900    41,626      50     85
+arm 0.5% 1.5xATR from best          38,042    96,789      68    100
+arm 0.5% 3.0xATR from best         108,644   134,758      26     35
+arm 1.0% giveback 33%               73,587   119,127      36     62
+arm 1.0% giveback 50%               91,765   127,158      26     45
+arm 1.0% giveback 67%              105,243   121,110      17     36
+arm 1.0% 1.5xATR from best          77,572   114,423      36     63
+arm 1.0% 3.0xATR from best         115,515   151,932      14     22
+arm 1.5% giveback 33%               97,804   141,724      23     31
+arm 1.5% giveback 50%               99,195   145,643      11     22
+arm 1.5% giveback 67%              103,887   141,467       5     20
+arm 1.5% 1.5xATR from best          96,878   135,557      25     40
+arm 1.5% 3.0xATR from best         113,872   155,685      11     14
+arm 0.5% giveback 33% +story       105,503   108,052      37     66
+arm 0.5% giveback 50% +story       108,398   108,741      35     59
+arm 1.0% giveback 33% +story       109,886   135,567      19     42
+arm 1.0% giveback 50% +story       112,921   136,202      17     36
+
+== Part 2, all 13 stocks: net Rs Y1 / Y2, and trades helped / hurt vs base
+variant                             Y1 net    Y2 net  helped   hurt
+base                                79,659    99,214       0      0
+arm 0.5% giveback 33%              -26,509      -903     132    189
+arm 0.5% giveback 50%               -1,428   -12,684     118    154
+arm 0.5% giveback 67%               20,225    -2,576      97    122
+arm 0.5% 1.5xATR from best         -13,555    55,569     125    150
+arm 0.5% 3.0xATR from best          70,540    98,189      55     55
+arm 1.0% giveback 33%               33,420    91,957      63     90
+arm 1.0% giveback 50%               68,009    89,953      51     64
+arm 1.0% giveback 67%               81,936    89,151      34     45
+arm 1.0% 1.5xATR from best          33,821    88,102      64     88
+arm 1.0% 3.0xATR from best          75,662   117,893      30     33
+arm 1.5% giveback 33%               71,146    91,187      34     40
+arm 1.5% giveback 50%               71,844    90,257      20     28
+arm 1.5% giveback 67%               79,389    89,474      11     22
+arm 1.5% 1.5xATR from best          60,199    80,061      37     50
+arm 1.5% 3.0xATR from best          76,126   117,304      18     17
+arm 0.5% giveback 33% +story       100,501    61,002      81     95
+arm 0.5% giveback 50% +story       106,190    60,430      77     82
+arm 1.0% giveback 33% +story        92,144   100,269      40     55
+arm 1.0% giveback 50% +story        98,409    98,230      37     44

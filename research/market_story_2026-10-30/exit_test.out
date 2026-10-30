@@ -1,0 +1,22 @@
+﻿
+== 7 plan stocks: net Rs after costs and slippage, Rs 5L pool, Rs 2.5L per trade
+rule          Y1 net     Y2 net    avg%    win story exits big winners cut losers improved
+base         118,251    163,706  +0.358  49.4%           0               0               0
+line          96,480     54,748  +0.242  42.6%         205              39              89
+fade          35,257      6,764  +0.143  52.2%         338             100             107
+3 of N        32,827     -9,134  +0.137  47.6%         340              93             110
+4 of N        53,759     49,190  +0.204  44.6%         263              63              87
+5 of N       105,725     80,319  +0.271  45.0%         192              39              65
+6 of N       116,707    108,335  +0.308  46.4%         135              20              44
+predict          nan    145,392  +0.313  46.2%          62               5              20
+
+== all 13 stocks: net Rs after costs and slippage, Rs 5L pool, Rs 2.5L per trade
+rule          Y1 net     Y2 net    avg%    win story exits big winners cut losers improved
+base          79,659     99,214  +0.196  43.4%           0               0               0
+line          78,961    -17,054  +0.134  37.5%         381              55             180
+fade          -7,302    -36,105  +0.081  48.2%         621             148             250
+3 of N       -11,747    -53,113  +0.077  44.5%         628             136             254
+4 of N        19,450    -11,607  +0.110  41.6%         499              95             198
+5 of N        95,787      7,996  +0.151  40.4%         355              57             136
+6 of N       111,828     46,505  +0.180  41.3%         257              28             104
+predict          nan     74,966  +0.163  42.6%         126               9              47

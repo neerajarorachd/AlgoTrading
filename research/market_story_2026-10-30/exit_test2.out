@@ -1,0 +1,28 @@
+
+== 7 plan stocks: net Rs after costs and slippage, Rs 5L pool, Rs 2.5L per trade
+rule                 Y1 net     Y2 net    avg%    win story exits big winners cut losers improved
+base                118,251    163,706  +0.358  49.4%           0               0               0
+line losing         107,128     83,290  +0.276  38.2%         174              25              88
+fade losing         105,259     80,660  +0.278  34.5%         193              25              98
+4 of N losing       104,699     61,748  +0.260  35.1%         183              25              82
+6 of N losing       136,418    111,775  +0.325  43.0%          97               8              41
+predict losing          nan    142,882  +0.323  42.4%          36               3              16
+line protect        104,770     79,968  +0.274  37.1%         180              27              88
+fade protect         98,589     65,138  +0.253  29.3%         221              32             106
+4 of N protect       89,505     67,346  +0.251  33.3%         192              29              86
+6 of N protect      123,920    113,814  +0.318  41.6%         104               9              43
+predict protect         nan    138,979  +0.316  39.3%          49               4              20
+
+== all 13 stocks: net Rs after costs and slippage, Rs 5L pool, Rs 2.5L per trade
+rule                 Y1 net     Y2 net    avg%    win story exits big winners cut losers improved
+base                 79,659     99,214  +0.196  43.4%           0               0               0
+line losing          82,875      3,571  +0.151  33.6%         333              36             177
+fade losing          88,946     18,956  +0.164  30.1%         385              39             221
+4 of N losing        98,196    -12,635  +0.151  31.5%         356              35             186
+6 of N losing       123,287     44,112  +0.188  37.9%         197              11              96
+predict losing          nan     77,961  +0.168  37.9%          79               4              37
+line protect         86,277     -1,754  +0.153  32.6%         344              38             179
+fade protect         81,666      5,546  +0.152  25.1%         444              51             244
+4 of N protect       85,663     -1,450  +0.152  29.9%         374              40             195
+6 of N protect      114,251     42,047  +0.186  36.5%         211              13             102
+predict protect         nan     67,100  +0.161  34.8%         103               7              47

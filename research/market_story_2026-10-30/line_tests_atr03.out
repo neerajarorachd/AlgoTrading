@@ -1,0 +1,13 @@
+
+== 0.30 x ATR, arm 3x: 33.2 tests per stock-day (7 lines), median 1 candles, 1-candle 65%, bounce share 76%
+   zone per stock (median): RELIANCE 0.049% ... HINDCOPPER 0.100%
+   bounce all           n=156666 next12 +0.003% right 48.9%
+   bounce with trend    n=100525 next12 +0.009% right 49.2%
+   bounce against trend n= 36834 next12 -0.016% right 48.4%
+   bounce no trend      n= 19307 next12 +0.004% right 48.5%
+   bounce 3+ candles    n= 15219 next12 -0.011% right 47.8%
+   break  all           n= 49835 next12 -0.010% right 46.7%
+   break  with trend    n= 13566 next12 -0.001% right 47.8%
+   break  against trend n= 14568 next12 -0.013% right 47.5%
+   break  no trend      n= 21701 next12 -0.014% right 45.5%
+   break  3+ candles    n= 12925 next12 -0.003% right 48.3%

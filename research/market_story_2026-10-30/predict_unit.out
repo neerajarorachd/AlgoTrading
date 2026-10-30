@@ -1,0 +1,31 @@
+﻿train moments 202772, test moments 202086
+
+== up: target 0.5% before stop 0.25% within 12 candles. Year-1 hit rate 22.4%, year-2 actual 20.8%
+   (with MACD droppable, the learned order puts MACD state at #31 of 44)
+variant         AUC Brier skill top 10% hit top 5% hit
+base          0.500     +0.000%       23.2%      23.1%
+macd          0.512     +0.027%       23.4%      24.2%
+backoff30     0.552     -1.643%       25.2%      25.8%
+backoff30s    0.554     +0.216%       25.5%      26.4%
+backoff100    0.570     +0.626%       26.7%      27.5%
+backoff100s   0.570     +0.890%       26.8%      27.6%
+backoff300    0.576     +1.126%       27.8%      27.8%
+backoff300s   0.576     +1.171%       27.9%      28.0%
+free          0.556     -1.563%       25.5%      25.9%
+gbm           0.594     +1.822%       28.1%      29.2%
+back-off level used (conditions kept besides MACD): median 7, no prediction 0.0%
+
+== dn: target 0.5% before stop 0.25% within 12 candles. Year-1 hit rate 25.0%, year-2 actual 22.6%
+   (with MACD droppable, the learned order puts MACD state at #43 of 44)
+variant         AUC Brier skill top 10% hit top 5% hit
+base          0.500     +0.000%       22.3%      24.0%
+macd          0.506     +0.004%       22.6%      24.1%
+backoff30     0.547     -1.766%       25.6%      26.0%
+backoff30s    0.548     +0.119%       26.1%      26.7%
+backoff100    0.557     +0.242%       27.3%      27.4%
+backoff100s   0.557     +0.555%       27.4%      27.7%
+backoff300    0.561     +0.738%       27.4%      27.5%
+backoff300s   0.561     +0.798%       27.6%      27.6%
+free          0.545     -2.039%       26.3%      25.8%
+gbm           0.571     +1.120%       27.7%      27.7%
+back-off level used (conditions kept besides MACD): median 8, no prediction 0.0%

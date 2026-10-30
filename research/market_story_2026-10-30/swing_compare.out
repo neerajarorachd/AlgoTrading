@@ -1,0 +1,31 @@
+﻿mode                   swings/day   lag  gone% labelled next12 avg% right dir
+fixed5 (today)               11.1   5.0   0.51    53973      +0.011     49.8%
+fixed5 alternate              8.8   5.0   0.52    50800      +0.009     49.5%
+fixed5 alt leg>=0.5%          7.0   5.0   0.59    41428      +0.008     49.5%
+fixed5 alt leg>=1%            4.5   5.0   0.67    27584      +0.007     49.6%
+fixed3 alt leg>=0.5%          9.6   3.0   0.48    56757      +0.001     49.4%
+zigzag 0.3%                  17.9   1.7   0.41   100721      +0.005     49.3%
+zigzag 0.5%                   9.3   3.0   0.60    54357      -0.000     49.2%
+zigzag 0.8%                   4.5   5.9   0.91    27123      -0.002     49.5%
+zigzag 1.0%                   3.1   8.3   1.11    19035      -0.017     48.9%
+
+== zigzag 0.5%: after an HL (expect up) / LH (expect down), by swing ratio (pullback / previous leg)
+  HL ratio 0.000-0.382 n= 2210 next12 avg +0.022%  right dir 46.5%
+  HL ratio 0.382-0.618 n= 4685 next12 avg -0.006%  right dir 45.4%
+  HL ratio 0.618-1.0   n= 6686 next12 avg -0.016%  right dir 44.5%
+  LH ratio 0.000-0.382 n= 2114 next12 avg +0.053%  right dir 52.1%
+  LH ratio 0.382-0.618 n= 4888 next12 avg -0.006%  right dir 51.1%
+  LH ratio 0.618-1.0   n= 7267 next12 avg -0.005%  right dir 51.5%
+  LH ratio 1.000-99    n=    9 next12 avg +0.149%  right dir 66.7%
+
+== zigzag 0.5%: after an HL / LH, by the previous leg's size (the move it pulls back from)
+  HL prev leg 0-0.75% n=  915 next12 avg -0.033%  right dir 42.7%
+  HL prev leg 0.75-1.0% n= 2347 next12 avg -0.012%  right dir 46.3%
+  HL prev leg 1.0-1.5% n= 4435 next12 avg -0.015%  right dir 44.5%
+  HL prev leg 1.5-2.5% n= 4010 next12 avg +0.008%  right dir 45.4%
+  HL prev leg 2.5-99% n= 1874 next12 avg -0.000%  right dir 45.8%
+  LH prev leg 0-0.75% n= 1080 next12 avg +0.025%  right dir 54.0%
+  LH prev leg 0.75-1.0% n= 2578 next12 avg +0.007%  right dir 51.6%
+  LH prev leg 1.0-1.5% n= 4875 next12 avg -0.001%  right dir 51.2%
+  LH prev leg 1.5-2.5% n= 4148 next12 avg +0.005%  right dir 51.2%
+  LH prev leg 2.5-99% n= 1597 next12 avg -0.009%  right dir 51.0%

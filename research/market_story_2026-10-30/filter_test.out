@@ -1,0 +1,27 @@
+﻿year-2 trades: 477 (13 stocks), 262 on the 7 plan stocks; 0 had no prediction
+
+== 7 plan stocks, year 2
+  all trades (today's plan)          trades  262  win 47.7%  avg +0.355%  | Rs 5L pool: 249 taken, net Rs   199,186, after slippage Rs   169,442
+  macd: kept (above average)         trades  244  win 48.0%  avg +0.380%  | Rs 5L pool: 233 taken, net Rs   197,503, after slippage Rs   169,563
+  macd: dropped                      trades   18  win 44.4%  avg +0.018%  | Rs 5L pool:  18 taken, net Rs    -1,647, after slippage Rs    -3,896
+  backoff300s: kept (above average)  trades  240  win 47.9%  avg +0.383%  | Rs 5L pool: 232 taken, net Rs   194,375, after slippage Rs   166,526
+  backoff300s: dropped               trades   22  win 45.5%  avg +0.043%  | Rs 5L pool:  22 taken, net Rs      -608, after slippage Rs    -3,353
+  gbm: kept (above average)          trades  229  win 47.6%  avg +0.383%  | Rs 5L pool: 221 taken, net Rs   183,167, after slippage Rs   156,610
+  gbm: dropped                       trades   33  win 48.5%  avg +0.158%  | Rs 5L pool:  31 taken, net Rs     8,665, after slippage Rs     4,799
+  backoff300s: top half              trades  131  win 48.9%  avg +0.301%  | Rs 5L pool: 128 taken, net Rs    84,444, after slippage Rs    68,806
+  backoff300s: bottom half           trades  131  win 46.6%  avg +0.409%  | Rs 5L pool: 126 taken, net Rs   114,359, after slippage Rs    98,825
+  gbm: top half                      trades  131  win 48.9%  avg +0.416%  | Rs 5L pool: 129 taken, net Rs   120,250, after slippage Rs   104,468
+  gbm: bottom half                   trades  131  win 46.6%  avg +0.294%  | Rs 5L pool: 124 taken, net Rs    83,782, after slippage Rs    68,647
+
+== all 13 stocks, year 2
+  all trades (today's plan)          trades  477  win 42.6%  avg +0.188%  | Rs 5L pool: 435 taken, net Rs   172,517, after slippage Rs   123,197
+  macd: kept (above average)         trades  446  win 42.4%  avg +0.198%  | Rs 5L pool: 410 taken, net Rs   162,906, after slippage Rs   116,434
+  macd: dropped                      trades   31  win 45.2%  avg +0.049%  | Rs 5L pool:  31 taken, net Rs      -421, after slippage Rs    -4,293
+  backoff300s: kept (above average)  trades  422  win 41.5%  avg +0.191%  | Rs 5L pool: 387 taken, net Rs   157,709, after slippage Rs   113,577
+  backoff300s: dropped               trades   55  win 50.9%  avg +0.162%  | Rs 5L pool:  52 taken, net Rs    16,068, after slippage Rs     9,575
+  gbm: kept (above average)          trades  400  win 41.5%  avg +0.199%  | Rs 5L pool: 371 taken, net Rs   160,247, after slippage Rs   117,826
+  gbm: dropped                       trades   77  win 48.1%  avg +0.129%  | Rs 5L pool:  73 taken, net Rs    15,814, after slippage Rs     6,825
+  backoff300s: top half              trades  238  win 46.6%  avg +0.234%  | Rs 5L pool: 226 taken, net Rs   107,399, after slippage Rs    80,745
+  backoff300s: bottom half           trades  239  win 38.5%  avg +0.142%  | Rs 5L pool: 230 taken, net Rs    53,699, after slippage Rs    25,811
+  gbm: top half                      trades  238  win 41.6%  avg +0.189%  | Rs 5L pool: 225 taken, net Rs    83,407, after slippage Rs    56,582
+  gbm: bottom half                   trades  239  win 43.5%  avg +0.187%  | Rs 5L pool: 227 taken, net Rs    89,599, after slippage Rs    62,059

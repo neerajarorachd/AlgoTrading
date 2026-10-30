@@ -1,0 +1,62 @@
+﻿
+== fixed 0.05%, arm 3x: 42.5 tests per stock-day (7 lines), median 1 candles, 1-candle 73%, bounce share 70%
+   bounce all           n=187009 next12 +0.004% right 49.0%
+   bounce with trend    n=113760 next12 +0.011% right 49.1%
+   bounce against trend n= 47046 next12 -0.011% right 48.7%
+   bounce no trend      n= 26203 next12 +0.005% right 48.9%
+   bounce 3+ candles    n= 11698 next12 -0.005% right 47.9%
+   break  all           n= 79228 next12 -0.004% right 47.8%
+   break  with trend    n= 25085 next12 +0.005% right 48.2%
+   break  against trend n= 25395 next12 -0.008% right 48.6%
+   break  no trend      n= 28748 next12 -0.008% right 46.7%
+   break  3+ candles    n=  9848 next12 -0.008% right 48.4%
+
+== fixed 0.10%, arm 3x: 25.8 tests per stock-day (7 lines), median 1 candles, 1-candle 64%, bounce share 77%
+   bounce all           n=123260 next12 +0.006% right 49.3%
+   bounce with trend    n= 81477 next12 +0.010% right 49.4%
+   bounce against trend n= 27729 next12 -0.010% right 49.0%
+   bounce no trend      n= 14054 next12 +0.013% right 50.0%
+   bounce 3+ candles    n= 14616 next12 -0.019% right 47.5%
+   break  all           n= 37613 next12 -0.006% right 47.3%
+   break  with trend    n=  9807 next12 +0.005% right 47.9%
+   break  against trend n= 12029 next12 -0.011% right 47.7%
+   break  no trend      n= 15777 next12 -0.010% right 46.6%
+   break  3+ candles    n= 11132 next12 -0.010% right 47.2%
+
+== fixed 0.10%, arm 5x: 14.2 tests per stock-day (7 lines), median 1 candles, 1-candle 64%, bounce share 76%
+   bounce all           n= 67301 next12 +0.002% right 49.4%
+   bounce with trend    n= 46751 next12 +0.005% right 49.5%
+   bounce against trend n= 13148 next12 -0.012% right 48.7%
+   bounce no trend      n=  7402 next12 +0.011% right 50.2%
+   bounce 3+ candles    n=  7862 next12 -0.022% right 47.5%
+   break  all           n= 21322 next12 -0.002% right 47.3%
+   break  with trend    n=  4163 next12 +0.008% right 46.8%
+   break  against trend n=  7451 next12 -0.000% right 47.8%
+   break  no trend      n=  9708 next12 -0.008% right 47.0%
+   break  3+ candles    n=  6029 next12 -0.009% right 47.5%
+
+== 0.10 x ATR, arm 3x: 62.2 tests per stock-day (7 lines), median 1 candles, 1-candle 82%, bounce share 65%
+   zone per stock (median): RELIANCE 0.016% ... HINDCOPPER 0.033%
+   bounce all           n=252978 next12 +0.001% right 48.4%
+   bounce with trend    n=145343 next12 +0.008% right 48.7%
+   bounce against trend n= 66460 next12 -0.012% right 48.3%
+   bounce no trend      n= 41175 next12 -0.002% right 47.7%
+   bounce 3+ candles    n=  5862 next12 -0.008% right 47.6%
+   break  all           n=138266 next12 -0.007% right 47.3%
+   break  with trend    n= 48944 next12 +0.004% right 47.9%
+   break  against trend n= 44543 next12 -0.016% right 47.7%
+   break  no trend      n= 44779 next12 -0.009% right 46.4%
+   break  3+ candles    n=  5319 next12 -0.004% right 48.0%
+
+== 0.20 x ATR, arm 3x: 44.1 tests per stock-day (7 lines), median 1 candles, 1-candle 71%, bounce share 72%
+   zone per stock (median): RELIANCE 0.033% ... HINDCOPPER 0.067%
+   bounce all           n=197757 next12 +0.001% right 48.7%
+   bounce with trend    n=120417 next12 +0.007% right 48.9%
+   bounce against trend n= 49318 next12 -0.013% right 48.5%
+   bounce no trend      n= 28022 next12 -0.004% right 48.0%
+   bounce 3+ candles    n= 12021 next12 -0.013% right 47.8%
+   break  all           n= 78521 next12 -0.006% right 47.1%
+   break  with trend    n= 24542 next12 +0.006% right 47.9%
+   break  against trend n= 23973 next12 -0.013% right 47.7%
+   break  no trend      n= 30006 next12 -0.011% right 45.9%
+   break  3+ candles    n= 10660 next12 +0.001% right 48.8%

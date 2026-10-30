@@ -1,0 +1,53 @@
+﻿
+confirmation      target       filter           tr/yr   win  risk% reward%  gross%    net%     Rs/yr     Y1 Rs     Y2 
+Rs  exits
+fixed 5 (today)   prior HH     all               1200   50%   0.43    0.64  +0.029  -0.075  -224,203  -252,211  
+-196,195  day end 10% stop 47% target 44%
+fixed 5 (today)   0.7 x leg 1  all               1311   41%   0.46    1.10  +0.047  -0.057  -185,772  -181,715  
+-189,828  day end 19% stop 53% target 28%
+fixed 5 (today)   1.0 x leg 1  all               1336   38%   0.48    1.72  +0.063  -0.041  -136,601  -126,968  
+-146,234  day end 30% stop 55% target 15%
+fixed 5 (today)   prior HH     early-reversal     280   46%   0.46    1.00  +0.071  -0.033   -22,848   -29,995   
+-15,702  day end 18% stop 50% target 33%
+fixed 5 (today)   0.7 x leg 1  early-reversal     284   43%   0.46    1.11  +0.079  -0.025   -17,545   -19,281   
+-15,810  day end 19% stop 52% target 30%
+fixed 5 (today)   1.0 x leg 1  early-reversal     288   40%   0.47    1.75  +0.111  +0.007     4,840     8,135     
+1,544  day end 30% stop 54% target 17%
+fixed 3           0.7 x leg 1  all               2308   40%   0.39    0.85  +0.042  -0.062  -360,157  -427,793  
+-292,520  day end 10% stop 57% target 34%
+fixed 3           1.0 x leg 1  all               2352   36%   0.40    1.34  +0.062  -0.042  -244,405  -277,409  
+-211,401  day end 18% stop 60% target 21%
+fixed 3           prior HH     all               2095   49%   0.36    0.50  +0.015  -0.089  -466,899  -505,074  
+-428,724  day end 5% stop 50% target 46%
+fixed 3           1.0 x leg 1  early-reversal     597   35%   0.38    1.36  +0.067  -0.037   -54,642   -57,882   
+-51,403  day end 17% stop 61% target 21%
+fixed 3           prior HH     early-reversal     565   43%   0.37    0.74  +0.029  -0.075  -105,754  -114,241   
+-97,268  day end 8% stop 54% target 38%
+fixed 3           0.7 x leg 1  early-reversal     588   39%   0.38    0.87  +0.043  -0.061   -89,130  -103,315   
+-74,945  day end 9% stop 58% target 33%
+zigzag 0.3%       0.7 x leg 1  all               3232   46%   0.40    0.62  +0.010  -0.094  -763,410  -766,905  
+-759,915  day end 4% stop 53% target 43%
+zigzag 0.3%       1.0 x leg 1  all               3324   38%   0.41    1.01  +0.024  -0.080  -665,216  -739,771  
+-590,661  day end 10% stop 60% target 30%
+zigzag 0.3%       prior HH     all               2847   56%   0.37    0.35  +0.000  -0.104  -740,145  -759,284  
+-721,006  day end 2% stop 43% target 55%
+zigzag 0.3%       prior HH     early-reversal     969   53%   0.38    0.39  -0.004  -0.108  -261,747  -247,400  
+-276,093  day end 2% stop 45% target 52%
+zigzag 0.3%       0.7 x leg 1  early-reversal    1074   46%   0.40    0.57  +0.010  -0.094  -252,161  -209,461  
+-294,862  day end 3% stop 52% target 45%
+zigzag 0.3%       1.0 x leg 1  early-reversal    1114   37%   0.42    0.93  +0.011  -0.093  -258,036  -236,848  
+-279,224  day end 7% stop 61% target 31%
+zigzag 0.5%       prior HH     all               1370   59%   0.55    0.46  +0.002  -0.102  -349,358  -360,619  
+-338,096  day end 6% stop 38% target 57%
+zigzag 0.5%       0.7 x leg 1  all               1544   49%   0.58    0.84  +0.019  -0.085  -326,527  -337,298  
+-315,755  day end 11% stop 46% target 42%
+zigzag 0.5%       1.0 x leg 1  all               1584   41%   0.59    1.39  +0.034  -0.070  -277,946  -323,210  
+-232,683  day end 21% stop 52% target 27%
+zigzag 0.5%       prior HH     early-reversal     464   55%   0.56    0.56  +0.010  -0.094  -109,482   -96,348  
+-122,616  day end 7% stop 41% target 52%
+zigzag 0.5%       0.7 x leg 1  early-reversal     504   49%   0.58    0.75  +0.028  -0.076   -95,247   -77,090  
+-113,404  day end 9% stop 46% target 45%
+zigzag 0.5%       1.0 x leg 1  early-reversal     523   40%   0.60    1.26  +0.013  -0.091  -119,185  -118,595  
+-119,776  day end 18% stop 54% target 28%
+
+

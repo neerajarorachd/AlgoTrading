@@ -1,0 +1,29 @@
+﻿
+
+
+
+== 7 plan stocks (ASHOKLEY, BHEL, CUB, FINCABLES, HINDCOPPER, NATIONALUM, RELIANCE)
+  Y1: 223 trades taken (17 skipped, money busy or same stock open), win rate 47.5%, avg win Rs 3,046, avg loss Rs 
+-1,749 (win/loss size 1.74x)
+      exits: day end 118, stop 96, target 9 | costs Rs 29,304, slippage Rs 26,806
+      NET after costs + slippage Rs 118,251 = +23.7% on Rs 5L | worst drawdown Rs -23,359 | months positive 10/13, 
+worst month Rs -9,635, best Rs 36,647
+  Y2: 249 trades taken (13 skipped, money busy or same stock open), win rate 44.6%, avg win Rs 3,613, avg loss Rs 
+-1,720 (win/loss size 2.10x)
+      exits: day end 121, stop 113, target 15 | costs Rs 32,506, slippage Rs 29,712
+      NET after costs + slippage Rs 163,706 = +32.7% on Rs 5L | worst drawdown Rs -20,525 | months positive 9/13, 
+worst month Rs -7,976, best Rs 52,238
+
+== all 13 stocks
+  Y1: 399 trades taken (31 skipped, money busy or same stock open), win rate 41.4%, avg win Rs 2,863, avg loss Rs 
+-1,679 (win/loss size 1.71x)
+      exits: day end 187, stop 196, target 16 | costs Rs 51,031, slippage Rs 46,064
+      NET after costs + slippage Rs 79,659 = +15.9% on Rs 5L | worst drawdown Rs -43,000 | months positive 8/13, worst 
+month Rs -11,072, best Rs 22,892
+  Y2: 436 trades taken (41 skipped, money busy or same stock open), win rate 39.9%, avg win Rs 2,840, avg loss Rs 
+-1,508 (win/loss size 1.88x)
+      exits: day end 200, stop 218, target 18 | costs Rs 54,527, slippage Rs 49,447
+      NET after costs + slippage Rs 99,214 = +19.8% on Rs 5L | worst drawdown Rs -41,315 | months positive 10/13, 
+worst month Rs -14,722, best Rs 32,796
+
+

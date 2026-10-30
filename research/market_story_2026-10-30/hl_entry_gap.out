@@ -1,0 +1,25 @@
+confirmation      target       filter           tr/yr   win  risk% reward%  gross%    net%     Rs/yr     Y1 Rs     Y2 Rs  exits
+fixed 5 (today)   prior HH     gap>=1%            471   43%   0.58    1.12  +0.047  -0.057   -67,674   -90,955   -44,393  day end 17% stop 52% target 31%
+fixed 5 (today)   0.7 x leg 1  gap>=1%            482   40%   0.61    1.57  +0.061  -0.043   -51,973   -67,344   -36,602  day end 23% stop 54% target 24%
+fixed 5 (today)   1.0 x leg 1  gap>=1%            488   37%   0.62    2.46  +0.078  -0.026   -31,516   -17,840   -45,192  day end 32% stop 55% target 13%
+fixed 5 (today)   prior HH     gap>=1%+early      173   42%   0.54    1.37  +0.100  -0.004    -1,801   -10,653     7,051  day end 23% stop 52% target 26%
+fixed 5 (today)   0.7 x leg 1  gap>=1%+early      173   42%   0.54    1.41  +0.101  -0.003    -1,317    -3,912     1,277  day end 21% stop 52% target 27%
+fixed 5 (today)   1.0 x leg 1  gap>=1%+early      174   40%   0.55    2.22  +0.150  +0.045    19,755    20,610    18,901  day end 30% stop 53% target 16%
+fixed 3           prior HH     gap>=1%            533   41%   0.54    1.05  +0.043  -0.062   -81,958   -93,297   -70,619  day end 10% stop 56% target 34%
+fixed 3           0.7 x leg 1  gap>=1%            542   38%   0.56    1.43  +0.068  -0.036   -49,444   -93,458    -5,429  day end 14% stop 58% target 28%
+fixed 3           1.0 x leg 1  gap>=1%            548   35%   0.57    2.24  +0.084  -0.020   -27,449   -43,570   -11,329  day end 24% stop 60% target 16%
+fixed 3           prior HH     gap>=1%+early      244   37%   0.48    1.25  +0.055  -0.049   -30,081   -27,174   -32,989  day end 14% stop 60% target 27%
+fixed 3           0.7 x leg 1  gap>=1%+early      243   37%   0.48    1.27  +0.069  -0.035   -21,501   -21,061   -21,941  day end 12% stop 59% target 29%
+fixed 3           1.0 x leg 1  gap>=1%+early      246   34%   0.49    1.99  +0.092  -0.012    -7,305     5,764   -20,373  day end 22% stop 62% target 16%
+zigzag 0.3%       prior HH     gap>=1%            355   38%   0.52    0.90  -0.004  -0.108   -95,929   -71,221  -120,638  day end 5% stop 60% target 35%
+zigzag 0.3%       prior HH     gap>=1%+early      164   39%   0.50    0.93  +0.030  -0.074   -30,276    -6,980   -53,573  day end 6% stop 59% target 35%
+zigzag 0.3%       0.7 x leg 1  gap>=1%            364   35%   0.55    1.16  -0.021  -0.125  -113,854   -72,649  -155,060  day end 6% stop 63% target 31%
+zigzag 0.3%       0.7 x leg 1  gap>=1%+early      167   39%   0.52    1.01  +0.039  -0.065   -26,979     8,992   -62,949  day end 6% stop 59% target 35%
+zigzag 0.3%       1.0 x leg 1  gap>=1%            368   29%   0.56    1.86  -0.024  -0.128  -117,546  -115,808  -119,283  day end 12% stop 69% target 19%
+zigzag 0.3%       1.0 x leg 1  gap>=1%+early      170   32%   0.54    1.63  +0.042  -0.062   -26,440       604   -53,485  day end 13% stop 65% target 22%
+zigzag 0.5%       prior HH     gap>=1%            478   44%   0.60    0.84  -0.003  -0.107  -128,413  -104,573  -152,253  day end 11% stop 51% target 38%
+zigzag 0.5%       0.7 x leg 1  gap>=1%            487   41%   0.63    1.09  +0.000  -0.104  -126,443  -103,956  -148,929  day end 12% stop 53% target 35%
+zigzag 0.5%       1.0 x leg 1  gap>=1%            492   34%   0.63    1.79  -0.009  -0.113  -139,258  -113,331  -165,185  day end 22% stop 59% target 19%
+zigzag 0.5%       prior HH     gap>=1%+early      214   44%   0.60    0.89  +0.027  -0.077   -41,471   -32,702   -50,239  day end 13% stop 50% target 37%
+zigzag 0.5%       0.7 x leg 1  gap>=1%+early      216   44%   0.62    0.96  +0.039  -0.065   -35,098   -22,176   -48,020  day end 13% stop 49% target 38%
+zigzag 0.5%       1.0 x leg 1  gap>=1%+early      220   35%   0.63    1.59  +0.021  -0.083   -45,520   -34,915   -56,125  day end 23% stop 55% target 21%
