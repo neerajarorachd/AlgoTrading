@@ -36,10 +36,14 @@ what has been decided**.
    code, no tickets, until the user explicitly says go.
 7. **Don't claim "tested" without testing.** UI behavior counts as tested only
    after a real browser run (Playwright + system Edge, see section 5).
-8. **Report honestly.** Failed tests, skipped steps and caveats are stated
+8. **Test breadth before deciding (10-30).** No trading rule, threshold or
+   signal is decided until it is tested on **15-30 stocks over 2 years**
+   (learn on one year, check on the other). Results on fewer stocks are
+   preliminary and must be labelled so.
+9. **Report honestly.** Failed tests, skipped steps and caveats are stated
    plainly. Backtest numbers come with their caveats (sample size, many
    variants tried, slippage).
-9. **Commit/push only when asked.** Work in a worktree branch; merge to
+10. **Commit/push only when asked.** Work in a worktree branch; merge to
    `master` when the user approves.
 
 ## 2. Environments and operations
@@ -173,6 +177,52 @@ From the 2-year, 13-stock, 3/5-min intraday backtests (scripts and data in
   a year after slippage; realistic expectation ~Rs 1-1.5L. **Paper trade
   first**, then live at small size.
 - Backtest results are stored in `pattern_backtest_results`.
+
+## 7a. Market story (planned, 10-30; not built)
+
+- Walkthrough also logs **state runs** (a "story"), one row per run, not per
+  candle: e.g. `[3min, bb_width, squeezing, from constant, 10 candles]`.
+- Two tables: **today** (intraday) and **archive** (moved at EOD).
+- Every stock in any watchlist gets stories, on 1/3/5-min.
+- "Constant" uses an anchored band: BB width settles at < 10% change over 5
+  candles, then stays constant within +-10% of the settled width (1.5% ->
+  1.35-1.65%); price-line gaps the same with +-15%, never narrower than
+  +-0.1 point. A break of the band is movement.
+- Line touch/rejection/hugging thresholds are percentages (user setting).
+- P0 findings (research/market_story_2026-10-30/RESULTS.md): MACD *state*
+  alone predicts little (lock costs nothing, kept); swing labels alone have
+  no edge on 5-min, so keep fixed-5 confirmation and use labels as context
+  only; prediction lookup needs >= 300 cases + shrink. Plan:
+  `docs/market_story_plan.md` (branch `story`).
+- Line tests are episodes, like BB expansion: the first touch after an
+  approach starts a test, closes inside the zone keep it open, a close out
+  ends it as a bounce or a break. Zone ~0.05-0.10% of price, sized per stock
+  from its ATR (0.3 x ATR default; 0.45 x ATR under review).
+- The story also watches open trades (user's purpose: exit on a U-turn).
+  Preliminary (13 stocks): no story-based exit beat stop / target / day end
+  in both years, so story turns are **alerts**, not automatic exits, until a
+  15-30 stock test says otherwise.
+- Capture "calm then move" (BB width and VWAP gap both constant, then both
+  expanding in one direction) as a story event; preliminary: rare (~1 per
+  stock per 14 days), no edge yet.
+- Each line gets separate rows for its own slope, price vs line, and the
+  price-line gap (expanding/narrowing); VWAP first. Volume is linked in.
+- Each open row carries a guess of the next state (learned from past
+  stories), checked when the next state arrives.
+- Proven offline on research data first; ships behind a flag.
+
+## 7b. Direction: a library of narrow setups (10-30)
+
+- We are **not** looking for one golden setup that works everywhere. The goal
+  is **15-20 different setups**, each with tight, high-confidence conditions,
+  even if one fires only ~30 times a year.
+- Example of a candidate: LL -> HH -> HL -> HH formed while VWAP / RSI / DI
+  still lean the old way (early reversal; preliminary 56-65% vs 50%).
+- Order of work: (1) one last research test, confirming the current findings
+  on the 100-150 stock set (plan: `D:\AI Trading\research\universe_2026-10-31\PLAN.md`); then **stop trend research**; (2) build the
+  system: setup development, story recording, recommendations, paper trading;
+  (3) only once paper trading runs, **calibrate** each setup on live and
+  paper results.
 
 ## 8. Open questions (not decided; ask before assuming)
 
