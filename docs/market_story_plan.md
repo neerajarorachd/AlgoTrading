@@ -16,7 +16,12 @@ learns.
 
 ## Decisions (user, 2026-10-30)
 
-- BB width "constant" = changes < 5% over 5 candles.
+- BB width "constant" = anchored band: settles when the width changed < 10%
+  over 5 candles, then stays constant within +-10% of the settled width
+  (1.5% -> 1.35..1.65%); a break above = expanding, below = squeezing.
+  (5% rolling was tried first: constant only 11% of 5-min candles.)
+- Price-line gap "constant" = anchored band +-15% of the settled gap, never
+  narrower than +-0.1 percentage point.
 - Touch / rejection / hugging thresholds are percentages (user settings).
 - Two tables: `market_story_today` and `market_story_archive` (moved at EOD,
   first step of the EOD job).

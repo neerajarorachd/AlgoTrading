@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from story.setup import EvidenceIndex, age_bucket, snapshot
-from story.subjects import BBWidth, Macd, PriceVsLine, Subject
+from story.subjects import BBWidth, LineGap, Macd, PriceVsLine, Subject
 from story.swings import SwingTracker
 from story.tracker import StoryTracker
 
@@ -67,13 +67,51 @@ def _bb_row(i, width):
             "bb_upper": 100 + width / 2, "bb_lower": 100 - width / 2, "bb_middle": 100}
 
 
-@pytest.mark.parametrize("w_now,state", [(1.06, "expanding"), (1.04, "constant"), (0.94, "squeezing")])
-def test_bb_width_constant_means_under_5_percent_change_over_5_candles(w_now, state):
+def _bb_states(widths):
     t = StoryTracker(subjects=[BBWidth()], settings={"confirm_candles": 1})
-    for i in range(5):
-        t.on_row(_bb_row(i, 1.0))
-    t.on_row(_bb_row(5, w_now))
-    assert t.open_runs()["bb_width"].state == state
+    out = []
+    for i, w in enumerate(widths):
+        t.on_row(_bb_row(i, w))
+        run = t.open_runs().get("bb_width")
+        out.append(run.state if run else None)
+    return out
+
+
+@pytest.mark.parametrize("w_now,state", [(1.64, "constant"), (1.36, "constant"),
+                                         (1.66, "expanding"), (1.34, "squeezing")])
+def test_bb_width_settled_at_1_5_stays_constant_between_1_35_and_1_65(w_now, state):
+    # settles at 1.5 on the 6th candle (no change over 5 candles), then wobbles inside the band
+    s = _bb_states([1.5] * 6 + [1.6, 1.42, 1.62, w_now])
+    assert s[5] == "constant" and s[6:9] == ["constant"] * 3
+    assert s[-1] == state
+
+
+def test_bb_width_slow_drift_out_of_the_band_counts_as_expanding():
+    # each step < 10% over 5 candles, but 1.70 is outside the 1.35-1.65 band of the settled 1.5
+    s = _bb_states([1.5] * 6 + [1.55, 1.6, 1.64, 1.70])
+    assert s[-2] == "constant" and s[-1] == "expanding"
+
+
+def _gap_states(gaps_pct):
+    t = StoryTracker(subjects=[LineGap("vwap_gap", "vwap")], settings={"confirm_candles": 1})
+    out = []
+    for i, g in enumerate(gaps_pct):
+        t.on_row({"ts": ts(i), "open": 100, "high": 100 + g, "low": 100, "close": 100 + g,
+                  "volume": 0, "vwap": 100.0})
+        run = t.open_runs().get("vwap_gap")
+        out.append(run.state if run else None)
+    return out
+
+
+def test_line_gap_band_is_15_percent_of_the_settled_gap():
+    s = _gap_states([1.0] * 6 + [1.14, 0.86, 1.16])
+    assert s[5:8] == ["constant"] * 3 and s[-1] == "expanding"
+
+
+def test_line_gap_band_is_never_narrower_than_0_1_point():
+    # settled at 0.2%: 15% would be +-0.03, the minimum makes it 0.1..0.3
+    s = _gap_states([0.2] * 6 + [0.29, 0.11, 0.09])
+    assert s[5:8] == ["constant"] * 3 and s[-1] == "narrowing"
 
 
 def test_price_vs_line_counts_touches_and_rejections():

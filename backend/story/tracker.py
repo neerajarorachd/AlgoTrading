@@ -90,6 +90,8 @@ class StoryTracker:
                 self.ctx.prev_day_high, self.ctx.prev_day_low = self.ctx.day_high, self.ctx.day_low
             self._day = d
             self.ctx.day_high = self.ctx.day_low = None
+            for s in self.subjects:
+                s.new_day()
         ctx = self.ctx
         ctx.rows.append(row)
         if len(ctx.rows) > 60:

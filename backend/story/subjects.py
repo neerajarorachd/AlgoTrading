@@ -9,8 +9,8 @@ few candles back) and names a state, a value and a rank value.
   (bigger = stronger).
 
 Thresholds are percentages (user decision 2026-10-30) and live in
-DEFAULTS; P0 calibrates them on the research data. "bb_width constant =
-< 5% change over 5 candles" is decided.
+DEFAULTS; P0 calibrates them on the research data. BB width and the
+price-line gaps use an anchored band for "constant" (decided, see DEFAULTS).
 """
 from __future__ import annotations
 
@@ -21,12 +21,22 @@ Obs = Optional[Tuple[str, float, float]]  # (state, value, rank)
 DEFAULTS: Dict[str, float] = {
     "confirm_candles": 2,       # a new state must hold this many candles to count
     "lookback": 5,              # candles back for slopes and changes
-    "bb_constant_pct": 5.0,     # decided 2026-10-30
+    # BB width "constant" (user, 2026-10-30): settles when the width changed
+    # < 10% over `lookback` candles; then stays constant while it is within
+    # +-10% of the width it settled at (1.5% -> 1.35..1.65%). A break above
+    # = expanding, below = squeezing. (5% was tried first: constant only 11%
+    # of 5-min candles.)
+    "bb_constant_pct": 10.0,
     "hug_pct": 0.10,            # price within 0.1% of a line = hugging
     "touch_pct": 0.05,          # a wick within 0.05% of a line = a touch
     "vwap_flat_pct": 0.05,      # VWAP moved < this % over lookback = flat
     "ma_flat_pct": 0.05,        # same for EMA50 / MA50
-    "gap_change_pct": 10.0,     # price-line gap changed < this (relative %) = constant
+    # price-line gap "constant" (user, 2026-10-30): settles when the gap
+    # changed < 15% over `lookback` candles; then stays constant within +-15%
+    # of the settled gap, but never a band narrower than +-0.1 percentage
+    # point (1.0% -> 0.85..1.15%; 0.2% -> 0.1..0.3%).
+    "gap_change_pct": 15.0,
+    "gap_band_min": 0.10,
     "volume_lookback": 20,
     "volume_high": 1.5,         # volume / its 20-candle average
     "volume_low": 0.6,
@@ -68,6 +78,31 @@ class Subject:
 
     def accumulate(self, details: dict, row: dict, state: str) -> None:
         """Optional per-candle details kept on the run (touches...)."""
+
+    def new_day(self) -> None:
+        """Called on the first candle of a trading day."""
+
+
+class AnchoredBand(Subject):
+    """"constant" with memory: once the value settles (changed less than
+    `settle` % over the lookback), remember it and stay constant while the
+    value stays inside a band around it. A break of the band is movement."""
+
+    anchor: Optional[float] = None
+
+    def anchored(self, value, change_pct, settle_pct, half_band, up, down):
+        if self.anchor is not None:
+            if value > self.anchor + half_band(self.anchor):
+                self.anchor = None
+                return up
+            if value < self.anchor - half_band(self.anchor):
+                self.anchor = None
+                return down
+            return "constant"
+        if abs(change_pct) < settle_pct:
+            self.anchor = value
+            return "constant"
+        return up if change_pct > 0 else down
 
 
 class LineSlope(Subject):
@@ -114,12 +149,16 @@ class PriceVsLine(Subject):
         details["max_dist_pct"] = round(max(details.get("max_dist_pct", 0.0), d), 4)
 
 
-class LineGap(Subject):
+class LineGap(AnchoredBand):
     """Is price moving away from the line (expanding), back to it (narrowing)
-    or keeping its distance (constant)?"""
+    or keeping its distance (constant)? Anchored band, see DEFAULTS."""
 
     def __init__(self, name, field):
         self.name, self.field = name, field
+        self.side = None
+
+    def new_day(self):
+        self.anchor = self.side = None  # VWAP restarts each day
 
     def observe(self, ctx):
         n = int(ctx.settings["lookback"])
@@ -129,19 +168,22 @@ class LineGap(Subject):
             return None
         signed = _pct(ctx.row["close"], line)
         side = 1 if signed >= 0 else -1
+        if side != self.side:  # price crossed the line: the old settled gap no longer applies
+            self.anchor, self.side = None, side
         g_now = abs(signed)
         g_old = side * _pct(old["close"], old[self.field])  # negative if price was on the other side
-        hug = ctx.settings["hug_pct"]
-        if g_now <= hug and abs(g_old) <= hug:
-            return "constant", g_now, 0.0
-        rel = (g_now - g_old) / max(abs(g_old), hug) * 100
+        floor = ctx.settings["gap_band_min"]
+        rel = (g_now - g_old) / max(abs(g_old), floor) * 100
         lim = ctx.settings["gap_change_pct"]
-        state = "expanding" if rel >= lim else "narrowing" if rel <= -lim else "constant"
+        state = self.anchored(g_now, rel, lim, lambda a: max(a * lim / 100, floor), "expanding", "narrowing")
         return state, g_now, abs(rel)
 
 
-class BBWidth(Subject):
+class BBWidth(AnchoredBand):
     name = "bb_width"
+
+    def __init__(self):
+        self.anchor = None
 
     def observe(self, ctx):
         n = int(ctx.settings["lookback"])
@@ -154,7 +196,7 @@ class BBWidth(Subject):
             return None
         ch = (w / w_old - 1) * 100
         lim = ctx.settings["bb_constant_pct"]
-        state = "expanding" if ch >= lim else "squeezing" if ch <= -lim else "constant"
+        state = self.anchored(w, ch, lim, lambda a: a * lim / 100, "expanding", "squeezing")
         return state, w, abs(ch)
 
 
