@@ -114,18 +114,20 @@ def test_line_gap_band_is_never_narrower_than_0_1_point():
     assert s[5:8] == ["constant"] * 3 and s[-1] == "narrowing"
 
 
-def test_price_vs_line_counts_touches_and_rejections():
-    t = StoryTracker(subjects=[PriceVsLine("price_vs_vwap", "vwap")], settings={"confirm_candles": 1})
-    rows = [  # above VWAP 100; candle 1 and 2 dip to it and close back above
-        {"high": 101.5, "low": 100.8, "close": 101.2},
-        {"high": 101.2, "low": 99.98, "close": 100.9},
-        {"high": 101.0, "low": 100.0, "close": 100.6},
-    ]
-    for i, r in enumerate(rows):
-        t.on_row({"ts": ts(i), "open": r["close"], "volume": 0, "vwap": 100.0, **r})
+def test_price_vs_line_runs_are_above_testing_above_with_the_outcome():
+    t = StoryTracker(subjects=[PriceVsLine("price_vs_vwap", "vwap")], settings={"line_zone_atr": 0})
+    rows = [(100.5, 100.6, 100.4), (100.6, 100.7, 100.5),   # above, armed
+            (100.05, 100.3, 100.0), (100.02, 100.1, 99.95),  # test from above, 2 candles inside
+            (100.4, 100.45, 100.1)]                          # bounce
+    closed = []
+    for i, (c, h, l) in enumerate(rows):
+        closed += t.on_row({"ts": ts(i), "open": c, "high": h, "low": l, "close": c, "volume": 0, "vwap": 100.0})
+    assert [(r.state, r.candles) for r in closed] == [("above", 2), ("testing", 2)]
+    testing = closed[1]
+    assert testing.details["from"] == "above" and testing.details["touches"] == 2
     run = t.open_runs()["price_vs_vwap"]
-    assert run.state == "above"
-    assert run.details["touches"] == 2 and run.details["rejections"] == 2
+    assert (run.state, run.prev_state) == ("above", "testing")
+    assert run.details == {"after": "bounce", "bounces_in_row": 1}
 
 
 def test_macd_state_names_side_and_widening():

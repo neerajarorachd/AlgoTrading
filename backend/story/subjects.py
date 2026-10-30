@@ -27,8 +27,12 @@ DEFAULTS: Dict[str, float] = {
     # = expanding, below = squeezing. (5% was tried first: constant only 11%
     # of 5-min candles.)
     "bb_constant_pct": 10.0,
-    "hug_pct": 0.10,            # price within 0.1% of a line = hugging
-    "touch_pct": 0.05,          # a wick within 0.05% of a line = a touch
+    # line tests (user, 2026-10-30): zone 0.3 x ATR (~0.05-0.10% of price on
+    # 5-min, per stock), 0.10% until ATR is ready; a new test needs a close
+    # 3 zones away first. Same as story.point_events.
+    "line_zone_atr": 0.30,
+    "line_zone_pct": 0.10,
+    "line_arm_mult": 3.0,
     "vwap_flat_pct": 0.05,      # VWAP moved < this % over lookback = flat
     "ma_flat_pct": 0.05,        # same for EMA50 / MA50
     # price-line gap "constant" (user, 2026-10-30): settles when the gap
@@ -121,32 +125,58 @@ class LineSlope(Subject):
 
 
 class PriceVsLine(Subject):
-    """above / below / hugging a line; counts touches and rejections."""
+    """above / below / testing a line: the same line test as the point
+    events (story.point_events.LineTest). A test starts when price reaches
+    the zone after an approach and ends when a close leaves it, as a bounce
+    or a break. The zone already absorbs flicker, so no extra hold.
+
+    Details: on a "testing" run, where it came from, touches and the deepest
+    push through the line; on the above / below run after a test, how that
+    test ended ("after": bounce | break) and how many bounces in a row the
+    line has given (user's "rejected, rejected-10")."""
+
+    confirm = 1
 
     def __init__(self, name, field):
         self.name, self.field = name, field
+        self.new_day()
+
+    def new_day(self):
+        from story.point_events import LineTest
+        self.test = LineTest()
+        self._exit = None
+        self._bounces = 0
 
     def observe(self, ctx):
-        line = ctx.row.get(self.field)
+        from story.point_events import _dist
+        r = ctx.row
+        line = r.get(self.field)
         if line is None:
             return None
-        d = _pct(ctx.row["close"], line)
-        hug = ctx.settings["hug_pct"]
-        state = "hugging" if abs(d) <= hug else "above" if d > 0 else "below"
-        return state, d, abs(d)
+        s = ctx.settings
+        z = s["line_zone_pct"]
+        if s["line_zone_atr"] and r.get("atr") and r.get("close"):
+            z = s["line_zone_atr"] * r["atr"] / r["close"] * 100
+        for _, name, _ in self.test.step(self.field, line, r["high"], r["low"], r["close"], z, z * s["line_arm_mult"]):
+            if "_bounce_" in name:
+                self._exit, self._bounces = "bounce", self._bounces + 1
+            elif "_break_" in name:
+                self._exit, self._bounces = "break", 0
+        state = self.test.state()
+        if state is None:
+            return None
+        d = _pct(r["close"], line)
+        return state, d, _dist(r["close"], line)
 
     def accumulate(self, details, row, state):
-        line = row.get(self.field)
-        if line is None:
-            return
-        tol = line * self.settings["touch_pct"] / 100
-        if row["low"] - tol <= line <= row["high"] + tol:
-            details["touches"] = details.get("touches", 0) + 1
-            # a rejection: touched, but closed back on the run's side
-            if (state == "above" and row["close"] > line) or (state == "below" and row["close"] < line):
-                details["rejections"] = details.get("rejections", 0) + 1
-        d = abs(_pct(row["close"], line) or 0)
-        details["max_dist_pct"] = round(max(details.get("max_dist_pct", 0.0), d), 4)
+        if state == "testing":
+            details["from"] = "above" if self.test.from_side and self.test.from_side > 0 else "below"
+            details["touches"] = self.test.touches
+            details["deepest_pct"] = round(self.test.deepest, 4)
+        elif self._exit and "after" not in details:
+            details["after"] = self._exit
+            details["bounces_in_row"] = self._bounces
+            self._exit = None
 
 
 class LineGap(AnchoredBand):

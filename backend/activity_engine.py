@@ -53,12 +53,13 @@ from indicators import (
     update_stochastic,
 )
 from story.point_events import (
-    DEFAULT_CLEAR_PCT,
-    DEFAULT_TOUCH_PCT,
+    DEFAULT_ARM_MULT,
+    DEFAULT_ZONE_ATR,
+    DEFAULT_ZONE_PCT,
     SWING_LABEL_EVENTS,
     DayLevels,
+    LineTests,
     catalog as point_events_catalog,
-    line_events,
 )
 from story.swings import label_swing
 
@@ -1310,9 +1311,9 @@ ENGINE_SETTING_DEFAULTS: Dict[str, float] = {
     "swing_lookback": float(_SWING_LOOKBACK),
     # market story P1 (2026-10-30), off until switched on (1)
     "point_events_v2": 0.0,
-    "line_touch_pct": DEFAULT_TOUCH_PCT,
-    "line_clear_pct": DEFAULT_CLEAR_PCT,
-    "line_touch_events": 0.0,
+    "line_zone_atr": DEFAULT_ZONE_ATR,
+    "line_zone_pct": DEFAULT_ZONE_PCT,
+    "line_arm_mult": DEFAULT_ARM_MULT,
 }
 
 # Human-readable text for the Engine Settings admin page (routes_engine_
@@ -1326,16 +1327,17 @@ ENGINE_SETTING_DESCRIPTIONS: Dict[str, str] = {
         "before promoting a winner here for live."
     ),
     "point_events_v2": (
-        "1 = record the market-story point events: line cross/bounce for VWAP, Bollinger Bands, "
-        "MA21, MA50 and EMA50; day and previous-day high/low breaks; swing labels (HH/LH/HL/LL) "
-        "with leg % and swing ratio. 0 = off. Needs migrate_swing_label_columns.py run first."
+        "1 = record the market-story point events: line tests (start, then bounce or break) for VWAP, "
+        "Bollinger Bands, MA21, MA50 and EMA50; day and previous-day high/low breaks; swing labels "
+        "(HH/LH/HL/LL) with leg % and swing ratio. 0 = off. Needs migrate_swing_label_columns.py run first."
     ),
-    "line_touch_pct": "A candle within this % of a line counts as reaching it (line events).",
-    "line_clear_pct": (
-        "A bounce needs the closes before and after at least this % away from the line, so price "
-        "hovering around a line is not counted as repeated bounces."
+    "line_zone_atr": (
+        "Zone around a line as a fraction of the stock's own ATR (0.3 = about 0.05-0.10% of price on "
+        "5-min, wider for volatile stocks). Reaching it starts a test; a close out of it ends the test "
+        "as a bounce (back to the side it came from) or a break (through). 0 = use line_zone_pct."
     ),
-    "line_touch_events": "1 = also store plain touches (many rows: ~70 per stock per day on 5-min). 0 = off.",
+    "line_zone_pct": "Zone around a line, % of price, used until ATR is ready (or when line_zone_atr is 0).",
+    "line_arm_mult": "A new test needs price to close this many zones away from the line first (an approach).",
 }
 
 
@@ -1398,9 +1400,9 @@ class ActivityEngine:
         def _setting(name):
             return float(settings.get(name, ENGINE_SETTING_DEFAULTS[name]))
         self.point_events_v2 = _setting("point_events_v2") >= 1
-        self.line_touch_pct = _setting("line_touch_pct")
-        self.line_clear_pct = _setting("line_clear_pct")
-        self.line_touch_events = _setting("line_touch_events") >= 1
+        zone_pct, arm_mult, zone_atr = _setting("line_zone_pct"), _setting("line_arm_mult"), _setting("line_zone_atr")
+        self._line_tests: Dict[InstrumentKey, LineTests] = defaultdict(
+            lambda: LineTests(zone_pct=zone_pct, arm_mult=arm_mult, zone_atr=zone_atr or None))
         self._day_levels: Dict[InstrumentKey, DayLevels] = defaultdict(DayLevels)
         self._swing_leg: Dict[InstrumentKey, Dict[str, float]] = defaultdict(dict)
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
@@ -1914,17 +1916,13 @@ class ActivityEngine:
         except Exception:
             logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)
 
-        # Market story P1 point events: line cross/bounce(/touch) and day levels.
+        # Market story P1 point events: line tests (start / bounce / break) and day levels.
         if self.point_events_v2:
             try:
+                day = (_as_utc(candle.timestamp) + _IST).date()
                 frame = self._frame_rows.get(key)
                 if frame and frame[-1]["ts"] == candle.timestamp:
-                    prev_row = frame[-2] if len(frame) >= 2 else None
-                    for ev in line_events(prev_row, frame[-1], self.line_touch_pct, self.line_clear_pct):
-                        if ev[1].endswith("_touch") and not self.line_touch_events:
-                            continue
-                        found.append(ev)
-                day = (_as_utc(candle.timestamp) + _IST).date()
+                    found.extend(self._line_tests[key].update(frame[-1], day))
                 found.extend(self._day_levels[key].update(day, candle.high, candle.low, candle.close))
             except Exception:
                 logger.exception("Activity engine: point events failed for %s (%s)", symbol, exchange_segment)

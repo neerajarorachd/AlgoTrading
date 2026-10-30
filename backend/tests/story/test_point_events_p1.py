@@ -10,36 +10,55 @@ from brokers.models import Candle
 from db.models import InstrumentActivity
 from db.ops import LibSettings
 from db.session import session_scope
-from story.point_events import ALL_EVENT_NAMES, DayLevels, line_events
+from story.point_events import ALL_EVENT_NAMES, DayLevels, LineTests
 from story.swings import label_swing
 
 
-def _row(close, high=None, low=None, **lines):
-    return {"close": close, "high": high if high is not None else close,
-            "low": low if low is not None else close, **lines}
+def _run(candles, zone_pct=0.10, arm_mult=3):
+    """candles: (close, high, low) with VWAP fixed at 100 -> [(event, intensity)] per candle."""
+    lt = LineTests(zone_pct=zone_pct, arm_mult=arm_mult, zone_atr=None)
+    out = []
+    for c, h, l in candles:
+        evs = lt.update({"close": c, "high": h, "low": l, "vwap": 100.0})
+        out.append([(n, i) for _, n, i in evs if n.startswith("vwap")])
+    return out
 
 
-def _names(prev, row, **kw):
-    return [n for _, n, _ in line_events(prev, row, **kw) if n.startswith("vwap")]
+def test_a_test_starts_on_first_touch_stays_open_inside_the_zone_and_ends_as_a_bounce():
+    got = _run([(100.5, 100.6, 100.4),     # 0.5% above: armed (needs 3 x 0.1%)
+                (100.08, 100.5, 100.05),   # low reaches the zone, close inside it: test starts
+                (100.05, 100.2, 99.98),    # closes inside the zone: same test
+                (100.4, 100.45, 100.0)])   # close back above the zone: bounce, test lasted 3 candles
+    assert got[0] == []
+    assert [n for n, _ in got[1]] == ["vwap_test_from_above"]
+    assert got[2] == []
+    assert got[3] == [("vwap_bounce_up", 3.0)]
 
 
-def test_cross_up_and_down():
-    assert _names(_row(99.5, vwap=100), _row(100.5, vwap=100)) == ["vwap_cross_up"]
-    assert _names(_row(100.5, vwap=100), _row(99.5, vwap=100)) == ["vwap_cross_down"]
+def test_a_close_through_the_zone_ends_the_test_as_a_break():
+    got = _run([(100.5, 100.6, 100.4), (100.05, 100.3, 100.0), (99.7, 100.0, 99.6)])
+    assert [n for n, _ in got[1]] == ["vwap_test_from_above"]
+    assert [n for n, _ in got[2]] == ["vwap_break_down"]
 
 
-def test_bounce_needs_both_closes_clear_of_the_line():
-    prev = _row(100.5, vwap=100)
-    # dips to the line, closes 0.3% above: support held
-    assert _names(prev, _row(100.3, high=100.6, low=100.02, vwap=100)) == ["vwap_bounce_up"]
-    # same dip but closes only 0.05% above: hovering, so a touch, not a bounce
-    assert _names(prev, _row(100.05, high=100.6, low=100.02, vwap=100)) == ["vwap_touch"]
-    # resistance
-    assert _names(_row(99.5, vwap=100), _row(99.7, high=99.98, low=99.4, vwap=100)) == ["vwap_bounce_down"]
+def test_touch_and_close_back_out_in_one_candle_is_a_one_candle_bounce():
+    got = _run([(99.5, 99.6, 99.4), (99.6, 99.95, 99.5)])
+    assert got[1] == [("vwap_test_from_below", pytest.approx(0.4)), ("vwap_bounce_down", 1.0)]
 
 
-def test_no_event_when_the_candle_stays_away_from_the_line():
-    assert _names(_row(101, vwap=100), _row(101.2, high=101.4, low=100.9, vwap=100)) == []
+def test_hovering_next_to_the_line_after_a_test_does_not_start_new_tests():
+    got = _run([(100.5, 100.6, 100.4), (100.15, 100.3, 100.05),   # test + bounce (close 0.15% away)
+                (100.15, 100.2, 100.05), (100.2, 100.25, 100.06),  # still near: not re-armed
+                (100.5, 100.6, 100.3), (100.2, 100.5, 100.05)])    # moved away 0.5%, then a new test
+    names = [n for c in got for n, _ in c]
+    assert names.count("vwap_test_from_above") == 2
+    assert [n for n, _ in got[2]] == [] and [n for n, _ in got[3]] == []
+
+
+def test_zone_follows_the_stocks_own_atr():
+    lt = LineTests(zone_atr=0.3)
+    assert lt.zone_for({"atr": 0.5, "close": 100.0}) == pytest.approx(0.15)
+    assert lt.zone_for({"atr": None, "close": 100.0}) == pytest.approx(0.10)  # until ATR is ready
 
 
 def test_day_levels():
@@ -95,9 +114,9 @@ def test_engine_records_story_events_only_when_switched_on(session_factory):
     _feed(on)
     got = {a["activity"] for a in on._buffer}
     assert {"day_high_break", "day_low_break"} <= got
-    assert any(n.endswith(("_cross_up", "_cross_down")) for n in got)
+    assert any("_test_from_" in n for n in got)
+    assert any(("_bounce_" in n or "_break_" in n) and not n.startswith("vwap_rejection") for n in got)
     assert any(n.startswith("swing_") and n not in ("swing_high", "swing_low") for n in got)
-    assert not any(n.endswith("_touch") for n in got)  # touches stay off by default
     # everything the engine already recorded is still there, unchanged
     assert {a["activity"] for a in off._buffer} <= got
 

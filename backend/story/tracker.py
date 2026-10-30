@@ -171,7 +171,7 @@ class StoryTracker:
                 self._extend(subj, st.run, *c)
             st.cand = []
         st.cand.append(item)
-        if len(st.cand) < self.confirm:
+        if len(st.cand) < (getattr(subj, "confirm", None) or self.confirm):
             return None
         ended = st.run
         ended.is_open = False
