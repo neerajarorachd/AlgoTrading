@@ -42,6 +42,18 @@ learns.
 - Swing review: label HH/LH/HL/LL with leg % and swing ratio; test a
   minimum leg and ZigZag-style confirmation against today's fixed 5 candles.
 
+- Line tests are episodes (2026-10-30): first touch after an approach starts
+  a test, closes inside the zone keep it open, a close out ends it as a bounce
+  or a break. Zone 0.3 x ATR (~0.05-0.10% of price, per stock).
+- The story also watches open trades: when the setup turns against a trade
+  (BB squeezing, line break, MACD turning, other movements), it raises an
+  exit alert (user's purpose: catch a U-turn halfway). Preliminary test: no
+  automatic story exit beat stop / target / day end in both years, so alerts
+  only until proven on 15-30 stocks.
+- Capture "calm then move": BB width and VWAP gap both constant, then both
+  expanding in one direction.
+- Nothing is decided without testing on 15-30 stocks over 2 years.
+
 ## Phases (each has a gate)
 
 | Phase | What | Gate |
