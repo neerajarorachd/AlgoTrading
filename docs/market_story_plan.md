@@ -53,6 +53,10 @@ learns.
 - Capture "calm then move": BB width and VWAP gap both constant, then both
   expanding in one direction.
 - Nothing is decided without testing on 15-30 stocks over 2 years.
+- Direction (user, 2026-10-30): no golden setup; a library of 15-20 narrow,
+  high-confidence setups (even ~30 trades a year each). After the 100-150
+  stock confirmation test, research stops; build the system (setups, story,
+  recommendations, paper trading), then calibrate setups on paper/live data.
 
 ## Phases (each has a gate)
 
