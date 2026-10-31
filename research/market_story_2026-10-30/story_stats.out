@@ -1,0 +1,39 @@
+﻿== 5 min, hold 2 candles (default), all 13 stocks
+subject          runs/day median   <=2c  states (share of candles)
+vwap_slope            5.6      7     9%  flat=57% falling=23% rising=20%
+price_vs_vwap         6.1      5    22%  below=48% above=37% hugging=15%
+vwap_gap             12.4      5    20%  expanding=50% constant=26% narrowing=24%
+bb_width             11.2      6    16%  squeezing=36% expanding=33% constant=30%
+price_vs_bb           9.2      5    21%  lower_half=48% upper_half=42% below_lower=5% above_upper=5%
+ema50_slope           4.7      9    12%  flat=36% falling=34% rising=31%
+price_vs_ema50        5.4      6    18%  below=45% above=41% hugging=14%
+ema50_gap            12.6      5    19%  expanding=44% narrowing=30% constant=26%
+ma50_slope            4.1     10    10%  falling=35% flat=33% rising=32%
+price_vs_ma50         5.1      7    18%  below=46% above=41% hugging=12%
+price_vs_ma21         7.9      6    18%  below=41% above=36% hugging=23%
+ma21_vs_ma50          2.5     25     4%  below=53% above=47%
+macd                 13.9      5    19%  bear_narrowing=28% bull_narrowing=28% bear_widening=23% bull_widening=21%
+macd_zero             3.0     18     8%  below=53% above=47%
+rsi                   8.5      5    21%  40_60=59% 30_40=16% 60_70=13% lt30=6% 70p=5%
+stoch_zone           10.4      4    22%  middle=75% oversold=14% overbought=11%
+stoch_cross          16.4      4    16%  k_under_d=50% k_over_d=50%
+adx                   9.1      6    16%  20_30_minus=17% 20_30_plus=17% lt20_minus=16% lt20_plus=14% 30_40_plus=10% 30_40_minus=10% 40p_plus=8% 40p_minus=7%
+volume               11.2      5    24%  drying=42% normal=39% high=19%
+structure             4.8     11     4%  range=62% downtrend=20% uptrend=18%
+day_range             5.9      7    20%  middle=56% near_low=26% near_high=18%
+prev_day              2.6     15    13%  inside=56% below_low=24% above_high=20%
+
+== hold 1 / 2 / 3 candles: total runs per stock-day (RELIANCE, HINDCOPPER, TCS)
+hold=1:  288.0 runs/day, 47.5% of runs are 1-2 candles
+hold=2:  172.9 runs/day, 17.4% of runs are 1-2 candles
+hold=3:  129.1 runs/day,  3.4% of runs are 1-2 candles
+
+== value spread per candle (|value|, percentiles 25/50/75/90), RELIANCE + HINDCOPPER + TCS
+price_vs_vwap      0.130   0.295   0.583   0.986   %
+vwap_slope         0.014   0.036   0.088   0.230   %
+vwap_gap          20.535  51.284 113.496 212.643   rel %
+bb_width           0.494   0.795   1.349   2.322   % (bb: width %)
+price_vs_ema50     0.144   0.328   0.663   1.186   %
+ema50_slope        0.029   0.065   0.132   0.236   %
+ma50_slope         0.032   0.070   0.140   0.250   %
+(vwap_gap column = relative change of the gap over 5 candles; slopes = % move over 5 candles)

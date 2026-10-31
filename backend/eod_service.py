@@ -89,13 +89,35 @@ def strategies_for_today(session, today: Optional[datetime] = None) -> List:
     ]
 
 
-def run_eod_cycle(session_factory, rest_broker, aggregator, now: Optional[datetime] = None) -> dict:
+def archive_story(session_factory, activity_engine, now: datetime) -> int:
+    """Market story P2, the EOD job's first step: save the story one last
+    time, then move today's rows (and any earlier day left behind) from
+    market_story_today to market_story_archive. Only when the engine records
+    a story (engine setting story_enabled). Never raises."""
+    if activity_engine is None or getattr(activity_engine, "story", None) is None:
+        return 0
+    try:
+        from db.ops import LibStory
+        day = (now + timedelta(hours=5, minutes=30)).date()
+        activity_engine.flush()
+        moved = LibStory.archive_through(session_factory, day)
+        activity_engine.story_archived(day)
+        logger.info("EOD: moved %d story row(s) through %s to the archive", moved, day)
+        return moved
+    except Exception:
+        logger.exception("EOD story archive failed")
+        return 0
+
+
+def run_eod_cycle(session_factory, rest_broker, aggregator, now: Optional[datetime] = None,
+                  activity_engine=None) -> dict:
     """One full EOD pass: backfill every active symbol, then backtest
     today's rotated strategies against every active symbol on every
     timeframe. One bad symbol/strategy/timeframe is logged and skipped,
     never aborts the rest — same discipline as feed/bootstrap.py's
     _hydrate and scenario_scheduler.py's regeneration pass."""
     now = now or datetime.now(timezone.utc)
+    archive_story(session_factory, activity_engine, now)
 
     with session_scope(session_factory) as session:
         symbol_targets = [
@@ -156,6 +178,7 @@ def start_eod_scheduler(
     session_factory, rest_broker, aggregator,
     hour_utc: int = _DEFAULT_HOUR_UTC, minute_utc: int = _DEFAULT_MINUTE_UTC,
     delay_seconds: int = _DEFAULT_DELAY_SECONDS, schedule_fn: Optional[ScheduleFn] = None,
+    activity_engine=None,
 ) -> None:
     """Self-rescheduling daily timer, same shape as feed/bootstrap.py's
     _schedule_daily_flush. Call once at app startup."""
@@ -163,11 +186,12 @@ def start_eod_scheduler(
 
     def _fire_and_reschedule() -> None:
         try:
-            run_eod_cycle(session_factory, rest_broker, aggregator)
+            run_eod_cycle(session_factory, rest_broker, aggregator, activity_engine=activity_engine)
         except Exception:
             logger.exception("EOD scheduler: unexpected error during a cycle")
         finally:
-            start_eod_scheduler(session_factory, rest_broker, aggregator, hour_utc, minute_utc, delay_seconds, schedule_fn)
+            start_eod_scheduler(session_factory, rest_broker, aggregator, hour_utc, minute_utc, delay_seconds, schedule_fn,
+                                activity_engine=activity_engine)
 
     now = datetime.now(timezone.utc)
     target = now.replace(hour=hour_utc, minute=minute_utc, second=0, microsecond=0) + timedelta(seconds=delay_seconds)

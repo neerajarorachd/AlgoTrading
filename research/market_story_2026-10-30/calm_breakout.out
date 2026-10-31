@@ -1,0 +1,12 @@
+﻿
+== calm >= 4 candles for both BB width and VWAP gap, then both expanding (0.07 events per stock-day)
+  calm-breakout, in price's direction n=  443  next12 avg +0.036%  right dir 53.5%  avg |move| 0.377%
+  baseline: any candle, avg |move| over next 12 = 0.418%
+
+== calm >= 6 candles for both BB width and VWAP gap, then both expanding (0.02 events per stock-day)
+  calm-breakout, in price's direction n=  156  next12 avg +0.005%  right dir 47.4%  avg |move| 0.338%
+  baseline: any candle, avg |move| over next 12 = 0.418%
+
+== calm >= 10 candles for both BB width and VWAP gap, then both expanding (0.00 events per stock-day)
+  calm-breakout, in price's direction n=   21  next12 avg +0.050%  right dir 66.7%  avg |move| 0.373%
+  baseline: any candle, avg |move| over next 12 = 0.418%

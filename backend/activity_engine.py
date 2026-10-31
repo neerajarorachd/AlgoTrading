@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from brokers.models import Candle
-from db.ops import LibActivities, LibCandleIndicators, LibSettings, LibSymbols
+from db.ops import LibActivities, LibCandleIndicators, LibSettings, LibStory, LibSymbols
 from db.session import session_scope
 from indicators import (
     TREND_LOOKBACK,
@@ -52,6 +52,16 @@ from indicators import (
     update_rsi,
     update_stochastic,
 )
+from story.point_events import (
+    DEFAULT_ARM_MULT,
+    DEFAULT_ZONE_ATR,
+    DEFAULT_ZONE_PCT,
+    SWING_LABEL_EVENTS,
+    DayLevels,
+    LineTests,
+    catalog as point_events_catalog,
+)
+from story.swings import label_swing
 
 logger = logging.getLogger(__name__)
 
@@ -1248,6 +1258,10 @@ PATTERN_CATALOG = [
     ("rising_wedge", "graph_formation", "Both trendlines rising but support rising faster (narrowing) — bearish reversal despite the upward drift"),
     ("falling_wedge", "graph_formation", "Both trendlines falling but resistance falling faster (narrowing) — bullish reversal despite the downward drift"),
 ]
+# Market story P1 (2026-10-30): line cross/bounce/touch, day levels, swing
+# labels. Listed (so they appear in the Signals picker) even while the
+# `point_events_v2` setting is off; they only fire when it is on.
+PATTERN_CATALOG += point_events_catalog()
 
 
 # Cross-then-widening (user, 2026-10-27): after a cross, the lines must stay
@@ -1295,6 +1309,13 @@ def seed_pattern_definitions(session_factory) -> None:
 # same mechanism incrementally, not all at once.
 ENGINE_SETTING_DEFAULTS: Dict[str, float] = {
     "swing_lookback": float(_SWING_LOOKBACK),
+    # market story P1 (2026-10-30), off until switched on (1)
+    "point_events_v2": 0.0,
+    "line_zone_atr": DEFAULT_ZONE_ATR,
+    "line_zone_pct": DEFAULT_ZONE_PCT,
+    "line_arm_mult": DEFAULT_ARM_MULT,
+    # market story P2 (2026-10-31), off until switched on (1)
+    "story_enabled": 0.0,
 }
 
 # Human-readable text for the Engine Settings admin page (routes_engine_
@@ -1306,6 +1327,24 @@ ENGINE_SETTING_DESCRIPTIONS: Dict[str, str] = {
         "(also the confirmation lag for structure patterns like BOS/CHoCH). "
         "Compare candidate values per-run via Strategy.swing_lookback in a backtest "
         "before promoting a winner here for live."
+    ),
+    "point_events_v2": (
+        "1 = record the market-story point events: line tests (start, then bounce or break) for VWAP, "
+        "Bollinger Bands, MA21, MA50 and EMA50; day and previous-day high/low breaks; swing labels "
+        "(HH/LH/HL/LL) with leg % and swing ratio. 0 = off. Needs migrate_swing_label_columns.py run first."
+    ),
+    "line_zone_atr": (
+        "Zone around a line as a fraction of the stock's own ATR (0.3 = about 0.05-0.10% of price on "
+        "5-min, wider for volatile stocks). Reaching it starts a test; a close out of it ends the test "
+        "as a bounce (back to the side it came from) or a break (through). 0 = use line_zone_pct."
+    ),
+    "line_zone_pct": "Zone around a line, % of price, used until ATR is ready (or when line_zone_atr is 0).",
+    "line_arm_mult": "A new test needs price to close this many zones away from the line first (an approach).",
+    "story_enabled": (
+        "1 = record the market story: one row per state run (BB width squeezing, price above VWAP, MACD "
+        "widening...) for every subscribed stock on 1/3/5-min, saved to market_story_today with the 15-min "
+        "flush and moved to market_story_archive at the end of the day. 0 = off. Needs "
+        "migrate_story_tables.py run first. Takes effect on the next app start."
     ),
 }
 
@@ -1361,9 +1400,25 @@ class ActivityEngine:
         # so a backtest sweep can never affect the live engine's own value.
         if swing_lookback is not None:
             self.swing_lookback = int(swing_lookback)
+            settings: Dict[str, float] = {}  # backtests: market-story events stay off
         else:
             settings = load_engine_settings(session_factory)
             self.swing_lookback = int(settings.get("swing_lookback", ENGINE_SETTING_DEFAULTS["swing_lookback"]))
+
+        def _setting(name):
+            return float(settings.get(name, ENGINE_SETTING_DEFAULTS[name]))
+        self.point_events_v2 = _setting("point_events_v2") >= 1
+        # Market story P2: today's story in memory, saved with the flush (story/live.py)
+        self.story = None
+        if _setting("story_enabled") >= 1:
+            from story.live import LiveStory
+            self.story = LiveStory()
+            self._story_started = False
+        zone_pct, arm_mult, zone_atr = _setting("line_zone_pct"), _setting("line_arm_mult"), _setting("line_zone_atr")
+        self._line_tests: Dict[InstrumentKey, LineTests] = defaultdict(
+            lambda: LineTests(zone_pct=zone_pct, arm_mult=arm_mult, zone_atr=zone_atr or None))
+        self._day_levels: Dict[InstrumentKey, DayLevels] = defaultdict(DayLevels)
+        self._swing_leg: Dict[InstrumentKey, Dict[str, float]] = defaultdict(dict)
         self._recent: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=_LOOKBACK))
         self._instrument_ids: Dict[Tuple[str, str], int] = {}
         # Today's store (2026-10-08, live_pattern_store_and_grid_window_plan):
@@ -1558,7 +1613,39 @@ class ActivityEngine:
                 self._saved_activities += len(acts)
                 self._saved_indicators += len(inds)
                 self._drop_saved_before_today()
+            self._flush_story()
             return len(acts)
+
+    def _flush_story(self) -> None:
+        """Market story P2: save the story after activities and indicators,
+        in its own try, so a story failure never touches their saving."""
+        if self.story is None:
+            return
+        try:
+            if not self._story_started:
+                # first save: a day the EOD move missed (app down at 15:30) goes to the
+                # archive now, and archived days are never written again
+                LibStory.archive_through(self.session_factory, self.story._today() - timedelta(days=1))
+                last = LibStory.last_archived_day(self.session_factory)
+                with self._lock:
+                    if last is not None and (self.story.archived_through is None or last > self.story.archived_through):
+                        self.story.archived_through = last
+                self._story_started = True
+            with self._lock:
+                full, open_only, rows, marks = self.story.collect(lambda k: self._lookup_instrument_id(k[0], k[1]))
+            if full or open_only:
+                LibStory.write_story(self.session_factory, full, open_only, rows)
+            with self._lock:
+                self.story.mark_saved(marks)
+        except Exception:
+            logger.exception("Activity engine: story save failed (kept in memory, retried next flush)")
+
+    def story_archived(self, day) -> None:
+        """EOD moved `day` (and earlier) to the archive: never write it again."""
+        if self.story is not None:
+            with self._lock:
+                if self.story.archived_through is None or day > self.story.archived_through:
+                    self.story.archived_through = day
 
     def _drop_saved_before_today(self) -> None:
         """Keeps the in-memory store to ~one day: saved rows from earlier IST
@@ -1875,6 +1962,26 @@ class ActivityEngine:
         except Exception:
             logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)
 
+        # Market story P1 point events: line tests (start / bounce / break) and day levels.
+        if self.point_events_v2:
+            try:
+                day = (_as_utc(candle.timestamp) + _IST).date()
+                frame = self._frame_rows.get(key)
+                if frame and frame[-1]["ts"] == candle.timestamp:
+                    found.extend(self._line_tests[key].update(frame[-1], day))
+                found.extend(self._day_levels[key].update(day, candle.high, candle.low, candle.close))
+            except Exception:
+                logger.exception("Activity engine: point events failed for %s (%s)", symbol, exchange_segment)
+
+        # Market story P2: the story tracker reads the same row (off unless story_enabled).
+        if self.story is not None:
+            try:
+                frame = self._frame_rows.get(key)
+                if frame and frame[-1]["ts"] == candle.timestamp:
+                    self.story.on_row(key, frame[-1])
+            except Exception:
+                logger.exception("Activity engine: story failed for %s (%s)", symbol, exchange_segment)
+
         try:
             window = self._swing_window[key]
             window.append(candle)
@@ -1907,6 +2014,31 @@ class ActivityEngine:
                         swing_point = SwingPoint(kind=kind, price=price, candle=swing_candle)
                         points.append(swing_point)
                         points_list = list(points)
+
+                        # Market story P1: HH/LH/EH, HL/LL/EL with leg % and swing ratio
+                        if self.point_events_v2:
+                            try:
+                                other = "low" if kind == "high" else "high"
+                                same_seq = self._recent_highs[key] if kind == "high" else self._recent_lows[key]
+                                prev_other = next((p for p in reversed(points_list[:-1]) if p.kind == other), None)
+                                legs = self._swing_leg[key]
+                                label, leg, ratio = label_swing(
+                                    kind, price, same_seq[-1].price if same_seq else None,
+                                    prev_other.price if prev_other else None, legs.get(other))
+                                legs[kind] = leg
+                                if ratio is not None:
+                                    ratio = min(ratio, 9999.0)  # a near-zero previous leg; fits NUMERIC(9,4)
+                                if label:
+                                    self._buffer.append({
+                                        "instrument_id": instrument_id, "timeframe": candle.timeframe,
+                                        "ts": swing_candle.timestamp,
+                                        "activity_type": "structure", "activity": SWING_LABEL_EVENTS[label],
+                                        "intensity": leg, "leg_pct": leg, "swing_ratio": ratio,
+                                        "open_price": swing_candle.open, "high_price": swing_candle.high,
+                                        "low_price": swing_candle.low, "close_price": swing_candle.close,
+                                    })
+                            except Exception:
+                                logger.exception("Activity engine: swing label failed for %s (%s)", symbol, exchange_segment)
 
                         # double_top_ed/double_bottom_ed watch lifecycle --
                         # this new point either resolves an ALREADY-fired

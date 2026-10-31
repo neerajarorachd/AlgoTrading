@@ -1,0 +1,90 @@
+﻿
+== stop 2xATR / target 10xATR, else day end | 7 plan stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             15640  38.5%  +0.021 |      1426  -267,836 |      1435  -335,992
+cross + BB expanding + BB>=1% + vol>avg                 1170  40.6%  +0.109 |       509    18,806 |       480    62,566
+  BB>=1% ... + trend                                     629  43.6%  +0.212 |       288    89,449 |       285    69,956
+  BB>=1% ... + trend + ADX 30-40                         157  45.2%  +0.217 |        74    16,456 |        77    18,305
+cross + BB expanding + BB>=0.5% + vol>avg               2013  39.0%  +0.080 |       784   -34,991 |       743    22,574
+  BB>=0.5% ... + trend                                  1087  41.0%  +0.147 |       485    47,315 |       452    37,126
+cross + BB expanding + vol>1.5x avg + trend              865  42.0%  +0.142 |       402    57,045 |       378    27,809
+cross + trend + ADX 30-40 (close to today's plan)        945  39.0%  +0.095 |       397    28,029 |       364   -22,727
+
+== stop 2xATR / target 10xATR, else day end | all 13 stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             29324  38.7%  +0.019 |      1599  -451,804 |      1579  -470,755
+cross + BB expanding + BB>=1% + vol>avg                 1919  40.0%  +0.077 |       786   -33,154 |       669   -40,468
+  BB>=1% ... + trend                                    1044  42.0%  +0.139 |       496    30,695 |       415    17,800
+  BB>=1% ... + trend + ADX 30-40                         260  42.3%  +0.124 |       140    10,572 |       112    -1,086
+cross + BB expanding + BB>=0.5% + vol>avg               3533  39.3%  +0.059 |      1032  -124,588 |       933  -168,653
+  BB>=0.5% ... + trend                                  1937  41.1%  +0.103 |       815   -20,741 |       709   -41,657
+cross + BB expanding + vol>1.5x avg + trend             1580  41.5%  +0.103 |       687    21,410 |       635   -30,530
+cross + trend + ADX 30-40 (close to today's plan)       1756  37.5%  +0.045 |       682   -32,987 |       591  -129,296
+
+== stop 0.2% / target 0.5%, else day end | 7 plan stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             15640  29.4%  -0.002 |      4272  -735,624 |      4095  -713,988
+cross + BB expanding + BB>=1% + vol>avg                 1170  28.9%  +0.001 |       587  -154,588 |       557  -143,552
+  BB>=1% ... + trend                                     629  30.5%  +0.012 |       312   -69,417 |       311   -75,871
+  BB>=1% ... + trend + ADX 30-40                         157  30.6%  +0.011 |        78   -14,229 |        78   -23,147
+cross + BB expanding + BB>=0.5% + vol>avg               2013  30.0%  +0.005 |       983  -230,682 |       928  -231,240
+  BB>=0.5% ... + trend                                  1087  31.3%  +0.015 |       546  -107,832 |       516  -133,374
+cross + BB expanding + vol>1.5x avg + trend              865  31.7%  +0.014 |       429   -86,456 |       417  -100,451
+cross + trend + ADX 30-40 (close to today's plan)        945  29.3%  -0.001 |       476  -124,872 |       417  -115,413
+
+== stop 0.2% / target 0.5%, else day end | all 13 stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             29324  29.7%  -0.002 |      5707  -753,925 |      5005  -709,565
+cross + BB expanding + BB>=1% + vol>avg                 1919  29.3%  +0.004 |       994  -248,440 |       841  -206,007
+  BB>=1% ... + trend                                    1044  31.7%  +0.021 |       564  -113,771 |       457   -98,838
+  BB>=1% ... + trend + ADX 30-40                         260  32.3%  +0.024 |       145   -21,532 |       113   -30,542
+cross + BB expanding + BB>=0.5% + vol>avg               3533  30.7%  +0.008 |      1678  -369,023 |      1529  -340,439
+  BB>=0.5% ... + trend                                  1937  33.0%  +0.026 |       985  -186,645 |       859  -179,208
+cross + BB expanding + vol>1.5x avg + trend             1580  33.0%  +0.020 |       771  -148,864 |       742  -158,569
+cross + trend + ADX 30-40 (close to today's plan)       1756  30.1%  +0.003 |       863  -213,318 |       755  -188,818
+
+== stop 0.4% / target 0.8%, else day end | 7 plan stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             15640  37.9%  +0.009 |      3129  -507,091 |      3077  -465,819
+cross + BB expanding + BB>=1% + vol>avg                 1170  39.0%  +0.046 |       564   -66,793 |       538   -69,286
+  BB>=1% ... + trend                                     629  40.7%  +0.069 |       314    -7,459 |       309   -39,696
+  BB>=1% ... + trend + ADX 30-40                         157  40.1%  +0.053 |        78    -9,897 |        77   -12,924
+cross + BB expanding + BB>=0.5% + vol>avg               2013  38.7%  +0.029 |       881  -112,806 |       849  -116,932
+  BB>=0.5% ... + trend                                  1087  40.3%  +0.053 |       530   -27,113 |       496   -83,618
+cross + BB expanding + vol>1.5x avg + trend              865  41.4%  +0.058 |       419   -31,394 |       403   -52,087
+cross + trend + ADX 30-40 (close to today's plan)        945  36.4%  +0.010 |       428   -96,048 |       391   -96,992
+
+== stop 0.4% / target 0.8%, else day end | all 13 stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             29324  38.6%  +0.007 |      3551  -565,032 |      3268  -514,149
+cross + BB expanding + BB>=1% + vol>avg                 1919  38.2%  +0.036 |       922  -128,852 |       786  -123,423
+  BB>=1% ... + trend                                    1044  40.4%  +0.065 |       572   -26,848 |       449   -59,908
+  BB>=1% ... + trend + ADX 30-40                         260  41.9%  +0.070 |       146   -10,452 |       112   -13,774
+cross + BB expanding + BB>=0.5% + vol>avg               3533  39.2%  +0.023 |      1417  -225,671 |      1267  -214,047
+  BB>=0.5% ... + trend                                  1937  41.4%  +0.052 |       972   -68,247 |       793  -144,892
+cross + BB expanding + vol>1.5x avg + trend             1580  41.8%  +0.050 |       759   -58,773 |       686  -123,574
+cross + trend + ADX 30-40 (close to today's plan)       1756  37.3%  +0.009 |       762  -161,749 |       675  -177,461
+
+== stop 0.4% / target 1.2%, else day end | 7 plan stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             15640  34.1%  +0.012 |      2756  -457,938 |      2485  -473,440
+cross + BB expanding + BB>=1% + vol>avg                 1170  33.7%  +0.067 |       564   -38,081 |       539   -32,450
+  BB>=1% ... + trend                                     629  36.6%  +0.117 |       311    33,213 |       308    -3,807
+  BB>=1% ... + trend + ADX 30-40                         157  35.7%  +0.078 |        77    -6,480 |        77    -5,116
+cross + BB expanding + BB>=0.5% + vol>avg               2013  34.3%  +0.042 |       885   -80,081 |       854   -73,096
+  BB>=0.5% ... + trend                                  1087  36.5%  +0.080 |       529     9,312 |       487   -51,609
+cross + BB expanding + vol>1.5x avg + trend              865  37.8%  +0.078 |       419    -6,045 |       399   -29,178
+cross + trend + ADX 30-40 (close to today's plan)        945  32.7%  +0.024 |       424   -69,777 |       385   -79,210
+
+== stop 0.4% / target 1.2%, else day end | all 13 stocks
+rule                                                 signals    win    avg% | Y1 trades    Y1 net | Y2 trades    Y2 net
+cross only                                             29324  35.3%  +0.011 |      2995  -530,004 |      2705  -494,076
+cross + BB expanding + BB>=1% + vol>avg                 1919  32.7%  +0.049 |       907  -108,980 |       793   -68,254
+  BB>=1% ... + trend                                    1044  35.3%  +0.094 |       562    12,214 |       447   -11,513
+  BB>=1% ... + trend + ADX 30-40                         260  34.6%  +0.059 |       144   -17,429 |       112   -12,370
+cross + BB expanding + BB>=0.5% + vol>avg               3533  35.1%  +0.034 |      1323  -204,210 |      1199  -158,228
+  BB>=0.5% ... + trend                                  1937  37.3%  +0.069 |       941   -20,342 |       757   -97,380
+cross + BB expanding + vol>1.5x avg + trend             1580  38.5%  +0.065 |       738   -18,979 |       656   -83,697
+cross + trend + ADX 30-40 (close to today's plan)       1756  33.3%  +0.014 |       735  -139,474 |       651  -155,416
+
+Net = after itemized costs and 0.05% slippage; Rs 5L pool, Rs 2.5L per trade.

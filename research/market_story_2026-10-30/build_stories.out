@@ -1,0 +1,28 @@
+﻿5min ASHOKLEY    candles= 37043 runs=  88316 runs/day= 177.7
+5min BANKBARODA  candles= 37044 runs=  88784 runs/day= 178.6
+5min BHEL        candles= 37044 runs=  88151 runs/day= 177.4
+5min CASTROLIND  candles= 37146 runs=  86050 runs/day= 173.1
+5min CUB         candles= 37148 runs=  87192 runs/day= 175.4
+5min FINCABLES   candles= 37147 runs=  87475 runs/day= 176.0
+5min HINDCOPPER  candles= 37101 runs=  86880 runs/day= 175.2
+5min HUDCO       candles= 37147 runs=  88646 runs/day= 178.4
+5min JIOFIN      candles= 37046 runs=  87586 runs/day= 176.2
+5min KNRCON      candles= 37148 runs=  86824 runs/day= 174.7
+5min NATIONALUM  candles= 37046 runs=  88134 runs/day= 177.3
+5min RELIANCE    candles= 37047 runs=  87836 runs/day= 176.7
+5min TCS         candles= 37048 runs=  86636 runs/day= 174.3
+5min: 482155 candles, 1138510 runs, tracker time 46.1s = 96 us per candle
+3min ASHOKLEY    candles= 61725 runs= 138288 runs/day= 278.2
+3min BANKBARODA  candles= 61725 runs= 139185 runs/day= 280.1
+3min BHEL        candles= 61726 runs= 140179 runs/day= 282.1
+3min CASTROLIND  candles= 61895 runs= 135669 runs/day= 273.0
+3min CUB         candles= 61897 runs= 137469 runs/day= 276.6
+3min FINCABLES   candles= 61897 runs= 137511 runs/day= 276.7
+3min HINDCOPPER  candles= 61820 runs= 138128 runs/day= 278.5
+3min HUDCO       candles= 61897 runs= 139250 runs/day= 280.2
+3min JIOFIN      candles= 61729 runs= 137112 runs/day= 275.9
+3min KNRCON      candles= 61898 runs= 137580 runs/day= 276.8
+3min NATIONALUM  candles= 61730 runs= 139126 runs/day= 279.9
+3min RELIANCE    candles= 61731 runs= 137068 runs/day= 275.8
+3min TCS         candles= 61732 runs= 135148 runs/day= 271.9
+3min: 803402 candles, 1791713 runs, tracker time 47.1s = 59 us per candle
