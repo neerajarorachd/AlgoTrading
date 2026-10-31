@@ -78,3 +78,28 @@ off by default and unable to break the engine, migrations before live
 restarts, full test suite before each commit, rule book updated when a
 decision is finalized. Watch scoring and the prediction tracker stay until
 the user decides keep / merge / drop.
+
+## P2 status (2026-10-31): built on branch `story`, not live
+
+- Engine setting `story_enabled` (default 0; read at app start). When 1,
+  `story/live.py` keeps one StoryTracker per stock + timeframe (1/3/5-min),
+  fed the engine's own per-candle row; candles older than 5 calendar days
+  (startup history) are skipped.
+- Saved with the 15-min flush, after activities and indicators, in its own
+  try (`db/ops/LibStory.py`): the first save of a day after a start rewrites
+  that day (de-duplicates after a crash), later saves insert newly closed runs
+  and replace the open ones. Tables `market_story_today` / `_archive`
+  (`db/models_story.py`); migration `scripts/migrate_story_tables.py`.
+- EOD (`eod_service.archive_story`, first step of the EOD job): last save,
+  then today -> archive (open runs archived as closed); an archived day is
+  never written again. A day a missed EOD left behind moves at the next start.
+- API: `GET /api/story/now?timeframe=5min` (every stock's current setup),
+  `GET /api/story/<symbol>?timeframe=5min[&date=YYYY-MM-DD]`.
+- Checks done: 9 new tests (1133 total pass); gate script on 5 stocks x 2 real
+  days (save = memory, restart rewrite, no duplicates, API, EOD move, late
+  save writes nothing); engine output identical with the story on or off.
+  Cost: 0.66 ms a candle (~0.15 s a minute for 150 stocks); startup replay
+  of 5 days adds ~2 s a stock.
+- Still open for the gate: one live day. Before it, on SQL Server:
+  `migrate_swing_label_columns.py` (P1) and `migrate_story_tables.py`, then
+  `story_enabled` = 1, then a restart outside market hours on this code.

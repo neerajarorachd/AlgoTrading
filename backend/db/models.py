@@ -2016,3 +2016,5 @@ class UserPreference(Base):
 
 # Registers candles_daily on Base.metadata (own module: see its docstring).
 from db.models_daily import CandleDaily  # noqa: E402,F401
+# Registers market_story_today / market_story_archive (market story P2, own module).
+import db.models_story  # noqa: E402,F401  (module import: safe whichever file is imported first)

@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from brokers.models import Candle
-from db.ops import LibActivities, LibCandleIndicators, LibSettings, LibSymbols
+from db.ops import LibActivities, LibCandleIndicators, LibSettings, LibStory, LibSymbols
 from db.session import session_scope
 from indicators import (
     TREND_LOOKBACK,
@@ -1314,6 +1314,8 @@ ENGINE_SETTING_DEFAULTS: Dict[str, float] = {
     "line_zone_atr": DEFAULT_ZONE_ATR,
     "line_zone_pct": DEFAULT_ZONE_PCT,
     "line_arm_mult": DEFAULT_ARM_MULT,
+    # market story P2 (2026-10-31), off until switched on (1)
+    "story_enabled": 0.0,
 }
 
 # Human-readable text for the Engine Settings admin page (routes_engine_
@@ -1338,6 +1340,12 @@ ENGINE_SETTING_DESCRIPTIONS: Dict[str, str] = {
     ),
     "line_zone_pct": "Zone around a line, % of price, used until ATR is ready (or when line_zone_atr is 0).",
     "line_arm_mult": "A new test needs price to close this many zones away from the line first (an approach).",
+    "story_enabled": (
+        "1 = record the market story: one row per state run (BB width squeezing, price above VWAP, MACD "
+        "widening...) for every subscribed stock on 1/3/5-min, saved to market_story_today with the 15-min "
+        "flush and moved to market_story_archive at the end of the day. 0 = off. Needs "
+        "migrate_story_tables.py run first. Takes effect on the next app start."
+    ),
 }
 
 
@@ -1400,6 +1408,12 @@ class ActivityEngine:
         def _setting(name):
             return float(settings.get(name, ENGINE_SETTING_DEFAULTS[name]))
         self.point_events_v2 = _setting("point_events_v2") >= 1
+        # Market story P2: today's story in memory, saved with the flush (story/live.py)
+        self.story = None
+        if _setting("story_enabled") >= 1:
+            from story.live import LiveStory
+            self.story = LiveStory()
+            self._story_started = False
         zone_pct, arm_mult, zone_atr = _setting("line_zone_pct"), _setting("line_arm_mult"), _setting("line_zone_atr")
         self._line_tests: Dict[InstrumentKey, LineTests] = defaultdict(
             lambda: LineTests(zone_pct=zone_pct, arm_mult=arm_mult, zone_atr=zone_atr or None))
@@ -1599,7 +1613,39 @@ class ActivityEngine:
                 self._saved_activities += len(acts)
                 self._saved_indicators += len(inds)
                 self._drop_saved_before_today()
+            self._flush_story()
             return len(acts)
+
+    def _flush_story(self) -> None:
+        """Market story P2: save the story after activities and indicators,
+        in its own try, so a story failure never touches their saving."""
+        if self.story is None:
+            return
+        try:
+            if not self._story_started:
+                # first save: a day the EOD move missed (app down at 15:30) goes to the
+                # archive now, and archived days are never written again
+                LibStory.archive_through(self.session_factory, self.story._today() - timedelta(days=1))
+                last = LibStory.last_archived_day(self.session_factory)
+                with self._lock:
+                    if last is not None and (self.story.archived_through is None or last > self.story.archived_through):
+                        self.story.archived_through = last
+                self._story_started = True
+            with self._lock:
+                full, open_only, rows, marks = self.story.collect(lambda k: self._lookup_instrument_id(k[0], k[1]))
+            if full or open_only:
+                LibStory.write_story(self.session_factory, full, open_only, rows)
+            with self._lock:
+                self.story.mark_saved(marks)
+        except Exception:
+            logger.exception("Activity engine: story save failed (kept in memory, retried next flush)")
+
+    def story_archived(self, day) -> None:
+        """EOD moved `day` (and earlier) to the archive: never write it again."""
+        if self.story is not None:
+            with self._lock:
+                if self.story.archived_through is None or day > self.story.archived_through:
+                    self.story.archived_through = day
 
     def _drop_saved_before_today(self) -> None:
         """Keeps the in-memory store to ~one day: saved rows from earlier IST
@@ -1926,6 +1972,15 @@ class ActivityEngine:
                 found.extend(self._day_levels[key].update(day, candle.high, candle.low, candle.close))
             except Exception:
                 logger.exception("Activity engine: point events failed for %s (%s)", symbol, exchange_segment)
+
+        # Market story P2: the story tracker reads the same row (off unless story_enabled).
+        if self.story is not None:
+            try:
+                frame = self._frame_rows.get(key)
+                if frame and frame[-1]["ts"] == candle.timestamp:
+                    self.story.on_row(key, frame[-1])
+            except Exception:
+                logger.exception("Activity engine: story failed for %s (%s)", symbol, exchange_segment)
 
         try:
             window = self._swing_window[key]

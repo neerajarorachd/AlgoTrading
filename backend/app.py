@@ -96,6 +96,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     from api.routes_signal_strength import signal_strength_bp
     from api.routes_preferences import preferences_bp
     from api.routes_review import review_bp
+    from api.routes_story import story_bp
     from api.routes_recommendations import recommendations_bp
     from api.routes_strategies import strategies_bp
     from api.routes_symbols import symbols_bp
@@ -121,6 +122,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.register_blueprint(signal_strength_bp)
     app.register_blueprint(preferences_bp)
     app.register_blueprint(review_bp)
+    app.register_blueprint(story_bp)
 
     app.extensions["socketio"] = ws_live.init_app(app)
 
@@ -141,7 +143,7 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
         )
 
         from eod_service import start_eod_scheduler
-        start_eod_scheduler(session_factory, rest_broker, aggregator)
+        start_eod_scheduler(session_factory, rest_broker, aggregator, activity_engine=activity_engine)
 
         from scenario_scheduler import start_guiding_scenario_scheduler
         start_guiding_scenario_scheduler(session_factory)
