@@ -166,7 +166,24 @@ what has been decided**.
 - **Current focus (10-16):** pattern quality and excellent recommendations;
   UI work only via Jira tickets.
 
-## 7. Trading research decisions (10-27 to 10-30)
+## 7. Trading research decisions (10-27 to 10-31)
+
+**150-stock test (10-31): none of the findings below holds.** On 149 stocks x
+2 years (5-min, day end 15:10), every setup earns ~0.00-0.07% a trade before
+costs against ~0.16% costs + slippage, and loses in both years; stocks that
+look good per stock are as many as chance gives. The 13-stock results were
+stock selection. Details: `D:\AI Trading\research\universe_2026-10-31\RESULTS.md`
+and the results page https://claude.ai/artifact/CDGfQ4qU7kCmdQ6TraTqvH.
+- The best setup and the Rs 5L plan below are **not a money plan**; nothing
+  is in the setup library as proven. Setups are judged on paper trading.
+- Still true: never trade against the trend (no counter-trend test passed
+  either); U-turn exits are neutral (alerts only); line tests and the story
+  lookup have no standalone edge (the lookup ranks moments that will move,
+  not the direction).
+- Research standard: day end 15:10 (Dhan has no 15:15-15:25 candles for most
+  stocks from 2026-08-03); loader `ucommon.py` in that folder.
+
+The 13-stock findings (10-27 to 10-30), kept for the record:
 
 From the 2-year, 13-stock, 3/5-min intraday backtests (scripts and data in
 `D:\AI Trading\research\cross_widening_2026-10-27`):
@@ -211,11 +228,13 @@ From the 2-year, 13-stock, 3/5-min intraday backtests (scripts and data in
 - Line tests are episodes, like BB expansion: the first touch after an
   approach starts a test, closes inside the zone keep it open, a close out
   ends it as a bounce or a break. Zone ~0.05-0.10% of price, sized per stock
-  from its ATR (0.3 x ATR default; 0.45 x ATR under review).
+  from its ATR (0.3 x ATR default; 0.45 x ATR under review). 149 stocks
+  (10-31): neither zone predicts direction; 0.45 gives fewer tests and more
+  bounces that hold (41% vs 37%).
 - The story also watches open trades (user's purpose: exit on a U-turn).
   Preliminary (13 stocks): no story-based exit beat stop / target / day end
-  in both years, so story turns are **alerts**, not automatic exits, until a
-  15-30 stock test says otherwise.
+  in both years, so story turns are **alerts**, not automatic exits.
+  Confirmed on 149 stocks (10-31): every U-turn exit within +-0.006% a trade.
 - Capture "calm then move" (BB width and VWAP gap both constant, then both
   expanding in one direction) as a story event; preliminary: rare (~1 per
   stock per 14 days), no edge yet.
@@ -232,8 +251,10 @@ From the 2-year, 13-stock, 3/5-min intraday backtests (scripts and data in
   even if one fires only ~30 times a year.
 - Example of a candidate: LL -> HH -> HL -> HH formed while VWAP / RSI / DI
   still lean the old way (early reversal; preliminary 56-65% vs 50%).
-- Order of work: (1) one last research test, confirming the current findings
-  on the 100-150 stock set (plan: `D:\AI Trading\research\universe_2026-10-31\PLAN.md`); then **stop trend research**; (2) build the
+- The early-reversal example did not hold on 149 stocks (49.8% / 51.1% vs
+  base 50.0% / 51.7%, 10-31).
+- Order of work: (1) one last research test on the 150-stock set: **done
+  10-31, nothing passed; trend research is stopped**; (2) build the
   system: setup development, story recording, recommendations, paper trading;
   (3) only once paper trading runs, **calibrate** each setup on live and
   paper results.
