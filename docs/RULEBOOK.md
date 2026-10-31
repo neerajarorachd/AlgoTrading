@@ -126,6 +126,20 @@ what has been decided**.
   close, never the swing candle's (stale-entry bug, 09-14;
   `prediction_tracker.py` still has it).
 - New page origins must be in `CORS_ORIGINS`, or sockets loop on HTTP 400.
+- **Daily candle upkeep (10-31):** the VM keeps the 150-stock research universe
+  (`backend/data/daily_universe.json`) current after each close. 16:30 IST
+  (Mon-Fri): daily candles into their own table `candles_daily`
+  (`scripts/update_daily_candles.py`). 16:45: 5-min for all 150, fetched
+  directly, into `candles_historical` (`scripts/update_intraday_candles.py`).
+  Stocks that already have 1-min data (the 13 samples) also get 1-min, with
+  3/5-min rolled up from it. Each timeframe is gap-filled from its own last
+  candle. Other stocks get the 1/3-min set when added to a watchlist.
+  Systemd user timers on the VM (`deploy/`). Research tests use 5-min first,
+  daily later. PC copy of the 5-min files:
+  `D:\AI Trading\research\universe_2026-10-31\5min`.
+- **Dhan quirks:** `toDate` is exclusive; a range with no trading day returns
+  error DH-907 (treat as empty); a direct 3-min request returns only today
+  (roll up from 1-min instead).
 
 ## 6. Patterns and signals (finalized)
 

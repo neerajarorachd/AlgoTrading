@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the AlgoTrading intraday candle update after market close (VM is up 15:30-18:00 IST)
+
+[Timer]
+# Mon-Fri 16:30 IST (VM time zone is Asia/Kolkata). Persistent: if the VM was
+# off at 16:30, run once as soon as it boots. Weekend/holiday runs are not
+# needed: the next run fills any gap from the last stored day.
+OnCalendar=Mon..Fri 16:45
+Persistent=true
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target
