@@ -2012,3 +2012,7 @@ class UserPreference(Base):
     __table_args__ = (
         UniqueConstraint("owner_id", "key", name="uq_user_preference"),
     )
+
+
+# Registers candles_daily on Base.metadata (own module: see its docstring).
+from db.models_daily import CandleDaily  # noqa: E402,F401

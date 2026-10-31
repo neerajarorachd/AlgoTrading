@@ -1,0 +1,15 @@
+[Unit]
+Description=AlgoTrading daily candle update (fills candles_daily, gap-fills missed days)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlgoTrading/backend
+# Refresh the mirrored Dhan tokens from Trading's own refreshed ones (read-only
+# on Trading.db); "-" = carry on with the existing token if this step fails.
+ExecStartPre=-%h/AlgoTrading/venv/bin/python3 %h/AlgoTrading/backfill_broker_tokens.py
+ExecStartPre=%h/AlgoTrading/wait_for_sqlserver.sh
+ExecStart=%h/AlgoTrading/venv/bin/python3 -u scripts/update_daily_candles.py
+StandardOutput=append:%h/AlgoTrading/daily_candles.log
+StandardError=append:%h/AlgoTrading/daily_candles.log
+TimeoutStartSec=3000
