@@ -687,6 +687,7 @@ export default function MarketWatch() {
                   onDragEnd={() => setDragIndex(null)}
                   onClose={() => handleToggleOpen(instrument)}
                   screenTimeframe={screenTimeframe}
+                  pageFilter={{ item: signalFilter, window: signalWindow }}
                 />
               ))}
             </div>
@@ -701,7 +702,7 @@ export default function MarketWatch() {
 // One below-grid chart card -- owns its own GraphWindow ref so its
 // fullscreen button can trigger that specific instance (refs can't be
 // created inside the .map() above, hooks don't allow that).
-function ChartGridCard({ instrument, index, depth, depthMode, onDepthModeChange, dragIndex, onDragStart, onDrop, onDragEnd, onClose, screenTimeframe }) {
+function ChartGridCard({ instrument, index, depth, depthMode, onDepthModeChange, dragIndex, onDragStart, onDrop, onDragEnd, onClose, screenTimeframe, pageFilter }) {
   const graphRef = useRef(null)
   return (
     <div
@@ -738,6 +739,7 @@ function ChartGridCard({ instrument, index, depth, depthMode, onDepthModeChange,
         ref={graphRef} instrument={instrument} depth={depth}
         depthMode={depthMode} onDepthModeChange={onDepthModeChange}
         screenTimeframe={screenTimeframe}
+        pageFilter={pageFilter}
       />
     </div>
   )

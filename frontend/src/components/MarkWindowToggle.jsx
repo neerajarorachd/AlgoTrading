@@ -9,7 +9,8 @@ export const isMarkWindow = (v) => MARK_WINDOWS.some((w) => w.value === v)
 // what a count means under each window, for the count tooltips
 export const windowUnit = (value, prefix = '') => `${prefix}${value === 'last10' ? 'in the last 10 candles' : 'today'}`
 
-export default function MarkWindowToggle({ value, onChange, id }) {
+// disabled: held on `value` (the chart following the grid filter, 2026-11-02)
+export default function MarkWindowToggle({ value, onChange, id, disabled = false, disabledTitle }) {
   return (
     <div role="radiogroup" aria-label="Signal window" data-mark-window={id}
       style={{ display: 'flex', flex: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 10 }}
@@ -19,10 +20,10 @@ export default function MarkWindowToggle({ value, onChange, id }) {
         return (
           <button
             key={w.value} type="button" role="radio" aria-checked={on} data-mark-window-option={w.value}
-            onClick={() => onChange(w.value)}
-            title={w.value === 'last10' ? "Only the last 10 candles of each timeframe" : "All of today's session"}
+            onClick={() => onChange(w.value)} disabled={disabled}
+            title={disabled && disabledTitle ? disabledTitle : w.value === 'last10' ? "Only the last 10 candles of each timeframe" : "All of today's session"}
             style={{
-              flex: '1 1 0', border: 'none', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, padding: '5px 8px',
+              flex: '1 1 0', border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled && !on ? 0.5 : 1, fontSize: 11.5, fontWeight: 600, padding: '5px 8px',
               color: on ? 'var(--text-on-accent)' : 'var(--text-dim)', background: on ? 'var(--accent)' : 'transparent',
             }}
           >{w.label}</button>

@@ -27,7 +27,7 @@ const DEPTH_MODE_CYCLE = { hidden: 'right', right: 'below', below: 'hidden' }
 // instrument so it survives drag-reorder); omit both to let this component
 // manage its own (InstrumentDetail's case, no external persistence needed).
 const GraphWindow = forwardRef(function GraphWindow(
-  { instrument, depth, title, showDepth = true, depthMode: controlledDepthMode, onDepthModeChange, screenTimeframe },
+  { instrument, depth, title, showDepth = true, depthMode: controlledDepthMode, onDepthModeChange, screenTimeframe, pageFilter },
   ref,
 ) {
   const [internalDepthMode, setInternalDepthMode] = useState('hidden')
@@ -58,6 +58,7 @@ const GraphWindow = forwardRef(function GraphWindow(
       onCycleDepth={showDepth ? cycleDepthMode : undefined}
       onControlsWidthChange={setDepthPanelWidth}
       screenTimeframe={screenTimeframe}
+      pageFilter={pageFilter}
       sidePanel={depthMode === 'right' ? depthPanel || null : null}
       bottomPanel={depthMode === 'below' ? depthPanel || null : null}
     />

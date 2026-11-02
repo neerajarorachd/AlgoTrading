@@ -122,6 +122,9 @@ what has been decided**.
   The filter panel is exactly as tall as the grid card (scrolls inside); the
   grid card keeps its height while the filter is on, even with 0 rows; the
   filter shows as a chip in the card header, not an extra line.
+  The chart panel's **Follow grid filter** switch (one for all charts, off by
+  default): on = the chart marks only the grid's item in the grid's window, its
+  ticks locked; no grid item = the chart's own ticks; off = own ticks/window back.
 
 ## 5. Data rules
 
