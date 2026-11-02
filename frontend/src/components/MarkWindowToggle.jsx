@@ -12,7 +12,7 @@ export const windowUnit = (value, prefix = '') => `${prefix}${value === 'last10'
 export default function MarkWindowToggle({ value, onChange, id }) {
   return (
     <div role="radiogroup" aria-label="Signal window" data-mark-window={id}
-      style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 10 }}
+      style={{ display: 'flex', flex: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 10 }}
     >
       {MARK_WINDOWS.map((w) => {
         const on = w.value === value

@@ -26,7 +26,7 @@ export default function SignalFilterPanel({ selected, onSelect, window, onWindow
 
   return (
     <div data-signal-filter-panel style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+      <div style={{ display: 'flex', flex: 'none', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <span style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-faint)' }}>Filter grid by signal</span>
         {onClose && (
           <button type="button" onClick={onClose} title="Close the panel (the filter stays on)" aria-label="Close signal filter panel"
@@ -35,7 +35,7 @@ export default function SignalFilterPanel({ selected, onSelect, window, onWindow
         )}
       </div>
       <MarkWindowToggle id="grid" value={window} onChange={onWindowChange} />
-      <div role="tablist" aria-label="Signal filter" style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 10 }}>
+      <div role="tablist" aria-label="Signal filter" style={{ display: 'flex', flex: 'none', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 10 }}>
         {TABS.map((t) => (
           <button
             key={t.key} type="button" role="tab" aria-selected={tab === t.key} data-filter-tab={t.key}
