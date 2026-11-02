@@ -1,0 +1,234 @@
+# Market-closed days for backfill (NSE equity), one per line: YYYY-MM-DD  TYPE  note
+# TYPE: weekend = Saturday/Sunday; exchange = NSE trading holiday.
+# A date on this list is never requested from the broker and never counted as a gap.
+# 2026 exchange holidays: copied from the Trading project's ~/Trading/holidays.txt (NSE circular).
+# 2027 exchange holidays: NOT YET PUBLISHED by NSE (usually mid-December) -- add them here then.
+# Muhurat trading (a short evening session on Diwali, even on a weekend) is not modelled.
+#
+# ---- 2026 ----
+2026-01-03  weekend   Saturday
+2026-01-04  weekend   Sunday
+2026-01-10  weekend   Saturday
+2026-01-11  weekend   Sunday
+2026-01-15  exchange  Makar Sakranti
+2026-01-17  weekend   Saturday
+2026-01-18  weekend   Sunday
+2026-01-24  weekend   Saturday
+2026-01-25  weekend   Sunday
+2026-01-26  exchange  Republic Day
+2026-01-31  weekend   Saturday
+2026-02-01  weekend   Sunday
+2026-02-07  weekend   Saturday
+2026-02-08  weekend   Sunday
+2026-02-14  weekend   Saturday
+2026-02-15  weekend   Sunday (also Maha Shivratri)
+2026-02-21  weekend   Saturday
+2026-02-22  weekend   Sunday
+2026-02-28  weekend   Saturday
+2026-03-01  weekend   Sunday
+2026-03-03  exchange  Holi
+2026-03-07  weekend   Saturday
+2026-03-08  weekend   Sunday
+2026-03-14  weekend   Saturday
+2026-03-15  weekend   Sunday
+2026-03-21  weekend   Saturday (also Id-Ul-Fitr)
+2026-03-22  weekend   Sunday
+2026-03-26  exchange  Shri Ram Navami
+2026-03-28  weekend   Saturday
+2026-03-29  weekend   Sunday
+2026-03-31  exchange  Shri Mahavir Jayanti
+2026-04-03  exchange  Good Friday
+2026-04-04  weekend   Saturday
+2026-04-05  weekend   Sunday
+2026-04-11  weekend   Saturday
+2026-04-12  weekend   Sunday
+2026-04-14  exchange  Dr. Baba Saheb Ambedkar Jayanti
+2026-04-18  weekend   Saturday
+2026-04-19  weekend   Sunday
+2026-04-25  weekend   Saturday
+2026-04-26  weekend   Sunday
+2026-05-01  exchange  Maharashtra Day
+2026-05-02  weekend   Saturday
+2026-05-03  weekend   Sunday
+2026-05-09  weekend   Saturday
+2026-05-10  weekend   Sunday
+2026-05-16  weekend   Saturday
+2026-05-17  weekend   Sunday
+2026-05-23  weekend   Saturday
+2026-05-24  weekend   Sunday
+2026-05-28  exchange  Bakri Eid
+2026-05-30  weekend   Saturday
+2026-05-31  weekend   Sunday
+2026-06-06  weekend   Saturday
+2026-06-07  weekend   Sunday
+2026-06-13  weekend   Saturday
+2026-06-14  weekend   Sunday
+2026-06-20  weekend   Saturday
+2026-06-21  weekend   Sunday
+2026-06-26  exchange  Muharram
+2026-06-27  weekend   Saturday
+2026-06-28  weekend   Sunday
+2026-07-04  weekend   Saturday
+2026-07-05  weekend   Sunday
+2026-07-11  weekend   Saturday
+2026-07-12  weekend   Sunday
+2026-07-18  weekend   Saturday
+2026-07-19  weekend   Sunday
+2026-07-25  weekend   Saturday
+2026-07-26  weekend   Sunday
+2026-08-01  weekend   Saturday
+2026-08-02  weekend   Sunday
+2026-08-08  weekend   Saturday
+2026-08-09  weekend   Sunday
+2026-08-15  weekend   Saturday
+2026-08-16  weekend   Sunday
+2026-08-22  weekend   Saturday
+2026-08-23  weekend   Sunday
+2026-08-29  weekend   Saturday
+2026-08-30  weekend   Sunday
+2026-09-05  weekend   Saturday
+2026-09-06  weekend   Sunday
+2026-09-12  weekend   Saturday
+2026-09-13  weekend   Sunday
+2026-09-14  exchange  Ganesh Chaturthi
+2026-09-19  weekend   Saturday
+2026-09-20  weekend   Sunday
+2026-09-26  weekend   Saturday
+2026-09-27  weekend   Sunday
+2026-10-02  exchange  Mahatma Gandhi Jayanti
+2026-10-03  weekend   Saturday
+2026-10-04  weekend   Sunday
+2026-10-10  weekend   Saturday
+2026-10-11  weekend   Sunday
+2026-10-17  weekend   Saturday
+2026-10-18  weekend   Sunday
+2026-10-20  exchange  Dussehra
+2026-10-24  weekend   Saturday
+2026-10-25  weekend   Sunday
+2026-10-31  weekend   Saturday
+2026-11-01  weekend   Sunday
+2026-11-07  weekend   Saturday
+2026-11-08  weekend   Sunday (also Diwali Laxmi Pujan)
+2026-11-09  exchange  Diwali-Balipratipada
+2026-11-14  weekend   Saturday
+2026-11-15  weekend   Sunday
+2026-11-21  weekend   Saturday
+2026-11-22  weekend   Sunday
+2026-11-24  exchange  Prakash Gurpurb Sri Guru Nanak Dev
+2026-11-28  weekend   Saturday
+2026-11-29  weekend   Sunday
+2026-12-05  weekend   Saturday
+2026-12-06  weekend   Sunday
+2026-12-12  weekend   Saturday
+2026-12-13  weekend   Sunday
+2026-12-19  weekend   Saturday
+2026-12-20  weekend   Sunday
+2026-12-25  exchange  Christmas
+2026-12-26  weekend   Saturday
+2026-12-27  weekend   Sunday
+# ---- 2027 ----
+2027-01-02  weekend   Saturday
+2027-01-03  weekend   Sunday
+2027-01-09  weekend   Saturday
+2027-01-10  weekend   Sunday
+2027-01-16  weekend   Saturday
+2027-01-17  weekend   Sunday
+2027-01-23  weekend   Saturday
+2027-01-24  weekend   Sunday
+2027-01-30  weekend   Saturday
+2027-01-31  weekend   Sunday
+2027-02-06  weekend   Saturday
+2027-02-07  weekend   Sunday
+2027-02-13  weekend   Saturday
+2027-02-14  weekend   Sunday
+2027-02-20  weekend   Saturday
+2027-02-21  weekend   Sunday
+2027-02-27  weekend   Saturday
+2027-02-28  weekend   Sunday
+2027-03-06  weekend   Saturday
+2027-03-07  weekend   Sunday
+2027-03-13  weekend   Saturday
+2027-03-14  weekend   Sunday
+2027-03-20  weekend   Saturday
+2027-03-21  weekend   Sunday
+2027-03-27  weekend   Saturday
+2027-03-28  weekend   Sunday
+2027-04-03  weekend   Saturday
+2027-04-04  weekend   Sunday
+2027-04-10  weekend   Saturday
+2027-04-11  weekend   Sunday
+2027-04-17  weekend   Saturday
+2027-04-18  weekend   Sunday
+2027-04-24  weekend   Saturday
+2027-04-25  weekend   Sunday
+2027-05-01  weekend   Saturday
+2027-05-02  weekend   Sunday
+2027-05-08  weekend   Saturday
+2027-05-09  weekend   Sunday
+2027-05-15  weekend   Saturday
+2027-05-16  weekend   Sunday
+2027-05-22  weekend   Saturday
+2027-05-23  weekend   Sunday
+2027-05-29  weekend   Saturday
+2027-05-30  weekend   Sunday
+2027-06-05  weekend   Saturday
+2027-06-06  weekend   Sunday
+2027-06-12  weekend   Saturday
+2027-06-13  weekend   Sunday
+2027-06-19  weekend   Saturday
+2027-06-20  weekend   Sunday
+2027-06-26  weekend   Saturday
+2027-06-27  weekend   Sunday
+2027-07-03  weekend   Saturday
+2027-07-04  weekend   Sunday
+2027-07-10  weekend   Saturday
+2027-07-11  weekend   Sunday
+2027-07-17  weekend   Saturday
+2027-07-18  weekend   Sunday
+2027-07-24  weekend   Saturday
+2027-07-25  weekend   Sunday
+2027-07-31  weekend   Saturday
+2027-08-01  weekend   Sunday
+2027-08-07  weekend   Saturday
+2027-08-08  weekend   Sunday
+2027-08-14  weekend   Saturday
+2027-08-15  weekend   Sunday
+2027-08-21  weekend   Saturday
+2027-08-22  weekend   Sunday
+2027-08-28  weekend   Saturday
+2027-08-29  weekend   Sunday
+2027-09-04  weekend   Saturday
+2027-09-05  weekend   Sunday
+2027-09-11  weekend   Saturday
+2027-09-12  weekend   Sunday
+2027-09-18  weekend   Saturday
+2027-09-19  weekend   Sunday
+2027-09-25  weekend   Saturday
+2027-09-26  weekend   Sunday
+2027-10-02  weekend   Saturday
+2027-10-03  weekend   Sunday
+2027-10-09  weekend   Saturday
+2027-10-10  weekend   Sunday
+2027-10-16  weekend   Saturday
+2027-10-17  weekend   Sunday
+2027-10-23  weekend   Saturday
+2027-10-24  weekend   Sunday
+2027-10-30  weekend   Saturday
+2027-10-31  weekend   Sunday
+2027-11-06  weekend   Saturday
+2027-11-07  weekend   Sunday
+2027-11-13  weekend   Saturday
+2027-11-14  weekend   Sunday
+2027-11-20  weekend   Saturday
+2027-11-21  weekend   Sunday
+2027-11-27  weekend   Saturday
+2027-11-28  weekend   Sunday
+2027-12-04  weekend   Saturday
+2027-12-05  weekend   Sunday
+2027-12-11  weekend   Saturday
+2027-12-12  weekend   Sunday
+2027-12-18  weekend   Saturday
+2027-12-19  weekend   Sunday
+2027-12-25  weekend   Saturday
+2027-12-26  weekend   Sunday
+# 2027 exchange holidays: pending NSE circular

@@ -1549,6 +1549,36 @@ class ActivityEngine:
                 last[k] = ts
         return acts, last
 
+    def forget_instrument(self, symbol: str, exchange_segment: str, instrument_id: Optional[int]) -> int:
+        """Drops everything the engine holds for one instrument -- its rolling
+        state on every timeframe (indicators, swings, recent candles, pattern
+        and story state) and its today rows in the store -- so its day can be
+        replayed from the candles (gap fill re-run, ALGO-39). Caller holds
+        _flush_lock and _lock (a flush mid-way would save the dropped rows).
+        Returns how many today rows were dropped."""
+        def drop_keys(obj):
+            for value in list(vars(obj).values()):
+                if isinstance(value, dict):
+                    for k in [k for k in value if isinstance(k, tuple) and len(k) >= 2
+                              and k[0] == symbol and k[1] == exchange_segment]:
+                        del value[k]
+        drop_keys(self)
+        if self.pattern_evaluator is not None:
+            drop_keys(self.pattern_evaluator)
+        if self.story is not None:
+            drop_keys(self.story)
+        if instrument_id is None:
+            return 0
+        dropped = 0
+        for name, marker in (("_buffer", "_saved_activities"), ("_indicator_buffer", "_saved_indicators")):
+            rows, saved = getattr(self, name), getattr(self, marker)
+            keep_saved = [r for r in rows[:saved] if r["instrument_id"] != instrument_id]
+            keep_new = [r for r in rows[saved:] if r["instrument_id"] != instrument_id]
+            dropped += len(rows) - len(keep_saved) - len(keep_new)
+            setattr(self, name, keep_saved + keep_new)
+            setattr(self, marker, len(keep_saved))
+        return dropped
+
     def buffered_count(self) -> int:
         """Activities detected but not yet written to the DB."""
         with self._lock:
