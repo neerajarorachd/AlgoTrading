@@ -31,6 +31,7 @@ from db.models import CandleIndicators, InstrumentActivity
 from db.ops import LibActivities, LibCandleIndicators, LibCandles, LibCandlesHistorical, LibSymbols
 from db.session import session_scope
 from feed.candle_aggregator import CandleAggregator
+import market_calendar
 from historical_data_service import ensure_data_available
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,48 @@ def ensure_warmup_history(session_factory, rest_broker, symbol, security_id, exc
     if coverage is not None and _utc(coverage[1]) < start:
         start = _utc(coverage[1])
     ensure_data_available(session_factory, rest_broker, symbol, security_id, exchange_segment, "1min", start, end)
+    fill_history_holes(session_factory, rest_broker, symbol, security_id, exchange_segment, start, end)
+
+
+# (symbol, exchange_segment) -> earlier days already re-asked in this process:
+# a minute the broker never has (no trades) must not cost a call every restart
+# of the same process -- one call per stock per process start at most
+_history_checked: dict = {}
+_CORE_MINUTES = 360  # 09:15-15:14 IST; Dhan has no 15:15-15:29 history for most stocks since 2026-08-03
+
+
+def fill_history_holes(session_factory, rest_broker, symbol, security_id, exchange_segment, start, end) -> int:
+    """Earlier days (ALGO-39): coverage is one range per stock, so a hole
+    INSIDE an older day (the app was down for two hours, a restart skipped a
+    minute) was never seen. Every trading day in [start, end) -- weekends and
+    NSE holidays skipped, market_calendar.py -- missing any 1-min candle
+    09:15-15:14 IST is re-fetched, all such days in ONE call; only the
+    missing minutes are saved. Returns how many were saved."""
+    key = (symbol, exchange_segment)
+    checked = _history_checked.setdefault(key, set())
+    days = [d for d in market_calendar.trading_days(market_calendar.ist_date(start), market_calendar.ist_date(end - timedelta(minutes=1)))
+            if d not in checked]
+    if not days:
+        return 0
+    with session_scope(session_factory) as session:
+        have = {_utc(r.ts) for ops in (LibCandlesHistorical, LibCandles)
+                for r in ops.get_range(session, symbol, exchange_segment, "1min", start, end)}
+    holes = {d: set(market_calendar.session_minutes(d)[:_CORE_MINUTES]) - have for d in days}
+    holes = {d: m for d, m in holes.items() if m}
+    checked.update(days)
+    if not holes:
+        return 0
+    first, last = min(holes), max(holes)
+    fetched = rest_broker.get_historical_data(
+        symbol, security_id, exchange_segment, "1min",
+        datetime.combine(first, time(), tzinfo=timezone.utc), datetime.combine(last + timedelta(days=1), time(), tzinfo=timezone.utc))
+    wanted = set().union(*holes.values())
+    new = [(symbol, exchange_segment, c) for c in fetched if _utc(c.timestamp) in wanted]
+    if new:
+        LibCandlesHistorical.persist_bulk(session_factory, new)
+    logger.info("Gap fill: %s (%s) earlier days %s..%s: %d hole minute(s), %d filled in one call",
+                symbol, exchange_segment, first, last, len(wanted), len(new))
+    return len(new)
 
 
 def _history_1min(session_factory, symbol, exchange_segment, day_start, days: int = WARMUP_DAYS) -> list:
@@ -162,4 +205,40 @@ def prepare_instrument(
         logger.exception("Recovery: engine preparation failed for %s (%s)", symbol, exchange_segment)
 
     logger.info("Recovery: %s (%s) %s", symbol, exchange_segment, summary)
+    return summary
+
+
+def rebuild_today(
+    symbol: str, exchange_segment: str, security_id: str, rest_broker, session_factory, activity_engine,
+    now: datetime | None = None,
+) -> dict:
+    """Re-runs one instrument's day through the engine after gap fill saved
+    minutes BEHIND its last candle (ALGO-39, user's choice 2026-11-02): its
+    signals, patterns and indicator rows for today were computed without
+    them. Drops its engine state and today rows (memory and DB), then runs
+    prepare_instrument again, which warms up on history and records today
+    from the stored candles.
+
+    Holds the engine's flush lock and lock throughout, so a flush can't save
+    the dropped rows and a live candle can't land in the half-built state;
+    other stocks' live candles wait those few seconds. Never raises."""
+    summary = {"skipped": True}
+    if activity_engine is None:
+        return summary
+    now = _utc(now or datetime.now(timezone.utc))
+    day_start = today_start_utc(now)
+    try:
+        with session_scope(session_factory) as session:
+            instrument_id = LibSymbols.get_instrument_id(session, symbol, exchange_segment)
+        with activity_engine._flush_lock, activity_engine._lock:
+            dropped = activity_engine.forget_instrument(symbol, exchange_segment, instrument_id)
+            if instrument_id is not None:
+                LibActivities.delete_for_instrument_since(session_factory, instrument_id, day_start)
+                LibCandleIndicators.delete_for_instrument_since(session_factory, instrument_id, day_start)
+            summary = prepare_instrument(symbol, exchange_segment, security_id, rest_broker, session_factory,
+                                         activity_engine, now=now)
+            summary["dropped"] = dropped
+    except Exception:
+        logger.exception("Gap fill: day re-run failed for %s (%s)", symbol, exchange_segment)
+    logger.info("Gap fill: re-ran today for %s (%s) %s", symbol, exchange_segment, summary)
     return summary
