@@ -122,6 +122,16 @@ export default function MarketWatch() {
   const eventsNeeded = !!signalFilter || showSignalPanel
   const allPatterns = usePatterns()
   const allStrategies = useStrategies()
+  // the filter panel is exactly as tall as the INSTRUMENTS card (user, 2026-11-02)
+  const instrumentsCardRef = useRef(null)
+  const [instrumentsCardHeight, setInstrumentsCardHeight] = useState(null)
+  useEffect(() => {
+    const el = instrumentsCardRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(() => setInstrumentsCardHeight(Math.round(el.getBoundingClientRect().height)))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [activeTabId])
   const joinedRooms = useRef(new Set())
   const restoredOpenSymbols = useRef(false)
   const restoredTabs = useRef(false)
@@ -543,14 +553,29 @@ export default function MarketWatch() {
           </div>
           {/* the INSTRUMENTS card, and the signal filter panel beside it when open (ALGO-37) */}
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 'var(--space-5)' }}>
-          <div data-instruments-card style={{ flex: '1 1 0', minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+          <div ref={instrumentsCardRef} data-instruments-card style={{ flex: '1 1 0', minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
             <div style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
               padding: '10px var(--space-3)', borderBottom: listCollapsed ? 'none' : '1px solid var(--border)',
               fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.03em', color: 'var(--text-faint)',
             }}
             >
-              <span>Instruments</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
+                Instruments
+                {signalFilter && (
+                  <span data-signal-filter-bar
+                    title={`Showing ${visibleSymbols.length} of ${colourFiltered.length} with ${signalFilterName} ${signalWindowText} on any timeframe`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textTransform: 'none', letterSpacing: 0, fontWeight: 500, fontSize: 12, color: 'var(--text-dim)',
+                      padding: '2px 4px 2px 10px', borderRadius: 999, background: 'var(--accent-soft)', border: '1px solid var(--border)' }}
+                  >
+                    <b style={{ color: 'var(--text)', fontWeight: 700 }}>{signalFilterName}</b>
+                    <span>{signalWindowText} · {visibleSymbols.length} of {colourFiltered.length}</span>
+                    <button type="button" onClick={() => setSignalFilter(null)} title="Clear signal filter" aria-label="Clear signal filter"
+                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
+                    >×</button>
+                  </span>
+                )}
+              </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>
                 <ChartToolButton
                   tool="indicators" dataTool="grid-signal-filter" on={showSignalPanel || !!signalFilter}
@@ -593,12 +618,6 @@ export default function MarketWatch() {
                     <Button variant="secondary" onClick={() => setSelectedBucket(null)}>Clear filter</Button>
                   </div>
                 )}
-                {signalFilter && (
-                  <div data-signal-filter-bar style={{ margin: '0 var(--space-3) var(--space-2)', fontSize: 13, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span>Showing <b style={{ color: 'var(--text)' }}>{visibleSymbols.length}</b> of {colourFiltered.length} with <b style={{ color: 'var(--text)' }}>{signalFilterName}</b> {signalWindowText} on any timeframe</span>
-                    <Button variant="secondary" onClick={() => setSignalFilter(null)}>Clear signal filter</Button>
-                  </div>
-                )}
                 <InstrumentGrid
                   symbols={sortedSymbols}
                   liveTicks={liveTicks}
@@ -616,6 +635,7 @@ export default function MarketWatch() {
                   timeframe={colourTimeframe}
                   emptyMessage={signalFilter ? `No instruments${selectedBucket ? ' of this colour' : ''} have ${signalFilterName} ${signalWindowText}` : selectedBucket ? `No instruments are ${selectedBucket.replace('_', ' ')}${colourTimeframe === 'all' ? ' on any timeframe' : ` on ${colourTimeframe.replace('min', 'm')}`} right now` : undefined}
                   showAll={showAllRows}
+                  minRows={signalFilter ? (showAllRows ? colourFiltered.length : Math.min(VISIBLE_ROWS, colourFiltered.length)) : undefined}
                   embedded
                   externalSortMode={sortMode}
                   onColumnSort={() => setSortMode('')}
@@ -638,7 +658,7 @@ export default function MarketWatch() {
           </div>
           {showSignalPanel && (
             <div data-signal-filter-window style={{
-              flex: '0 0 300px', minWidth: 0, maxHeight: 560, overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)',
+              flex: '0 0 300px', minWidth: 0, height: listCollapsed ? 300 : (instrumentsCardHeight ?? 560), overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)', padding: 12, boxSizing: 'border-box',
             }}
             >

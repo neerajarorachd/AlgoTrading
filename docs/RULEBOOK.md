@@ -119,6 +119,9 @@ what has been decided**.
   a time (several = ALGO-38); while on, the grid colours show All (1m/3m/5m)
   and the timeframe bar is locked. Panel numbers = stocks having the item.
   "Last 10 candles / Whole day" applies to the grid and, separately, the chart.
+  The filter panel is exactly as tall as the grid card (scrolls inside); the
+  grid card keeps its height while the filter is on, even with 0 rows; the
+  filter shows as a chip in the card header, not an extra line.
 
 ## 5. Data rules
 

@@ -861,6 +861,14 @@ async function restorePrefs() {
       checkTrue('[ALGO-37] window switch defaults to Whole day',
         await panel.locator('[data-mark-window-option="day"]').getAttribute('aria-checked') === 'true');
       checkTrue('[ALGO-37] no "all" boxes in the one-at-a-time panel', await panel.locator('[data-group-all]').count() === 0);
+      // user, 2026-11-02: the panel is as tall as the grid card (it scrolls inside);
+      // the card keeps its height whatever the filter shows, even 0 rows
+      const cardH = async () => Math.round((await page.locator('[data-instruments-card]').boundingBox()).height);
+      const panelH = async () => Math.round((await panel.boundingBox()).height);
+      await page.waitForTimeout(300);
+      const h0 = await cardH();
+      checkTrue('[ALGO-37] the panel is as tall as the grid card', Math.abs((await panelH()) - h0) <= 2, { card: h0, panel: await panelH() });
+      checkTrue('[ALGO-37] ...and its list scrolls inside it', await panel.locator('[data-filter-panel]').evaluate((el) => getComputedStyle(el).overflowY === 'auto' && el.getBoundingClientRect().bottom <= el.closest('[data-signal-filter-window]').getBoundingClientRect().bottom + 1));
 
       // counts = stocks with each signal (whole day)
       const count = (id) => panel.locator(`[data-hit-count="${id}"]`).innerText().then(Number);
@@ -876,6 +884,7 @@ async function restorePrefs() {
       checkTrue('[ALGO-37] ...with the filter line and its Clear button', await page.locator('[data-signal-filter-bar]').isVisible());
       checkTrue('[ALGO-37] ...the timeframe bar switches to All and is locked',
         await page.locator('[data-timeframe="all"]').getAttribute('aria-checked') === 'true' && await page.locator('[data-timeframe="3min"]').isDisabled());
+      checkTrue('[ALGO-37] fewer rows: the grid card keeps its height', Math.abs((await cardH()) - h0) <= 2, { before: h0, after: await cardH(), rows: want.length });
       checkTrue('[ALGO-37] ...rows show the 1m / 3m / 5m colours', await page.locator('[data-instrument-grid] [data-row-colours="all"]').count() === want.length);
 
       // last 10 candles: numbers and rows follow
@@ -889,6 +898,7 @@ async function restorePrefs() {
         const empty = await eventually(async () => (await gridSymbols()).length === 0, 8000);
         const msg = await page.locator('[data-instrument-grid] td[colspan]').innerText().catch(() => '');
         checkTrue('[ALGO-37] a signal only from earlier today: no rows, with a message', empty && /in the last 10 candles/.test(msg), { oldSig, msg });
+        checkTrue('[ALGO-37] 0 rows: the grid card still keeps its height', Math.abs((await cardH()) - h0) <= 2, { before: h0, after: await cardH() });
         checkTrue('[ALGO-37] picking another signal replaces the first (one at a time)',
           !(await panel.locator(`[data-signal-option="${sig}"] input`).isChecked()) && await panel.locator(`[data-signal-option="${oldSig}"] input`).isChecked());
       } else console.log('SKIP  [ALGO-37] no signal that is only from earlier in the day');

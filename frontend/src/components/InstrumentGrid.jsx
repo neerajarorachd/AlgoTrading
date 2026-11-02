@@ -88,10 +88,12 @@ function compareValues(a, b) {
 // mutually exclusive (one active sort at a time, as in the preview) --
 // a dropdown change clears the column sort here, a header click tells the
 // parent to reset its dropdown.
+// minRows (ALGO-37 follow-up, 2026-11-02): keep the height of this many rows
+// even when fewer show (the signal filter must not shrink the grid).
 export default function InstrumentGrid({
   symbols, liveTicks, backfillStatus, openSymbols, onToggleOpen, onRemove, onOpenTab,
   focusedIndex, onFocusedIndexChange, elements = [], strategies = [], scoreByInstrument = {}, bucketColors = {}, timeframe, emptyMessage,
-  showAll = false, embedded = false, externalSortMode = '', onColumnSort,
+  showAll = false, embedded = false, externalSortMode = '', onColumnSort, minRows,
 }) {
   const containerRef = useRef(null)
   const [popupInstrument, setPopupInstrument] = useState(null)
@@ -139,12 +141,14 @@ export default function InstrumentGrid({
   // A fixed 33px/row assumption showed only ~4.5 once rows carry a
   // Buy/Sell button, which makes them taller.
   const [measuredCap, setMeasuredCap] = useState(null)
+  const rowSize = useRef({ head: ROW_HEIGHT_PX, row: ROW_HEIGHT_PX }) // last measured, for minRows
   useLayoutEffect(() => {
     const el = containerRef.current
     if (!el) return
     const head = el.querySelector('thead')?.offsetHeight ?? 0
     const firstRows = [...el.querySelectorAll('tbody tr')].slice(0, VISIBLE_ROWS)
     if (firstRows.length === 0) return
+    if (!firstRows[0].querySelector('td[colspan]')) rowSize.current = { head, row: firstRows.reduce((sum, tr) => sum + tr.offsetHeight, 0) / firstRows.length }
     setMeasuredCap(head + firstRows.reduce((sum, tr) => sum + tr.offsetHeight, 0))
   })
 
@@ -168,7 +172,8 @@ export default function InstrumentGrid({
       tabIndex={0}
       onKeyDown={handleKeyDown}
       style={{
-        maxHeight: showAll ? 'none' : (measuredCap ?? (VISIBLE_ROWS + 1) * ROW_HEIGHT_PX), overflowY: 'auto', overflowX: 'auto', background: 'var(--surface)',
+        maxHeight: showAll ? 'none' : (measuredCap ?? (VISIBLE_ROWS + 1) * ROW_HEIGHT_PX),
+        minHeight: minRows ? Math.round(rowSize.current.head + minRows * rowSize.current.row) : undefined, overflowY: 'auto', overflowX: 'auto', background: 'var(--surface)',
         border: embedded ? 'none' : '1px solid var(--border)', borderRadius: embedded ? 0 : 'var(--radius-md)', outline: 'none',
       }}
     >
