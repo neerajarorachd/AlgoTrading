@@ -22,7 +22,9 @@ function toggled(list, id) {
 
 // show / onShowChange(tab, on): each tab's "Show on graph" box (2026-10-16),
 // owned by the chart so it applies with the window closed too
-export default function IndicatorPanelTabs({ children, onPatternsChange, onStrategiesChange, show = {}, onShowChange, patternCounts, onOpenReview }) {
+// header (ALGO-37): shown above the tabs (the chart's Last 10 candles / Whole day
+// switch); countUnit: what the pattern counts mean, for their tooltips
+export default function IndicatorPanelTabs({ children, onPatternsChange, onStrategiesChange, show = {}, onShowChange, patternCounts, onOpenReview, header, countUnit }) {
   // the user's last choices (preferences.js). Patterns: every enabled pattern
   // is ticked until the user changes the selection (ALGO-34 default: the chart
   // shows pattern dots, raw events off).
@@ -39,6 +41,7 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
   const count = { patterns: patterns.length, strategies: strategies.length }
   return (
     <div data-indicator-tabs style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
+      {header}
       <div role="tablist" aria-label="Chart marks" style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 10 }}>
         {TABS.map((t) => (
           <button
@@ -62,7 +65,7 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
         {tab === 'signals' && children}
         {tab === 'patterns' && (
           <>
-            <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} onChange={setPatterns} disabled={show.patterns === false} counts={patternCounts} onOpenReview={onOpenReview} />
+            <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} onChange={setPatterns} disabled={show.patterns === false} counts={patternCounts} onOpenReview={onOpenReview} countUnit={countUnit} />
             <Note>Ticked patterns get a dot where they form. Raw signals (Signals tab) are off unless ticked there.</Note>
           </>
         )}

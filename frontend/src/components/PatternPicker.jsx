@@ -7,7 +7,7 @@ import { PATTERN_TYPES, usePatterns } from './patternData.js'
 // onChange(keys) (optional): the whole selection at once -- turns on each
 // group's "all" box. disabled: the list keeps its ticks but can't be changed
 // (the tab's Show is off, 2026-10-16).
-export default function PatternPicker({ selected = [], onToggle, onChange, types = null, enabledOnly = true, showWeight = true, disabled = false, counts, onOpenReview }) {
+export default function PatternPicker({ selected = [], onToggle, onChange, types = null, enabledOnly = true, showWeight = true, disabled = false, counts, onOpenReview, countUnit }) {
   const patterns = usePatterns()
   if (patterns == null) return <Note>Loading patterns…</Note>
   const shown = patterns.filter((p) => (!enabledOnly || p.enabled) && (!types || types.includes(p.pattern_type)))
@@ -35,7 +35,7 @@ export default function PatternPicker({ selected = [], onToggle, onChange, types
                 <span style={{ width: 7, height: 7, borderRadius: '50%', flex: 'none', background: g.color }} />
                 <span style={{ flex: '1 1 auto', minWidth: 0 }}>{p.name}{p.origin === 'user' ? ' · mine' : ''}</span>
                 {showWeight && <span className="num" title="weightage" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{p.weight}</span>}
-                {counts && <HitCount id={`pattern:${p.key}`} count={counts[p.key]} onOpen={onOpenReview && (() => onOpenReview('pattern', p.key, p.name))} />}
+                {counts && <HitCount id={`pattern:${p.key}`} count={counts[p.key]} unit={countUnit} onOpen={onOpenReview && (() => onOpenReview('pattern', p.key, p.name))} />}
               </label>
             ))}
           </div>
@@ -52,15 +52,17 @@ export function setMany(selected, keys, on) {
   return [...next]
 }
 
-// today's count beside an item; clicking it opens the hit review (2026-10-16)
-export function HitCount({ id, count, onOpen }) {
+// today's count beside an item; clicking it opens the hit review (2026-10-16).
+// unit: what the number counts, for the tooltip ("today", "in the last 10
+// candles", "stocks today"... -- ALGO-37)
+export function HitCount({ id, count, onOpen, unit = 'today' }) {
   const n = count ?? 0
   const clickable = !!onOpen && n > 0
   return (
     <button
       type="button" data-hit-count={id} disabled={!clickable}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (clickable) onOpen() }}
-      title={clickable ? `${n} today -- click to see why each one fired` : 'none today'}
+      title={clickable ? `${n} ${unit} -- click to see why each one fired` : n > 0 ? `${n} ${unit}` : `none ${unit}`}
       className="num"
       style={{ minWidth: 24, textAlign: 'right', fontSize: 11.5, border: 'none', background: 'transparent', padding: '0 2px',
         cursor: clickable ? 'pointer' : 'default', color: clickable ? 'var(--accent-text)' : 'var(--text-faint)',

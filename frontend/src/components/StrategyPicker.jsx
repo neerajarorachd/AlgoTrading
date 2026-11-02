@@ -2,11 +2,12 @@
 // picked: the chart's Indicators panel, Strategy Watch. The caller owns the
 // selection (`selected`, an array of strategy ids).
 import { useStrategies } from './patternData.js'
-import { GroupAll, Note, Title, setMany } from './PatternPicker.jsx'
+import { GroupAll, HitCount, Note, Title, setMany } from './PatternPicker.jsx'
 
 // onChange(ids) (optional) turns on the "all" box; disabled keeps the ticks
-// but locks them (the tab's Show is off, 2026-10-16)
-export default function StrategyPicker({ selected = [], onToggle, onChange, title = 'Strategies', disabled = false }) {
+// but locks them (the tab's Show is off, 2026-10-16). counts (optional,
+// ALGO-37): a number per strategy id; without it the column shows "—".
+export default function StrategyPicker({ selected = [], onToggle, onChange, title = 'Strategies', disabled = false, counts, countUnit }) {
   const strategies = useStrategies()
   if (strategies == null) return <Note>Loading strategies…</Note>
   if (!strategies.length) return <Note>No strategies yet.</Note>
@@ -25,8 +26,10 @@ export default function StrategyPicker({ selected = [], onToggle, onChange, titl
         >
           <input type="checkbox" checked={picked.has(s.id)} disabled={disabled} onChange={() => onToggle?.(s.id)} />
           <span style={{ flex: '1 1 auto', minWidth: 0 }}>{s.name}</span>
-          {/* strategies don't mark the chart yet, so there is nothing to count */}
-          <span className="num" data-hit-count={`strategy:${s.id}`} title="strategy marks come later" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>—</span>
+          {/* strategies don't mark the chart yet, so the chart has nothing to count */}
+          {counts
+            ? <HitCount id={`strategy:${s.id}`} count={counts[s.id]} unit={countUnit} />
+            : <span className="num" data-hit-count={`strategy:${s.id}`} title="strategy marks come later" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>—</span>}
         </label>
       ))}
     </div>

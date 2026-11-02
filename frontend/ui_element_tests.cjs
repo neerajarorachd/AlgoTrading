@@ -92,6 +92,29 @@ async function graphOnlyOff(card) {
         barBox && gridBox && (await bar.isVisible()) && barBox.y + barBox.height <= gridBox.y,
         { barBox, gridBox })
 
+      // E22 (2026-11-02, ALGO-37): the signal filter icon is in the
+      // INSTRUMENTS card header; it opens the Signals / Patterns / Strategies
+      // panel on the right of the card, same top; clicking it again closes it.
+      const card = page.locator('[data-instruments-card]')
+      const icon = card.locator('[data-chart-tool="grid-signal-filter"]')
+      const cardBox = (await card.count()) === 1 ? await card.boundingBox() : null
+      const iconBox = (await icon.count()) === 1 ? await icon.boundingBox() : null
+      checkTrue('E22 Workspace: signal filter icon is in the INSTRUMENTS card header, above the grid',
+        cardBox && iconBox && gridBox && (await icon.isVisible())
+          && iconBox.y >= cardBox.y && iconBox.y + iconBox.height <= gridBox.y && iconBox.x + iconBox.width <= cardBox.x + cardBox.width,
+        { cardBox, iconBox, gridBox })
+      const filterWin = page.locator('[data-signal-filter-window]')
+      if (await filterWin.count()) { await icon.click(); await page.waitForTimeout(300) } // a saved open panel: start closed
+      await icon.click()
+      await filterWin.waitFor({ timeout: 5000 }).catch(() => {})
+      const card2 = await card.boundingBox()
+      const winBox = (await filterWin.count()) === 1 ? await filterWin.boundingBox() : null
+      checkTrue('E22 Workspace: the signal filter panel opens on the right of the INSTRUMENTS card, same top',
+        card2 && winBox && winBox.x >= card2.x + card2.width && Math.abs(winBox.y - card2.y) <= 2, { card2, winBox })
+      await icon.click()
+      await page.waitForTimeout(300)
+      checkTrue('E22 Workspace: clicking the icon again closes the panel', (await filterWin.count()) === 0)
+
       await page.close()
     }
 

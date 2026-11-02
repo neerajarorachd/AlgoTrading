@@ -24,11 +24,13 @@ const ICONS = {
   sync: <><rect x="1.5" y="5" width="7.5" height="6" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="7" y="5" width="7.5" height="6" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" /></>,
 }
 
-const ChartToolButton = forwardRef(function ChartToolButton({ tool, label, on, onClick, badge, disabled = false }, ref) {
+// dataTool: the data-chart-tool value when it must differ from `tool` (the
+// Watch grid reuses the "indicators" icon, ALGO-37, without being a chart tool)
+const ChartToolButton = forwardRef(function ChartToolButton({ tool, label, on, onClick, badge, disabled = false, dataTool }, ref) {
   return (
     <button
       ref={ref} type="button" onClick={onClick} disabled={disabled}
-      data-chart-tool={tool} aria-label={label} aria-pressed={on} title={disabled ? `${label} -- hidden while Graph only is on` : label}
+      data-chart-tool={dataTool ?? tool} aria-label={label} aria-pressed={on} title={disabled ? `${label} -- hidden while Graph only is on` : label}
       style={{
         position: 'relative', width: 32, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         border: '1.5px solid', borderRadius: 'var(--radius-md)', cursor: disabled ? 'not-allowed' : 'pointer', padding: 0, opacity: disabled ? 0.4 : 1,

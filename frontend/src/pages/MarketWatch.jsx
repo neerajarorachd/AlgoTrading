@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  getWatchScores, getWatchlist, listStrategies, listStrategyElements, listSymbols, listWatchlists, removeSymbol,
+  getWatchEvents, getWatchScores, getWatchlist, listStrategies, listStrategyElements, listSymbols, listWatchlists, removeSymbol,
 } from '../api/client.js'
 import { getSocket, roomFor, subscribeRooms, unsubscribeRooms } from '../api/ws.js'
 import AddInstrumentButton from '../components/AddInstrumentButton.jsx'
@@ -19,6 +19,10 @@ import PanelToggle from '../components/PanelToggle.jsx'
 import { getPref, setPref, usePreference } from '../preferences.js'
 import GraphWindow from '../components/GraphWindow.jsx'
 import Button from '../components/kit/Button.jsx'
+import ChartToolButton from '../components/ChartToolButton.jsx'
+import SignalFilterPanel from '../components/SignalFilterPanel.jsx'
+import { isMarkWindow, windowUnit } from '../components/MarkWindowToggle.jsx'
+import { usePatterns, useStrategies } from '../components/patternData.js'
 
 const VISIBLE_ROWS = 5 // matches InstrumentGrid's own cap, for the footer's "Showing X of N"
 const MAX_LIVE_EVENTS = 300
@@ -51,6 +55,12 @@ const MAX_OPEN_CHARTS = 4
 const OPEN_SYMBOL_IDS_KEY = 'marketWatch.new.openSymbolIds'
 const OPEN_TAB_IDS_KEY = 'marketWatch.openTabIds'
 const SCREEN_TIMEFRAMES = ['1min', '3min', '5min', 'all']
+// the grid's signal filter (ALGO-37): one signal / pattern / strategy
+const FILTER_KINDS = { signal: 'signals', pattern: 'patterns', strategy: 'strategies' } // -> /api/watch-events keys
+const FILTER_TFS = ['1min', '3min', '5min']
+const EVENTS_REFRESH_MS = 30000 // "last 10 candles" moves with every candle, activity or not
+const isSignalFilter = (v) => v === null || (!!v && typeof v === 'object' && v.kind in FILTER_KINDS && v.key != null)
+const signalLabel = (code) => String(code).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
 
 function loadStoredIds(key) {
   try {
@@ -99,6 +109,19 @@ export default function MarketWatch() {
   // TEMPORARY (replay): each detected pattern adds 1 to a RANDOM color card --
   // the user's own placeholder until the pattern->color rule is decided
   const lastScoresFetch = useRef(0)
+  // signal filter (ALGO-37), saved per user: the picked item, the window and the panel
+  const [signalFilter, setSignalFilter] = usePreference('workspace.signalFilter', null, isSignalFilter)
+  const [signalWindow, setSignalWindow] = usePreference('workspace.signalFilter.window', 'day', isMarkWindow)
+  const [showSignalPanel, setShowSignalPanel] = usePreference('workspace.showSignalPanel', false)
+  const [watchEvents, setWatchEvents] = useState({}) // instrument id -> timeframe -> kind -> key -> count
+  const lastEventsFetch = useRef(0)
+  const signalWindowRef = useRef(signalWindow)
+  signalWindowRef.current = signalWindow
+  // while the signal filter is on, the colours show every timeframe (1m / 3m / 5m)
+  const colourTimeframe = signalFilter ? 'all' : screenTimeframe
+  const eventsNeeded = !!signalFilter || showSignalPanel
+  const allPatterns = usePatterns()
+  const allStrategies = useStrategies()
   const joinedRooms = useRef(new Set())
   const restoredOpenSymbols = useRef(false)
   const restoredTabs = useRef(false)
@@ -139,11 +162,27 @@ export default function MarketWatch() {
 
   const refreshScores = useCallback(() => {
     lastScoresFetch.current = Date.now()
-    getWatchScores(screenTimeframe).then((res) => {
-      if (res.timeframe && res.timeframe !== screenTimeframe) return // a reply for the previous choice
+    getWatchScores(colourTimeframe).then((res) => {
+      if (res.timeframe && res.timeframe !== colourTimeframe) return // a reply for the previous choice
       setScores(res.scores); setBucketColors(res.bucket_colors)
     }).catch(() => {})
-  }, [screenTimeframe])
+  }, [colourTimeframe])
+
+  const refreshEvents = useCallback(() => {
+    if (!eventsNeeded) return
+    lastEventsFetch.current = Date.now()
+    getWatchEvents(signalWindow).then((res) => {
+      if (res.window !== signalWindowRef.current) return // a reply for the previous window
+      setWatchEvents(res.instruments ?? {})
+    }).catch(() => {})
+  }, [eventsNeeded, signalWindow])
+
+  useEffect(() => {
+    refreshEvents()
+    if (!eventsNeeded) return undefined
+    const timer = setInterval(refreshEvents, EVENTS_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [symbols, refreshEvents, eventsNeeded])
 
   function handleScreenTimeframe(tf) {
     setScreenTimeframe(tf)
@@ -159,10 +198,11 @@ export default function MarketWatch() {
       setLiveEvents((prev) => [event, ...prev].slice(0, MAX_LIVE_EVENTS))
       // buckets (and so the Buy/Sell/Hold buttons) follow new activity
       if (Date.now() - lastScoresFetch.current > SCORES_REFRESH_MS) refreshScores()
+      if (Date.now() - lastEventsFetch.current > SCORES_REFRESH_MS) refreshEvents()
     }
     socket.on('activity', onActivity)
     return () => socket.off('activity', onActivity)
-  }, [refreshScores])
+  }, [refreshScores, refreshEvents])
 
   const scoreByInstrument = useMemo(
     () => Object.fromEntries(scores.map((r) => [r.instrument_id, r])),
@@ -173,14 +213,46 @@ export default function MarketWatch() {
   // timeframe (1m · 3m · 5m), so the filter keeps a stock that has the colour
   // on ANY timeframe -- the most timeframes first -- not only stocks whose
   // combined colour it is (that showed 0 rows under a 0 · 1 · 0 tile, 2026-10-16).
-  const visibleSymbols = useMemo(() => {
+  const colourFiltered = useMemo(() => {
     if (!selectedBucket) return symbols
     const tfsWith = (s) => ['1min', '3min', '5min'].filter((t) => scoreByInstrument[s.id]?.by_timeframe?.[t]?.colour === selectedBucket).length
-    const has = screenTimeframe === 'all' ? (s) => tfsWith(s) > 0 : (s) => scoreByInstrument[s.id]?.bucket === selectedBucket
+    const has = colourTimeframe === 'all' ? (s) => tfsWith(s) > 0 : (s) => scoreByInstrument[s.id]?.bucket === selectedBucket
     return symbols
       .filter(has)
-      .sort((a, b) => (screenTimeframe === 'all' ? tfsWith(b) - tfsWith(a) : 0) || withinColour(scoreByInstrument[a.id], scoreByInstrument[b.id]))
-  }, [symbols, selectedBucket, scoreByInstrument, screenTimeframe])
+      .sort((a, b) => (colourTimeframe === 'all' ? tfsWith(b) - tfsWith(a) : 0) || withinColour(scoreByInstrument[a.id], scoreByInstrument[b.id]))
+  }, [symbols, selectedBucket, scoreByInstrument, colourTimeframe])
+
+  // The signal filter (ALGO-37), on top of the colour filter: only the stocks
+  // where the picked item formed in the window, on any of 1m / 3m / 5m --
+  // the most timeframes first (stable otherwise).
+  const visibleSymbols = useMemo(() => {
+    if (!signalFilter) return colourFiltered
+    const kind = FILTER_KINDS[signalFilter.kind]
+    const tfsWith = (s) => FILTER_TFS.filter((tf) => (watchEvents[s.id]?.[tf]?.[kind]?.[signalFilter.key] ?? 0) > 0).length
+    return colourFiltered
+      .map((s, i) => ({ s, i, n: tfsWith(s) }))
+      .filter((x) => x.n > 0)
+      .sort((x, y) => (selectedBucket ? 0 : y.n - x.n) || x.i - y.i)
+      .map((x) => x.s)
+  }, [colourFiltered, signalFilter, watchEvents, selectedBucket])
+
+  // the panel's numbers: how many stocks have each item (any timeframe)
+  const filterCounts = useMemo(() => {
+    const out = { signal: {}, pattern: {}, strategy: {} }
+    for (const byTf of Object.values(watchEvents)) {
+      for (const [k, plural] of Object.entries(FILTER_KINDS)) {
+        const keys = new Set(FILTER_TFS.flatMap((tf) => Object.keys(byTf?.[tf]?.[plural] ?? {})))
+        keys.forEach((key) => { out[k][key] = (out[k][key] ?? 0) + 1 })
+      }
+    }
+    return out
+  }, [watchEvents])
+
+  const signalFilterName = !signalFilter ? null
+    : signalFilter.kind === 'pattern' ? (allPatterns?.find((p) => p.key === signalFilter.key)?.name ?? signalLabel(signalFilter.key))
+      : signalFilter.kind === 'strategy' ? (allStrategies?.find((x) => String(x.id) === String(signalFilter.key))?.name ?? `strategy ${signalFilter.key}`)
+        : signalLabel(signalFilter.key)
+  const signalWindowText = windowUnit(signalWindow)
 
   // The Sort dropdown, applied on top of the bucket filter above. Stable:
   // equal values keep registration order; missing values always sort last.
@@ -466,9 +538,12 @@ export default function MarketWatch() {
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
             <PanelToggle id="events" label="Events" on={showEventsPanel} onToggle={setShowEventsPanel}
               title={showEventsPanel ? 'Live patterns & indicators panel: shown (click to hide)' : 'Live patterns & indicators panel: hidden (click to show) -- events keep being collected'} />
-            <TimeframeBar value={screenTimeframe} onChange={handleScreenTimeframe} />
+            <TimeframeBar value={colourTimeframe} onChange={handleScreenTimeframe}
+              lockedReason={signalFilter ? 'The signal filter shows every timeframe (1m · 3m · 5m) -- clear it to pick one' : undefined} />
           </div>
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-5)' }}>
+          {/* the INSTRUMENTS card, and the signal filter panel beside it when open (ALGO-37) */}
+          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 'var(--space-5)' }}>
+          <div data-instruments-card style={{ flex: '1 1 0', minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
             <div style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
               padding: '10px var(--space-3)', borderBottom: listCollapsed ? 'none' : '1px solid var(--border)',
@@ -477,6 +552,12 @@ export default function MarketWatch() {
             >
               <span>Instruments</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>
+                <ChartToolButton
+                  tool="indicators" dataTool="grid-signal-filter" on={showSignalPanel || !!signalFilter}
+                  onClick={() => setShowSignalPanel((v) => !v)}
+                  badge={signalFilter ? '1' : null}
+                  label={showSignalPanel ? 'Signal filter panel: shown (click to hide; the filter stays on)' : 'Filter the grid by a signal, pattern or strategy'}
+                />
                 <select
                   value={sortMode} onChange={(e) => setSortMode(e.target.value)} title="Sort instruments" aria-label="Sort instruments"
                   style={{ fontSize: 11.5, padding: '3px 6px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'var(--surface)', color: 'var(--text-dim)' }}
@@ -501,15 +582,21 @@ export default function MarketWatch() {
                 {scores.length > 0 && (
                   <div style={{ padding: 'var(--space-3) var(--space-3) 0' }}>
                     <ScoreGrid
-                      scores={scores} bucketColors={bucketColors} timeframe={screenTimeframe}
+                      scores={scores} bucketColors={bucketColors} timeframe={colourTimeframe}
                       selectedBucket={selectedBucket} onSelectBucket={setSelectedBucket}
                     />
                   </div>
                 )}
                 {selectedBucket && (
                   <div style={{ margin: '0 var(--space-3) var(--space-2)', fontSize: 13, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Showing <b style={{ color: 'var(--text)' }}>{visibleSymbols.length}</b> of {symbols.length}{screenTimeframe === 'all' ? ' with this colour on any timeframe' : ''}, sorted by {selectedBucket.replace('_', ' ')}
+                    Showing <b style={{ color: 'var(--text)' }}>{colourFiltered.length}</b> of {symbols.length}{colourTimeframe === 'all' ? ' with this colour on any timeframe' : ''}, sorted by {selectedBucket.replace('_', ' ')}
                     <Button variant="secondary" onClick={() => setSelectedBucket(null)}>Clear filter</Button>
+                  </div>
+                )}
+                {signalFilter && (
+                  <div data-signal-filter-bar style={{ margin: '0 var(--space-3) var(--space-2)', fontSize: 13, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span>Showing <b style={{ color: 'var(--text)' }}>{visibleSymbols.length}</b> of {colourFiltered.length} with <b style={{ color: 'var(--text)' }}>{signalFilterName}</b> {signalWindowText} on any timeframe</span>
+                    <Button variant="secondary" onClick={() => setSignalFilter(null)}>Clear signal filter</Button>
                   </div>
                 )}
                 <InstrumentGrid
@@ -526,8 +613,8 @@ export default function MarketWatch() {
                   strategies={strategies}
                   scoreByInstrument={scoreByInstrument}
                   bucketColors={bucketColors}
-                  timeframe={screenTimeframe}
-                  emptyMessage={selectedBucket ? `No instruments are ${selectedBucket.replace('_', ' ')}${screenTimeframe === 'all' ? ' on any timeframe' : ` on ${screenTimeframe.replace('min', 'm')}`} right now` : undefined}
+                  timeframe={colourTimeframe}
+                  emptyMessage={signalFilter ? `No instruments${selectedBucket ? ' of this colour' : ''} have ${signalFilterName} ${signalWindowText}` : selectedBucket ? `No instruments are ${selectedBucket.replace('_', ' ')}${colourTimeframe === 'all' ? ' on any timeframe' : ` on ${colourTimeframe.replace('min', 'm')}`} right now` : undefined}
                   showAll={showAllRows}
                   embedded
                   externalSortMode={sortMode}
@@ -548,6 +635,20 @@ export default function MarketWatch() {
                 </div>
               </>
             )}
+          </div>
+          {showSignalPanel && (
+            <div data-signal-filter-window style={{
+              flex: '0 0 300px', minWidth: 0, maxHeight: 560, overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)', padding: 12, boxSizing: 'border-box',
+            }}
+            >
+              <SignalFilterPanel
+                selected={signalFilter} onSelect={setSignalFilter}
+                window={signalWindow} onWindowChange={setSignalWindow}
+                counts={filterCounts} onClose={() => setShowSignalPanel(false)}
+              />
+            </div>
+          )}
           </div>
           {showEventsPanel && <LiveEventsPanel events={liveEvents} timeframe={screenTimeframe} />}
           {openSymbols.length > 0 && (
