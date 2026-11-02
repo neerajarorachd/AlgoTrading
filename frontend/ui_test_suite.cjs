@@ -961,6 +961,53 @@ async function restorePrefs() {
       await cw.locator('[data-mark-window-option="day"]').click();
       await page.waitForTimeout(600);
       checkTrue('[ALGO-37] chart: Whole day brings them back', await sumCounts() === pDay && await dots() === dDay);
+
+      // "Follow grid filter" (user, 2026-11-02): one switch on the chart panel;
+      // on = only the grid's item, ticks locked, grid's window; off = own ticks back
+      const follow = win.locator('[data-follow-grid] input');
+      checkTrue('[FOLLOW] the chart panel has the Follow grid filter switch, off by default',
+        await follow.count() === 1 && !(await follow.isChecked()));
+      await win.locator('[data-panel-tab="signals"]').click();
+      await win.locator('[data-signal-option]').first().waitFor({ timeout: 10000 }).catch(() => {});
+      const ticked = async (attr) => win.locator(`[${attr}]`).evaluateAll((els, a) => els.filter((e) => e.querySelector('input').checked).map((e) => e.getAttribute(a)), attr);
+      // own ticks: tick two signals so there is something to restore
+      const sigCodes = await win.locator('[data-signal-option]').evaluateAll((els) => els.map((e) => e.dataset.signalOption));
+      for (const c of sigCodes.slice(0, 2)) await win.locator(`[data-signal-option="${c}"] input`).check();
+      const ownSignals = (await ticked('data-signal-option')).sort();
+      await win.locator('[data-panel-tab="patterns"]').click();
+      await win.locator('[data-pattern-option]').first().waitFor({ timeout: 10000 }).catch(() => {});
+      const ownPatterns = (await ticked('data-pattern-option')).sort();
+      // pick a grid item: the grid panel's last listed signal
+      const gp = page.locator('[data-signal-filter-window]');
+      if (!(await gp.count())) await page.locator('[data-chart-tool="grid-signal-filter"]').click();
+      await gp.waitFor({ timeout: 5000 });
+      await gp.locator('[data-filter-tab="signal"]').click();
+      await gp.locator('[data-signal-option]').first().waitFor({ timeout: 10000 }).catch(() => {});
+      const gridCodes = await gp.locator('[data-signal-option]').evaluateAll((els) => els.map((e) => e.dataset.signalOption));
+      const gridItem = gridCodes[gridCodes.length - 1];
+      await gp.locator(`[data-signal-option="${gridItem}"] input`).check();
+      await gp.locator('[data-mark-window-option="last10"]').click();
+      await follow.check();
+      await page.waitForTimeout(500);
+      await win.locator('[data-panel-tab="signals"]').click();
+      const followSignals = await ticked('data-signal-option');
+      checkTrue('[FOLLOW] on: the chart ticks only the grid\'s item', JSON.stringify(followSignals) === JSON.stringify([gridItem]), { followSignals, gridItem });
+      checkTrue('[FOLLOW] on: the chart\'s ticks are locked', await win.locator(`[data-signal-option="${gridItem}"] input`).isDisabled());
+      checkTrue('[FOLLOW] on: the chart uses the grid\'s window (Last 10 candles), switch locked',
+        await cw.locator('[data-mark-window-option="last10"]').getAttribute('aria-checked') === 'true' && await cw.locator('[data-mark-window-option="day"]').isDisabled());
+      await win.locator('[data-panel-tab="patterns"]').click();
+      checkTrue('[FOLLOW] on: no pattern ticked (the grid item is a signal)', (await ticked('data-pattern-option')).length === 0);
+      await follow.uncheck();
+      await page.waitForTimeout(500);
+      const backPatterns = (await ticked('data-pattern-option')).sort();
+      await win.locator('[data-panel-tab="signals"]').click();
+      const backSignals = (await ticked('data-signal-option')).sort();
+      checkTrue('[FOLLOW] off: the chart\'s own ticks and window come back',
+        JSON.stringify(backSignals) === JSON.stringify(ownSignals) && JSON.stringify(backPatterns) === JSON.stringify(ownPatterns)
+          && await cw.locator('[data-mark-window-option="day"]').getAttribute('aria-checked') === 'true',
+        { ownSignals, backSignals, ownPatterns: ownPatterns.length, backPatterns: backPatterns.length });
+      await gp.locator('[data-mark-window-option="day"]').click();
+      for (const c of sigCodes.slice(0, 2)) await win.locator(`[data-signal-option="${c}"] input`).uncheck();
     }
     checkTrue('[ALGO-37] no page errors', errors.length === 0, errors);
     await page.close();

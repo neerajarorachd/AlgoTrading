@@ -182,7 +182,7 @@ const PATTERN_DOT_COLOR = { bullish: '#1f9d55', bearish: '#d64545', caution: '#e
 
 export default function CandleChart({
   instrument, fillHeight = false, depthOpen, onToggleDepth, onControlsWidthChange,
-  depthMode, onCycleDepth, screenTimeframe, sidePanel, bottomPanel,
+  depthMode, onCycleDepth, screenTimeframe, sidePanel, bottomPanel, pageFilter,
 }) {
   const containerRef = useRef(null)
   const stackRef = useRef(null)
@@ -229,15 +229,29 @@ export default function CandleChart({
   // "Last 10 candles / Whole day" (ALGO-37), saved per user: the counts and
   // the marks cover only the last 10 candles, or (default, as before) everything
   const [markWindow, setMarkWindowState] = useState(() => (isMarkWindow(getPref('chart.markWindow', 'day')) ? getPref('chart.markWindow', 'day') : 'day'))
-  const markWindowRef = useRef(markWindow)
-  markWindowRef.current = markWindow
+  // "Follow grid filter" (2026-11-02): one switch for every chart, saved per
+  // user. On, and the grid has a signal filter -> the chart marks only that
+  // item, in the grid's window; its own ticks/window stay saved for when it's off.
+  // pageFilter = { item: {kind, key} | null, window } (Workspace only).
+  const [followGrid, setFollowGridState] = useState(() => getPref('chart.followGridFilter', false) === true)
+  const setFollowGrid = (on) => { setPref('chart.followGridFilter', on); setFollowGridState(on) }
+  const following = !!pageFilter && followGrid && !!pageFilter.item
+  const followed = following ? pageFilter.item : null
+  const effWindow = following ? (pageFilter.window ?? 'day') : markWindow
+  const markWindowRef = useRef(effWindow)
+  markWindowRef.current = effWindow
   const setMarkWindow = (w) => { setPref('chart.markWindow', w); setMarkWindowState(w) }
   // a count's click: open the hit review for this stock as a Workspace tab
   const reviewFor = (kind, key, name) => openReview({ kind, key, name, symbol: instrument.symbol, exchange_segment: instrument.exchange_segment })
   const allSignals = useSignals()
-  const effectiveSignals = selectedSignals ?? (allSignals ?? [])
+  const ownSignals = selectedSignals ?? (allSignals ?? [])
     .filter((sig) => (sig.kind === 'indicator' ? isOn('signals', false) : isOn('patterns', false)))
     .map((sig) => sig.code)
+  const effectiveSignals = following ? (followed.kind === 'signal' ? [followed.key] : []) : ownSignals
+  const followOverride = following ? {
+    patterns: followed.kind === 'pattern' ? [followed.key] : [],
+    strategies: followed.kind === 'strategy' ? [followed.key] : [],
+  } : null
   // each tab's "Show on graph" box (2026-10-16): off hides its marks, keeps its ticks
   const [showMarks, setShowMarks] = useState(() => ({
     signals: getPref('chart.showSignals', true) !== false,
@@ -259,7 +273,7 @@ export default function CandleChart({
   }
   const signalsKey = effectiveSignals.join(',')
   useEffect(() => { refreshMarkers() }, [signalsKey]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { recountMarks(); refreshMarkers() }, [markWindow]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { recountMarks(); refreshMarkers() }, [effWindow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const savedTf = getPref('chart.timeframe', '1min')
   const [syncTf, setSyncTfState] = useState(() => getPref('chart.syncTimeframe', true) !== false)
@@ -1421,9 +1435,23 @@ export default function CandleChart({
       >
         {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
         <IndicatorPanelTabs show={showMarks} onShowChange={setShowMark} patternCounts={patternCounts} onOpenReview={reviewFor}
-          header={<MarkWindowToggle id="chart" value={markWindow} onChange={setMarkWindow} />} countUnit={windowUnit(markWindow)} onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
-          <SignalPicker selected={effectiveSignals} onChange={setSelectedSignals} counts={signalCounts} disabled={!showMarks.signals} onOpenReview={reviewFor} countUnit={windowUnit(markWindow)}
-            note={markWindow === 'last10' ? 'Ticked signals get a dot where they occur. The numbers count the last 10 candles on this timeframe; click one to see each occurrence.' : undefined} />
+          override={followOverride}
+          header={(
+            <>
+              {pageFilter && (
+                <label data-follow-grid title={followGrid ? 'Following the grid filter (untick to bring back this chart\x27s own ticks)' : 'Mark only the item picked in the grid\x27s signal filter'}
+                  style={{ display: 'flex', flex: 'none', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: 'var(--text)', cursor: 'pointer', marginBottom: 8 }}
+                >
+                  <input type="checkbox" checked={followGrid} onChange={() => setFollowGrid(!followGrid)} />
+                  Follow grid filter
+                  {followGrid && <span style={{ fontWeight: 500, color: 'var(--text-faint)' }}>{pageFilter.item ? '(locked to the grid\x27s item)' : '(no grid item picked)'}</span>}
+                </label>
+              )}
+              <MarkWindowToggle id="chart" value={effWindow} onChange={setMarkWindow} disabled={following} disabledTitle="Following the grid filter\x27s window" />
+            </>
+          )} countUnit={windowUnit(effWindow)} onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
+          <SignalPicker selected={effectiveSignals} onChange={setSelectedSignals} counts={signalCounts} disabled={!showMarks.signals || following} onOpenReview={reviewFor} countUnit={windowUnit(effWindow)}
+            note={effWindow === 'last10' ? 'Ticked signals get a dot where they occur. The numbers count the last 10 candles on this timeframe; click one to see each occurrence.' : undefined} />
         </IndicatorPanelTabs>
       </div>
     )

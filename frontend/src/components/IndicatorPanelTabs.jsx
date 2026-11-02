@@ -24,7 +24,10 @@ function toggled(list, id) {
 // owned by the chart so it applies with the window closed too
 // header (ALGO-37): shown above the tabs (the chart's Last 10 candles / Whole day
 // switch); countUnit: what the pattern counts mean, for their tooltips
-export default function IndicatorPanelTabs({ children, onPatternsChange, onStrategiesChange, show = {}, onShowChange, patternCounts, onOpenReview, header, countUnit }) {
+// override (2026-11-02): { patterns, strategies } shown and reported instead of
+// the saved ticks while the chart follows the grid filter -- the saved ticks
+// stay untouched and come back when it stops; the lists are locked meanwhile.
+export default function IndicatorPanelTabs({ children, onPatternsChange, onStrategiesChange, show = {}, onShowChange, patternCounts, onOpenReview, header, countUnit, override }) {
   // the user's last choices (preferences.js). Patterns: every enabled pattern
   // is ticked until the user changes the selection (ALGO-34 default: the chart
   // shows pattern dots, raw events off).
@@ -32,13 +35,16 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
   const [storedPatterns, setPatterns] = usePreference('chart.selectedPatterns.v2', null, (v) => v === null || isList(v))
   const [strategies, setStrategies] = usePreference('chart.selectedStrategies', [], isList)
   const allPatterns = usePatterns()
-  const patterns = storedPatterns ?? (allPatterns ? allPatterns.filter((p) => p.enabled).map((p) => p.key) : [])
+  const ownPatterns = storedPatterns ?? (allPatterns ? allPatterns.filter((p) => p.enabled).map((p) => p.key) : [])
+  const patterns = override ? override.patterns : ownPatterns
+  const shownStrategies = override ? override.strategies : strategies
   const patternsKey = patterns.join(',')
+  const strategiesKey = shownStrategies.join(',')
 
   useEffect(() => { onPatternsChange?.(patterns) }, [patternsKey]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { onStrategiesChange?.(strategies) }, [strategies]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onStrategiesChange?.(shownStrategies) }, [strategiesKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const count = { patterns: patterns.length, strategies: strategies.length }
+  const count = { patterns: patterns.length, strategies: shownStrategies.length }
   return (
     <div data-indicator-tabs style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
       {header}
@@ -65,13 +71,13 @@ export default function IndicatorPanelTabs({ children, onPatternsChange, onStrat
         {tab === 'signals' && children}
         {tab === 'patterns' && (
           <>
-            <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} onChange={setPatterns} disabled={show.patterns === false} counts={patternCounts} onOpenReview={onOpenReview} countUnit={countUnit} />
+            <PatternPicker selected={patterns} onToggle={(key) => setPatterns(toggled(patterns, key))} onChange={setPatterns} disabled={show.patterns === false || !!override} counts={patternCounts} onOpenReview={onOpenReview} countUnit={countUnit} />
             <Note>Ticked patterns get a dot where they form. Raw signals (Signals tab) are off unless ticked there.</Note>
           </>
         )}
         {tab === 'strategies' && (
           <>
-            <StrategyPicker selected={strategies} onToggle={(id) => setStrategies((prev) => toggled(prev, id))} onChange={setStrategies} disabled={show.strategies === false} />
+            <StrategyPicker selected={shownStrategies} onToggle={(id) => setStrategies((prev) => toggled(prev, id))} onChange={setStrategies} disabled={show.strategies === false || !!override} />
             <Note>Strategy entries and exits are marked once strategies use patterns.</Note>
           </>
         )}
