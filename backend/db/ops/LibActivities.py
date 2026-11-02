@@ -247,19 +247,3 @@ def persist_one(session_factory, row: dict) -> None:
             session.commit()
         except IntegrityError:
             session.rollback()
-
-
-def delete_for_instrument_since(session_factory, instrument_id: int, since: datetime) -> int:
-    """Removes one instrument's activity rows from `since` on, and zeroes its
-    daily counts for those days -- before its day is re-run through the engine
-    after a gap fill (ALGO-39), whose flush writes them again."""
-    since_naive = _naive_utc(since)
-    with session_scope(session_factory) as session:
-        n = session.query(InstrumentActivity).filter(
-            InstrumentActivity.instrument_id == instrument_id, InstrumentActivity.ts >= since_naive,
-        ).delete(synchronize_session=False)
-        session.query(InstrumentActivityDailyCount).filter(
-            InstrumentActivityDailyCount.instrument_id == instrument_id,
-            InstrumentActivityDailyCount.trading_date >= _trading_date(since),
-        ).delete(synchronize_session=False)
-    return n

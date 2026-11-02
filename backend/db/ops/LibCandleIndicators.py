@@ -104,12 +104,3 @@ def persist_one(session_factory, row: dict) -> None:
             session.commit()
         except IntegrityError:
             session.rollback()
-
-
-def delete_for_instrument_since(session_factory, instrument_id: int, since) -> int:
-    """Removes one instrument's indicator rows from `since` on (gap fill
-    re-run of its day, ALGO-39)."""
-    with session_scope(session_factory) as session:
-        return session.query(CandleIndicators).filter(
-            CandleIndicators.instrument_id == instrument_id, CandleIndicators.ts >= _naive_utc(since),
-        ).delete(synchronize_session=False)
