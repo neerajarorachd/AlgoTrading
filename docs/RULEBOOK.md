@@ -56,7 +56,9 @@ what has been decided**.
   (VM SQL Server over the tunnel) + Vite on 5173. Test = backend 5055 with
   the seeded `local_dev_test.db` + Vite 5174
   (`D:\AI Trading\test-stack\launch_test_stack.py`). Test data never reaches
-  the live stack. Browser tests on live are read-only.
+  the live stack. Browser tests on live are read-only. `--replay --as-today`
+  replays the test candles dated today (needed for the grid signal filter
+  tests; chart marks bunch up in that mode).
 - **Live restarts:** don't restart the live app during market hours without
   the user's OK. A restart loses nothing (15-minute saves + recovery), but
   saved hits keep the old rule after a rule change.
@@ -113,6 +115,10 @@ what has been decided**.
 - Know which surface you are on: a Claude artifact preview is not the real
   app (`frontend/`). Confirm before testing or reporting bugs.
 - Charts: `lightweight-charts` from jsdelivr (cdnjs 404s).
+- **Grid signal filter (ALGO-37, 11-02):** one signal / pattern / strategy at
+  a time (several = ALGO-38); while on, the grid colours show All (1m/3m/5m)
+  and the timeframe bar is locked. Panel numbers = stocks having the item.
+  "Last 10 candles / Whole day" applies to the grid and, separately, the chart.
 
 ## 5. Data rules
 

@@ -43,6 +43,7 @@ import IndicatorStrip from './IndicatorStrip.jsx'
 import SignalPicker from './SignalPicker.jsx'
 import { prefetchPatterns, prefetchSignals, prefetchStrategies, usePatterns, useSignals } from './patternData.js'
 import { eventTime, humanize, indexData, shapesForEvents, shapesToSvg, snapToCandles } from './chartDiagrams.js'
+import MarkWindowToggle, { isMarkWindow, windowUnit } from './MarkWindowToggle.jsx'
 
 const TIMEFRAMES = ['1min', '3min', '5min']
 const MAIN_HEIGHT = 260
@@ -225,6 +226,12 @@ export default function CandleChart({
   const [selectedSignals, setSelectedSignalsState] = useState(() => getPref('chart.selectedSignals', null))
   const [signalCounts, setSignalCounts] = useState({}) // today's count per signal code
   const [patternCounts, setPatternCounts] = useState({}) // today's count per pattern key
+  // "Last 10 candles / Whole day" (ALGO-37), saved per user: the counts and
+  // the marks cover only the last 10 candles, or (default, as before) everything
+  const [markWindow, setMarkWindowState] = useState(() => (isMarkWindow(getPref('chart.markWindow', 'day')) ? getPref('chart.markWindow', 'day') : 'day'))
+  const markWindowRef = useRef(markWindow)
+  markWindowRef.current = markWindow
+  const setMarkWindow = (w) => { setPref('chart.markWindow', w); setMarkWindowState(w) }
   // a count's click: open the hit review for this stock as a Workspace tab
   const reviewFor = (kind, key, name) => openReview({ kind, key, name, symbol: instrument.symbol, exchange_segment: instrument.exchange_segment })
   const allSignals = useSignals()
@@ -252,6 +259,7 @@ export default function CandleChart({
   }
   const signalsKey = effectiveSignals.join(',')
   useEffect(() => { refreshMarkers() }, [signalsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { recountMarks(); refreshMarkers() }, [markWindow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const savedTf = getPref('chart.timeframe', '1min')
   const [syncTf, setSyncTfState] = useState(() => getPref('chart.syncTimeframe', true) !== false)
@@ -969,17 +977,30 @@ export default function CandleChart({
 
   function applyMarkers(rows) {
     allEventsRef.current = rows
-    // readout counts: the current session only
-    const current = currentRows.current.markers
+    recountMarks()
+    refreshMarkers()
+  }
+
+  // the first bar time (unix s) inside "last 10 candles", or null for the whole day
+  function markCutoff() {
+    if (markWindowRef.current !== 'last10') return null
+    const candles = lastCandles.current
+    if (!candles.length) return null
+    return toUnix(candles[candles.length - 1].ts) - 9 * 60 * (TF_MINUTES[timeframeRef.current] ?? 1)
+  }
+
+  // readout counts: the current session only (ALGO-37: its last 10 candles)
+  function recountMarks() {
+    const cut = markCutoff()
     const counts = {}
     const pcounts = {}
-    for (const r of current) {
+    for (const r of currentRows.current.markers) {
+      if (cut != null && toUnix(r.ts) < cut) continue
       if (r.activity_type === 'pattern') pcounts[r.activity] = (pcounts[r.activity] ?? 0) + 1
       else counts[r.activity] = (counts[r.activity] ?? 0) + 1
     }
     setSignalCounts(counts)
     setPatternCounts(pcounts)
-    refreshMarkers()
   }
 
   // ONE dot per candle with any shown event (ALGO-25), coloured by the net
@@ -991,7 +1012,9 @@ export default function CandleChart({
     // can fall where no candle exists); re-snapped whenever candles change
     snappedEventsRef.current = snapToCandles(allEventsRef.current, lastCandles.current)
     const byTime = new Map()
+    const cut = markCutoff()
     for (const r of snappedEventsRef.current) {
+      if (cut != null && eventTime(r) < cut) continue
       const shown = r.activity_type === 'pattern' ? shownPatterns.has(r.activity) : shownSignals.has(r.activity)
       if (!shown) continue
       const t = eventTime(r)
@@ -1397,8 +1420,10 @@ export default function CandleChart({
         }}
       >
         {/* ALGO-34: three tabs -- Indicators (unchanged content), Patterns, Strategies */}
-        <IndicatorPanelTabs show={showMarks} onShowChange={setShowMark} patternCounts={patternCounts} onOpenReview={reviewFor} onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
-          <SignalPicker selected={effectiveSignals} onChange={setSelectedSignals} counts={signalCounts} disabled={!showMarks.signals} onOpenReview={reviewFor} />
+        <IndicatorPanelTabs show={showMarks} onShowChange={setShowMark} patternCounts={patternCounts} onOpenReview={reviewFor}
+          header={<MarkWindowToggle id="chart" value={markWindow} onChange={setMarkWindow} />} countUnit={windowUnit(markWindow)} onPatternsChange={(keys) => { selectedPatternsRef.current = keys; refreshMarkers() }} onStrategiesChange={(ids) => { selectedStrategiesRef.current = ids }}>
+          <SignalPicker selected={effectiveSignals} onChange={setSelectedSignals} counts={signalCounts} disabled={!showMarks.signals} onOpenReview={reviewFor} countUnit={windowUnit(markWindow)}
+            note={markWindow === 'last10' ? 'Ticked signals get a dot where they occur. The numbers count the last 10 candles on this timeframe; click one to see each occurrence.' : undefined} />
         </IndicatorPanelTabs>
       </div>
     )

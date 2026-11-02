@@ -9,7 +9,9 @@ import { GroupAll, HitCount, Note, Title } from './PatternPicker.jsx'
 
 const label = (code) => code.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
 
-export default function SignalPicker({ selected = [], onChange, counts = {}, disabled = false, onOpenReview }) {
+// groupAll=false hides the groups' "all" boxes (the Watch grid's one-at-a-time
+// filter, ALGO-37); note / countUnit replace the chart's wording there.
+export default function SignalPicker({ selected = [], onChange, counts = {}, disabled = false, onOpenReview, groupAll = true, note, countUnit }) {
   const signals = useSignals()
   if (signals == null) return <Note>Loading signals…</Note>
   if (!signals.length) return <Note>No signals.</Note>
@@ -29,7 +31,7 @@ export default function SignalPicker({ selected = [], onChange, counts = {}, dis
           <div key={g.key} data-signal-group={g.key} style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <Title>{g.label}</Title>
-              <GroupAll id={`signal-${g.key}`} label={g.label} keys={codes} picked={picked} disabled={disabled} onSet={(on) => set(codes, on)} />
+              {groupAll && <GroupAll id={`signal-${g.key}`} label={g.label} keys={codes} picked={picked} disabled={disabled} onSet={(on) => set(codes, on)} />}
             </div>
             {rows.map((s) => (
               <label key={s.code} data-signal-option={s.code} title={s.description}
@@ -38,13 +40,13 @@ export default function SignalPicker({ selected = [], onChange, counts = {}, dis
               >
                 <input type="checkbox" checked={picked.has(s.code)} disabled={disabled} onChange={() => set([s.code], !picked.has(s.code))} />
                 <span style={{ flex: '1 1 auto', minWidth: 0 }}>{label(s.code)}</span>
-                <HitCount id={`signal:${s.code}`} count={counts[s.code]} onOpen={onOpenReview && (() => onOpenReview('signal', s.code, label(s.code)))} />
+                <HitCount id={`signal:${s.code}`} count={counts[s.code]} unit={countUnit} onOpen={onOpenReview && (() => onOpenReview('signal', s.code, label(s.code)))} />
               </label>
             ))}
           </div>
         )
       })}
-      <Note>Ticked signals get a dot where they occur. The numbers are today's count on this timeframe; click one to see each occurrence.</Note>
+      <Note>{note ?? "Ticked signals get a dot where they occur. The numbers are today's count on this timeframe; click one to see each occurrence."}</Note>
     </div>
   )
 }

@@ -280,6 +280,9 @@ export const putWatchSelection = (instrumentId, excluded) =>
 
 // Colored-cell grid: weighted bull/bear momentum score per instrument from
 // pattern activity in the last `window` candles -- see backend/watch_scoring.py.
+// ALGO-37: today's signals / patterns / strategy hits per stock and timeframe
+export const getWatchEvents = (window = 'day') => request(`/api/watch-events?window=${window}`)
+
 export const getWatchScores = (timeframe = '3min', window) => {
   const params = new URLSearchParams({ timeframe })
   if (window) params.set('window', window)

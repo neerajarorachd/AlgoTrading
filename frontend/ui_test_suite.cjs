@@ -812,6 +812,149 @@ async function restorePrefs() {
     await page.close();
   }
 
+  // ==================== grid signal filter (ALGO-37, 2026-11-02) ====================
+  // Needs today's signals in the engine (test stack: launch_test_stack.py
+  // --replay --as-today). Expected values come from /api/watch-events.
+  {
+    await resetPrefs();
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page.waitForFunction(() => document.querySelectorAll('[data-instrument-grid] tbody tr').length > 1, null, { timeout: 30000 });
+    const gridSymbols = () => page.locator('[data-instrument-grid] tbody tr').evaluateAll((trs) => trs
+      .filter((tr) => !tr.querySelector('td[colspan]')).map((tr) => tr.querySelector('td').innerText.replace(/[^A-Z0-9&-]/g, '')));
+    const symbols = await (await fetch(`${BASE}/api/symbols`)).json();
+    const symOf = Object.fromEntries(symbols.map((s) => [String(s.id), s.symbol]));
+    const apiEvents = async (w) => (await (await fetch(`${BASE}/api/watch-events?window=${w}`)).json()).instruments;
+    // stocks having `key` of `kind` (signals/patterns) on any timeframe
+    const stocksWith = (ev, kind, key) => Object.entries(ev).filter(([, tfs]) => Object.values(tfs).some((k) => (k[kind]?.[key] ?? 0) > 0)).map(([id]) => symOf[id]).sort();
+    const day = await apiEvents('day');
+    const last10 = await apiEvents('last10');
+    // only signals the panel lists (the engine also records codes the pickers don't offer)
+    // open the panel first: its Signals tab lists the codes it offers
+    const btn = page.locator('[data-chart-tool="grid-signal-filter"]');
+    const closedByDefault = await btn.count() === 1 && await page.locator('[data-signal-filter-window]').count() === 0;
+    await btn.click();
+    const panel = page.locator('[data-signal-filter-window]');
+    await panel.waitFor({ timeout: 5000 });
+    await panel.locator('[data-signal-option]').first().waitFor({ timeout: 15000 }).catch(() => {});
+    const listed = new Set(await panel.locator('[data-signal-option]').evaluateAll((els) => els.map((e) => e.dataset.signalOption)));
+    const allSignals = [...new Set(Object.values(day).flatMap((tfs) => Object.values(tfs).flatMap((k) => Object.keys(k.signals))))].filter((c) => listed.has(c));
+    const allPatterns = [...new Set(Object.values(day).flatMap((tfs) => Object.values(tfs).flatMap((k) => Object.keys(k.patterns))))];
+    const before = await gridSymbols();
+    // a signal some stocks have and some don't (so the filter visibly drops rows)
+    const sig = allSignals.find((c) => { const n = stocksWith(day, 'signals', c).length; return n > 0 && n < before.length; });
+    // one that formed today but not in the last 10 candles
+    const oldSig = allSignals.find((c) => stocksWith(day, 'signals', c).length > 0 && stocksWith(last10, 'signals', c).length === 0);
+    const pat = allPatterns.find((k) => stocksWith(day, 'patterns', k).length > 0);
+
+    if (!sig) console.log('SKIP  [ALGO-37] no signals today on the test stack (start it with --replay --as-today)');
+    else {
+      checkTrue('[ALGO-37] the INSTRUMENTS card has the signal filter icon (panel closed by default)', closedByDefault);
+      const cardBox = await page.locator('[data-instruments-card]').boundingBox();
+      const panelBox = await panel.boundingBox();
+      checkTrue('[ALGO-37] the panel opens beside the grid, on its right, same top',
+        panelBox.x >= cardBox.x + cardBox.width && Math.abs(panelBox.y - cardBox.y) <= 2, { cardBox, panelBox });
+      const tabs = await panel.locator('[data-filter-tab]').evaluateAll((els) => els.map((e) => e.dataset.filterTab));
+      checkTrue('[ALGO-37] panel tabs are Signals, Patterns, Strategies', tabs.join(',') === 'signal,pattern,strategy', tabs);
+      checkTrue('[ALGO-37] window switch defaults to Whole day',
+        await panel.locator('[data-mark-window-option="day"]').getAttribute('aria-checked') === 'true');
+      checkTrue('[ALGO-37] no "all" boxes in the one-at-a-time panel', await panel.locator('[data-group-all]').count() === 0);
+
+      // counts = stocks with each signal (whole day)
+      const count = (id) => panel.locator(`[data-hit-count="${id}"]`).innerText().then(Number);
+      await eventually(async () => await count(`signal:${sig}`) === stocksWith(day, 'signals', sig).length, 10000);
+      checkTrue('[ALGO-37] a signal\'s number = stocks with it today', await count(`signal:${sig}`) === stocksWith(day, 'signals', sig).length,
+        { sig, shown: await count(`signal:${sig}`), expected: stocksWith(day, 'signals', sig) });
+
+      // pick it: the grid keeps only those stocks, colours switch to All
+      await panel.locator(`[data-signal-option="${sig}"] input`).check();
+      const want = stocksWith(day, 'signals', sig);
+      const okRows = await eventually(async () => JSON.stringify((await gridSymbols()).sort()) === JSON.stringify(want), 8000);
+      checkTrue('[ALGO-37] picking a signal keeps only the stocks where it formed', okRows, { sig, want, got: await gridSymbols() });
+      checkTrue('[ALGO-37] ...with the filter line and its Clear button', await page.locator('[data-signal-filter-bar]').isVisible());
+      checkTrue('[ALGO-37] ...the timeframe bar switches to All and is locked',
+        await page.locator('[data-timeframe="all"]').getAttribute('aria-checked') === 'true' && await page.locator('[data-timeframe="3min"]').isDisabled());
+      checkTrue('[ALGO-37] ...rows show the 1m / 3m / 5m colours', await page.locator('[data-instrument-grid] [data-row-colours="all"]').count() === want.length);
+
+      // last 10 candles: numbers and rows follow
+      await panel.locator('[data-mark-window-option="last10"]').click();
+      const want10 = stocksWith(last10, 'signals', sig);
+      const ok10 = await eventually(async () => JSON.stringify((await gridSymbols()).sort()) === JSON.stringify(want10)
+        && await count(`signal:${sig}`) === want10.length, 8000);
+      checkTrue('[ALGO-37] Last 10 candles: the number and the rows follow', ok10, { sig, want10, got: await gridSymbols(), shown: await count(`signal:${sig}`) });
+      if (oldSig) {
+        await panel.locator(`[data-signal-option="${oldSig}"] input`).check();
+        const empty = await eventually(async () => (await gridSymbols()).length === 0, 8000);
+        const msg = await page.locator('[data-instrument-grid] td[colspan]').innerText().catch(() => '');
+        checkTrue('[ALGO-37] a signal only from earlier today: no rows, with a message', empty && /in the last 10 candles/.test(msg), { oldSig, msg });
+        checkTrue('[ALGO-37] picking another signal replaces the first (one at a time)',
+          !(await panel.locator(`[data-signal-option="${sig}"] input`).isChecked()) && await panel.locator(`[data-signal-option="${oldSig}"] input`).isChecked());
+      } else console.log('SKIP  [ALGO-37] no signal that is only from earlier in the day');
+      await panel.locator('[data-mark-window-option="day"]').click();
+
+      // a pattern replaces the signal
+      if (pat) {
+        await panel.locator('[data-filter-tab="pattern"]').click();
+        await panel.locator(`[data-pattern-option="${pat}"] input`).check();
+        const wantP = stocksWith(day, 'patterns', pat);
+        const okP = await eventually(async () => JSON.stringify((await gridSymbols()).sort()) === JSON.stringify(wantP), 8000);
+        checkTrue('[ALGO-37] picking a pattern filters by it and clears the signal', okP
+          && await panel.locator('[data-filter-tab="signal"] span').count() === 0, { pat, wantP, got: await gridSymbols() });
+        checkTrue('[ALGO-37] a pattern\'s number = stocks with it today', await count(`pattern:${pat}`) === wantP.length);
+      }
+      await panel.locator('[data-filter-tab="strategy"]').click();
+      checkTrue('[ALGO-37] the Strategies tab lists strategies (or its empty note)',
+        await panel.locator('[data-strategy-picker], [data-filter-panel="strategy"]').count() > 0);
+
+      // closing the panel keeps the filter; reload restores filter + panel state
+      await panel.locator('button[aria-label="Close signal filter panel"]').click();
+      checkTrue('[ALGO-37] closing the panel keeps the filter on',
+        await page.locator('[data-signal-filter-window]').count() === 0 && await page.locator('[data-signal-filter-bar]').isVisible());
+      await waitForSavedPrefs(page, (p) => p['workspace.signalFilter'] && p['workspace.showSignalPanel'] === false);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForFunction(() => document.querySelector('[data-signal-filter-bar]'), null, { timeout: 20000 }).catch(() => {});
+      const keptRows = pat ? await eventually(async () => JSON.stringify((await gridSymbols()).sort()) === JSON.stringify(stocksWith(day, 'patterns', pat)), 15000) : true;
+      checkTrue('[ALGO-37] after a reload the filter is still on (saved per user)', await page.locator('[data-signal-filter-bar]').isVisible() && keptRows);
+
+      // clear: all rows back, timeframe bar back to the saved choice
+      await page.locator('[data-signal-filter-bar] button').click();
+      const back = await eventually(async () => (await gridSymbols()).length === before.length, 8000);
+      checkTrue('[ALGO-37] Clear brings every row back and unlocks the timeframe bar',
+        back && !(await page.locator('[data-timeframe="3min"]').isDisabled()) && await page.locator('[data-timeframe="3min"]').getAttribute('aria-checked') === 'true');
+    }
+    // the chart part runs on any stack (it reads the chart's own session, not today)
+    {
+      // the chart's own window switch: counts and dots shrink to the last 10 candles
+      const chartSym = process.env.CHART_SYMBOL || 'BANKBARODA';
+      await page.locator('[data-instrument-grid] tbody tr', { hasText: chartSym }).first().click();
+      const card = page.locator('.chart-grid .chart-card').first();
+      await card.locator('[data-chart-stack] canvas').first().waitFor({ timeout: 25000 });
+      await page.waitForTimeout(2500);
+      await setIndicatorsMode(card, 'right');
+      const win = card.locator('[data-indicators-window]');
+      const cw = win.locator('[data-mark-window="chart"]');
+      checkTrue('[ALGO-37] the chart panel has the same Last 10 candles / Whole day switch (Whole day by default)',
+        await cw.count() === 1 && await cw.locator('[data-mark-window-option="day"]').getAttribute('aria-checked') === 'true');
+      const sumCounts = () => win.locator('[data-hit-count^="pattern:"], [data-hit-count^="signal:"]').evaluateAll((els) => els.reduce((n, e) => n + Number(e.innerText || 0), 0));
+      const dots = async () => Number(await card.locator('[data-diagrams]').getAttribute('data-dot-count'));
+      await win.locator('[data-panel-tab="patterns"]').click();
+      await page.waitForTimeout(500);
+      const pDay = await sumCounts(); const dDay = await dots();
+      await cw.locator('[data-mark-window-option="last10"]').click();
+      await page.waitForTimeout(600);
+      const p10 = await sumCounts(); const d10 = await dots();
+      checkTrue('[ALGO-37] chart: Last 10 candles lowers the counts and the marks', p10 <= pDay && d10 <= dDay && (p10 < pDay || d10 < dDay), { pDay, p10, dDay, d10 });
+      await cw.locator('[data-mark-window-option="day"]').click();
+      await page.waitForTimeout(600);
+      checkTrue('[ALGO-37] chart: Whole day brings them back', await sumCounts() === pDay && await dots() === dDay);
+    }
+    checkTrue('[ALGO-37] no page errors', errors.length === 0, errors);
+    await page.close();
+    await resetPrefs();
+  }
+
   // ==================== multi-day chart (step 4, 2026-10-08) ====================
   // Needs a stock with several stored sessions; CHART_SYMBOL picks it (the
   // test stack is seeded with BANKBARODA). Skipped if that row isn't there.

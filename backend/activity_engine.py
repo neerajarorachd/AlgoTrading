@@ -1534,6 +1534,21 @@ class ActivityEngine:
             rows = list(self._buffer)
         return [r for r in rows if r["instrument_id"] == instrument_id and r["timeframe"] == timeframe]
 
+    def today_rows(self) -> Tuple[List[dict], Dict[Tuple[int, str], datetime]]:
+        """Today's (IST) activity rows for every instrument, plus each
+        (instrument_id, timeframe)'s latest candle time -- the Watch grid's
+        signal filter (ALGO-37) reads both in one call."""
+        today = (datetime.now(timezone.utc) + _IST).date()
+        with self._lock:
+            acts = [r for r in self._buffer if (_as_utc(r["ts"]) + _IST).date() == today]
+            inds = [r for r in self._indicator_buffer if (_as_utc(r["ts"]) + _IST).date() == today]
+        last: Dict[Tuple[int, str], datetime] = {}
+        for r in inds + acts:
+            k, ts = (r["instrument_id"], r["timeframe"]), _as_utc(r["ts"])
+            if k not in last or ts > last[k]:
+                last[k] = ts
+        return acts, last
+
     def buffered_count(self) -> int:
         """Activities detected but not yet written to the DB."""
         with self._lock:

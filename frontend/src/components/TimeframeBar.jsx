@@ -9,7 +9,9 @@ export const SCREEN_TIMEFRAMES = [
   { value: 'all', label: 'All' },
 ]
 
-export default function TimeframeBar({ value, onChange, options = SCREEN_TIMEFRAMES }) {
+// lockedReason (ALGO-37): the bar is held on its value (the signal filter
+// shows every timeframe's colour) -- buttons disabled, the reason as tooltip
+export default function TimeframeBar({ value, onChange, options = SCREEN_TIMEFRAMES, lockedReason }) {
   return (
     <div data-timeframe-bar style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <span style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-faint)' }}>
@@ -21,10 +23,10 @@ export default function TimeframeBar({ value, onChange, options = SCREEN_TIMEFRA
           return (
             <button
               key={o.value} type="button" role="radio" aria-checked={on} data-timeframe={o.value}
-              onClick={() => onChange(o.value)}
-              title={o.value === 'all' ? 'All timeframes: each colour tile shows 1m · 3m · 5m counts' : `Colours and charts on ${o.label}`}
+              onClick={() => onChange(o.value)} disabled={!!lockedReason}
+              title={lockedReason ?? (o.value === 'all' ? 'All timeframes: each colour tile shows 1m · 3m · 5m counts' : `Colours and charts on ${o.label}`)}
               style={{
-                border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: '5px 12px',
+                border: 'none', cursor: lockedReason ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600, padding: '5px 12px', opacity: lockedReason && !on ? 0.5 : 1,
                 color: on ? 'var(--text-on-accent)' : 'var(--text-dim)', background: on ? 'var(--accent)' : 'transparent',
               }}
             >{o.label}</button>
