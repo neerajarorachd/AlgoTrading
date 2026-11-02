@@ -858,6 +858,7 @@ async function restorePrefs() {
         panelBox.x >= cardBox.x + cardBox.width && Math.abs(panelBox.y - cardBox.y) <= 2, { cardBox, panelBox });
       const tabs = await panel.locator('[data-filter-tab]').evaluateAll((els) => els.map((e) => e.dataset.filterTab));
       checkTrue('[ALGO-37] panel tabs are Signals, Patterns, Strategies', tabs.join(',') === 'signal,pattern,strategy', tabs);
+      checkTrue('[ALGO-37] the window switch keeps its full height (not squashed by the panel)', (await panel.locator('[data-mark-window]').boundingBox()).height >= 22, await panel.locator('[data-mark-window]').boundingBox());
       checkTrue('[ALGO-37] window switch defaults to Whole day',
         await panel.locator('[data-mark-window-option="day"]').getAttribute('aria-checked') === 'true');
       checkTrue('[ALGO-37] no "all" boxes in the one-at-a-time panel', await panel.locator('[data-group-all]').count() === 0);
@@ -947,6 +948,7 @@ async function restorePrefs() {
       const cw = win.locator('[data-mark-window="chart"]');
       checkTrue('[ALGO-37] the chart panel has the same Last 10 candles / Whole day switch (Whole day by default)',
         await cw.count() === 1 && await cw.locator('[data-mark-window-option="day"]').getAttribute('aria-checked') === 'true');
+      checkTrue('[ALGO-37] chart: its window switch keeps its full height', (await cw.boundingBox()).height >= 22, await cw.boundingBox());
       const sumCounts = () => win.locator('[data-hit-count^="pattern:"], [data-hit-count^="signal:"]').evaluateAll((els) => els.reduce((n, e) => n + Number(e.innerText || 0), 0));
       const dots = async () => Number(await card.locator('[data-diagrams]').getAttribute('data-dot-count'));
       await win.locator('[data-panel-tab="patterns"]').click();
