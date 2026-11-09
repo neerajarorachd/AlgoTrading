@@ -94,6 +94,10 @@ SYSTEM_PATTERNS = (
      "above +DI, entered 09:30-14:45.",
      ["EVENT_ANY(ma_death_cross)", "CLOSE < EMA50 and EMA50 < EMA50[-10]",
       "ADX >= 30 and ADX < 40 and MINUS_DI > PLUS_DI", "TF_MINUTES >= 3 and TIME >= 930 and TIME < 1445"]),
+    ("ll_hh_hl_strong", "LL-HH-HL strong swings (bullish)", "bullish", "price_action", 4, 10, 0,
+     "3-min LL-HH-HL (structure shift up) where the LL->HH rise is at least 1.5% and the HH->HL pullback "
+     "at least 1%. The event sits on the HL swing candle, confirmed 5 candles later, hence RECENTLY(..., 6). Needs all 4 conditions (3 of 4 = 75% < 80%).",
+     ["RECENTLY(EVENT_ANY(bullish_structure_shift), 6)", "UP_LEG_PCT >= 1.5", "DOWN_LEG_PCT >= 1", "TF_MINUTES == 3"]),
     # ---- caution (pink) ----
     ("bb_squeeze_tight", "Bollinger squeeze, no room", "caution", "volatility", 0, 10, 5,
      "Bands narrowing for 4 candles and under 0.6% wide: not enough room for a trade.",

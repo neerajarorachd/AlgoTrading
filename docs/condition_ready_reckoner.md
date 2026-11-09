@@ -51,6 +51,7 @@ Status key: **✓ works today** · **◐ planned (pattern table, ALGO-5)**.
 | `ADX` `PLUS_DI` `MINUS_DI` | Trend strength, Wilder ADX(14), with its +DI / −DI. ADX ≥ 25–30 = a real trend; +DI above −DI = up-trend. e.g. `ADX >= 30 and ADX < 40 and PLUS_DI > MINUS_DI` |
 | `TIME` | Candle start time in IST as HHMM: 930 = 09:30, 1445 = 14:45. e.g. `TIME >= 930 and TIME < 1445` |
 | `TF_MINUTES` | The candle timeframe in minutes (1, 3 or 5). e.g. `TF_MINUTES == 5` |
+| `UP_LEG_PCT` `DOWN_LEG_PCT` | % size of the latest finished up-swing (swing low → next swing high) and down-swing (swing high → next swing low), from confirmed swing points. At an LL-HH-HL: UP = LL→HH, DOWN = HH→HL. e.g. `RECENTLY(EVENT_ANY(bullish_structure_shift), 6)` (structure events sit on the swing candle, confirmed 5 candles later) + `UP_LEG_PCT >= 1.5` + `DOWN_LEG_PCT >= 1` |
 
 ---
 

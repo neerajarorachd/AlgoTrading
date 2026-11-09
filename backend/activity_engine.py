@@ -554,6 +554,25 @@ def swing_low_intensity(candles: List[Candle], lookback: int = _SWING_LOOKBACK) 
 
 # --------------------------------------------------------------------- graph formations (double top/bottom)
 
+def swing_leg_pcts(points) -> tuple:
+    """(up_leg_pct, down_leg_pct) from chronological confirmed swing points:
+    up = latest swing high vs the last swing low before it, down = latest
+    swing low vs the last swing high before it. None where not formed yet.
+    At an LL-HH-HL confirmation: up = LL->HH, down = HH->HL."""
+    up = down = None
+    last_high = next((i for i in range(len(points) - 1, -1, -1) if points[i].kind == "high"), None)
+    last_low = next((i for i in range(len(points) - 1, -1, -1) if points[i].kind == "low"), None)
+    if last_high is not None:
+        low_before = next((points[i] for i in range(last_high - 1, -1, -1) if points[i].kind == "low"), None)
+        if low_before is not None and low_before.price:
+            up = round((points[last_high].price - low_before.price) / low_before.price * 100, 4)
+    if last_low is not None:
+        high_before = next((points[i] for i in range(last_low - 1, -1, -1) if points[i].kind == "high"), None)
+        if high_before is not None and high_before.price:
+            down = round((high_before.price - points[last_low].price) / high_before.price * 100, 4)
+    return up, down
+
+
 class SwingPoint:
     """One confirmed swing point, in the chronological sequence formation
     detectors read from — kind is "high" or "low", price is the swing
@@ -2346,6 +2365,11 @@ class ActivityEngine:
             self._explain_signals(key, rows, new, candle.timeframe)
         evaluator = self.pattern_evaluator
         if evaluator is not None and self._evaluate_patterns and rows and _as_utc(rows[-1]["ts"]) == _as_utc(candle.timestamp):
+            try:  # UP_LEG_PCT / DOWN_LEG_PCT for conditions; a failure only leaves them empty
+                rows[-1]["up_leg_pct"], rows[-1]["down_leg_pct"] = swing_leg_pcts(
+                    self.get_swing_points(symbol, exchange_segment, candle.timeframe))
+            except Exception:
+                logger.exception("swing legs failed for %s (%s)", symbol, exchange_segment)
             try:
                 hits = evaluator.on_candle(key, rows, candle.timeframe)
             except Exception:

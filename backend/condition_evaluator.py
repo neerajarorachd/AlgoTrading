@@ -126,7 +126,14 @@ DERIVED_FIELDS = {
     # timeframe set this column directly (pattern_engine, build_indicator_
     # dataframe); otherwise it is read off the candle spacing.
     "tf_minutes": lambda df: _tf_minutes_from_spacing(df),
+    # swing legs (2026-11-09): % size of the latest finished up-swing (last
+    # swing low -> the swing high after it) and down-swing (swing high -> the
+    # swing low after it), from the engine's confirmed swing points. Carried
+    # on the engine's rows; empty where unknown.
+    "up_leg_pct": lambda df: _row_carried(df, "up_leg_pct"),
+    "down_leg_pct": lambda df: _row_carried(df, "down_leg_pct"),
 }
+ROW_CARRIED_FIELDS = ("up_leg_pct", "down_leg_pct")
 DERIVED_DESCRIPTIONS = {
     "macd_hist": "MACD line minus signal",
     "bb_width": "(BB_UPPER - BB_LOWER) / BB_MIDDLE x 100, in %",
@@ -136,12 +143,20 @@ DERIVED_DESCRIPTIONS = {
     "range": "HIGH - LOW",
     "time": "candle start time in IST as HHMM, e.g. 930 = 09:30, 1445 = 14:45",
     "tf_minutes": "the candle timeframe in minutes: 1, 3 or 5",
+    "up_leg_pct": "% rise of the latest finished up-swing (swing low -> next swing high)",
+    "down_leg_pct": "% fall of the latest finished down-swing (swing high -> next swing low)",
 }
 
 
 def timeframe_minutes(timeframe: str) -> int:
     """'5min' -> 5."""
     return int(str(timeframe).lower().replace("min", ""))
+
+
+def _row_carried(df: pd.DataFrame, column: str) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce")
+    return pd.Series(float("nan"), index=df.index)
 
 
 def _ist_hhmm(df: pd.DataFrame) -> pd.Series:
@@ -750,6 +765,9 @@ def frame_from_rows(rows: list) -> pd.DataFrame:
         rec = {"ts": ts, TRADING_DATE_COLUMN: (ts + IST_OFFSET).date()}
         for f in Field:
             rec[f.value] = r.get(f.value)
+        for col in ROW_CARRIED_FIELDS:
+            if col in r:
+                rec[col] = r[col]
         if EVENTS_COLUMN in r:  # the candle's raw events, when the caller has them (pattern evaluation)
             rec[EVENTS_COLUMN] = frozenset(r[EVENTS_COLUMN])
         records.append(rec)
