@@ -26,10 +26,10 @@ class RecordingBroker:
 
 def test_weekends_and_listed_nse_holidays_are_closed():
     assert not market_calendar.is_trading_day(date(2026, 11, 7))   # Saturday
-    assert not market_calendar.is_trading_day(date(2026, 11, 9))   # Diwali-Balipratipada
-    assert market_calendar.is_trading_day(date(2026, 11, 10))
+    assert not market_calendar.is_trading_day(date(2026, 11, 10))  # Diwali-Balipratipada (NSE; not 11-09)
+    assert market_calendar.is_trading_day(date(2026, 11, 9))
     assert not market_calendar.is_trading_day(date(2027, 1, 2))    # a 2027 weekend (file lists them)
-    assert market_calendar.trading_days(date(2026, 11, 6), date(2026, 11, 10)) == [date(2026, 11, 6), date(2026, 11, 10)]
+    assert market_calendar.trading_days(date(2026, 11, 6), date(2026, 11, 11)) == [date(2026, 11, 6), date(2026, 11, 9), date(2026, 11, 11)]
 
 
 def test_a_session_has_375_minutes_from_0915_ist():
