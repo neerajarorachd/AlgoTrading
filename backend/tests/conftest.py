@@ -199,3 +199,16 @@ def app(db_engine, session_factory, fake_broker, monkeypatch):
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_gap_fill_memory():
+    """Gap fill keeps per-process memory (scanned-through marks, minutes the
+    broker doesn't have, earlier days already checked -- ALGO-39); one test's
+    marks must not hide another test's gaps."""
+    import feed.engine_recovery as engine_recovery
+    import feed.gap_fill as gap_fill
+    for store in (gap_fill._last_scanned_through, gap_fill._known_absent, gap_fill._in_progress,
+                  engine_recovery._history_checked):
+        store.clear()
+    yield

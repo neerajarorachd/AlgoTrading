@@ -149,6 +149,13 @@ what has been decided**.
   Systemd user timers on the VM (`deploy/`). Research tests use 5-min first,
   daily later. PC copy of the 5-min files:
   `D:\AI Trading\research\universe_2026-10-31\5min`.
+- **Gap fill (ALGO-39, 11-02):** every missing 1-min range is fetched in ONE
+  call per stock (today: holes behind the last candle too, not only ahead;
+  earlier days: holes inside covered days, 09:15-15:14). Closed days come from
+  `backend/data/market_holidays.txt` (all 2026/2027 weekends + NSE holidays;
+  **2027 NSE holidays still to add when NSE publishes them**) and are never
+  requested. Minutes the broker doesn't return are not re-asked. A filled hole
+  behind today's last candle re-runs that stock's day through the engine.
 - **Dhan quirks:** `toDate` is exclusive; a range with no trading day returns
   error DH-907 (treat as empty); a direct 3-min request returns only today
   (roll up from 1-min instead).

@@ -86,63 +86,6 @@ def test_backfill_persists_1min_and_rollup_candles_via_one_bulk_write(session_fa
     assert float(three_min_rows[0].close_price) == 102.5  # close of the 3rd (last) member candle
 
 
-def test_backfill_fetches_from_last_known_candle_not_market_open(session_factory, monkeypatch):
-    spy = BroadcastSpy(monkeypatch)
-    last_ts = _todays_market_open() + timedelta(minutes=30)
-    with session_factory() as session:
-        session.add(CandleToday(
-            symbol=SYMBOL, exchange_segment=SEG, timeframe="1min", ts=last_ts,
-            open_price=100, high_price=101, low_price=99, close_price=100.5, volume=10,
-        ))
-        session.commit()
-
-    rest_broker = FakeRestBroker([])
-    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
-
-    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
-
-    assert len(rest_broker.calls) == 1
-    from_date = rest_broker.calls[0][4]
-    assert from_date == last_ts.replace(tzinfo=timezone.utc)
-    assert [e[1] for e in spy.events] == ["started", "done"]
-
-
-def test_backfill_keeps_only_missing_closed_minutes_from_a_whole_day_response(session_factory, monkeypatch):
-    # Dhan's intraday endpoint takes DATE bounds only, so a small gap comes
-    # back as the whole session (found live 2026-10-06: 242 candles for a
-    # ~65-minute gap, ~4.5 min per symbol to re-save). Only the minutes after
-    # the last stored one, and before the still-forming current minute, may
-    # be ingested.
-    spy = BroadcastSpy(monkeypatch)
-    open_ = _todays_market_open()
-    last_ts = open_ + timedelta(minutes=30)
-    with session_factory() as session:
-        session.add(CandleToday(
-            symbol=SYMBOL, exchange_segment=SEG, timeframe="1min", ts=last_ts,
-            open_price=100, high_price=101, low_price=99, close_price=100.5, volume=10,
-        ))
-        session.commit()
-
-    now_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    whole_day = [
-        Candle(symbol=SYMBOL, timeframe="1min", timestamp=open_ + timedelta(minutes=i),
-               open=100, high=101, low=99, close=100.5, volume=10)
-        for i in range(int((now_minute - open_).total_seconds() // 60) + 1)  # includes the forming minute
-    ]
-    ingested = []
-    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
-    original = aggregator.ingest_historical_1min
-    monkeypatch.setattr(aggregator, "ingest_historical_1min",
-                        lambda sym, seg, c, on_candle_closed=None: (ingested.append(c.timestamp), original(sym, seg, c, on_candle_closed)))
-
-    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, FakeRestBroker(whole_day), session_factory, aggregator)
-
-    assert ingested, "the missing minutes after the last stored candle must still be ingested"
-    assert min(ingested) == last_ts.replace(tzinfo=timezone.utc) + timedelta(minutes=1)
-    assert max(ingested) < now_minute  # never the still-forming minute
-    assert spy.events[-1] == (SYMBOL, "done", f"Backfilled {len(ingested)} candles")
-
-
 def test_backfill_skips_when_already_in_progress_elsewhere(session_factory, monkeypatch):
     # simulates the periodic scanner's tick landing on a symbol whose startup
     # backfill (or another scan cycle) hasn't finished yet — the second caller
@@ -167,25 +110,6 @@ def test_backfill_clears_in_progress_flag_after_completing(session_factory, monk
 
     assert (SYMBOL, SEG) not in gap_fill._in_progress
     assert [e[1] for e in spy.events] == ["started", "done"]
-
-
-def test_backfill_skips_broadcast_when_already_caught_up(session_factory, monkeypatch):
-    spy = BroadcastSpy(monkeypatch)
-    with session_factory() as session:
-        session.add(CandleToday(
-            symbol=SYMBOL, exchange_segment=SEG, timeframe="1min",
-            ts=datetime.now(timezone.utc).replace(second=0, microsecond=0),
-            open_price=100, high_price=101, low_price=99, close_price=100.5, volume=10,
-        ))
-        session.commit()
-
-    rest_broker = FakeRestBroker([])
-    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
-
-    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
-
-    assert rest_broker.calls == []
-    assert spy.events == []
 
 
 def test_backfill_broadcasts_failed_on_broker_error(session_factory, monkeypatch):
@@ -283,29 +207,6 @@ def test_backfill_ignores_a_stale_prior_day_candle_and_starts_from_todays_open(s
     assert [e[1] for e in spy.events] == ["started", "done"]
 
 
-def test_backfill_does_not_reask_for_an_already_checked_empty_range(session_factory, monkeypatch):
-    # An illiquid symbol (or any broker response with no candles for a range)
-    # must not be re-fetched every cycle just because no CandleToday rows ever
-    # got written for it — the watermark should advance regardless. Seed the
-    # watermark directly (rather than relying on two real calls landing in
-    # different wall-clock minutes, which the minute-truncated `now()` can't
-    # guarantee inside a single fast test) to keep this deterministic.
-    spy = BroadcastSpy(monkeypatch)
-    already_checked_through = _todays_market_open() + timedelta(minutes=10)
-    gap_fill._last_scanned_through[(SYMBOL, SEG)] = already_checked_through
-    rest_broker = FakeRestBroker([])  # broker never has anything to return
-    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
-
-    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
-
-    assert len(rest_broker.calls) == 1
-    from_date = rest_broker.calls[0][4]
-    assert from_date == already_checked_through  # not market open again
-    assert [e[1] for e in spy.events] == ["started", "done"]
-    # the watermark itself must have advanced past the checked point
-    assert gap_fill._last_scanned_through[(SYMBOL, SEG)] > already_checked_through
-
-
 def test_backfill_discards_a_stale_watermark_from_a_previous_day(session_factory, monkeypatch):
     spy = BroadcastSpy(monkeypatch)
     stale_watermark = _todays_market_open() - timedelta(hours=20)  # yesterday
@@ -319,3 +220,136 @@ def test_backfill_discards_a_stale_watermark_from_a_previous_day(session_factory
     from_date = rest_broker.calls[0][4]
     assert from_date == _todays_market_open()  # not the stale watermark
     assert [e[1] for e in spy.events] == ["started", "done"]
+
+
+def _store_minutes(session_factory, minutes):
+    with session_factory() as session:
+        for ts in minutes:
+            session.add(CandleToday(
+                symbol=SYMBOL, exchange_segment=SEG, timeframe="1min", ts=ts,
+                open_price=100, high_price=101, low_price=99, close_price=100.5, volume=10,
+            ))
+        session.commit()
+
+
+def _closed_minutes_today():
+    now_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    open_ = _todays_market_open()
+    last = min(now_minute, open_ + timedelta(minutes=375))
+    return [open_ + timedelta(minutes=i) for i in range(int((last - open_).total_seconds() // 60))]
+
+
+def test_backfill_fetches_from_the_first_missing_minute(session_factory, monkeypatch):
+    # ALGO-39: 09:15-09:45 all stored -> the first missing minute is 09:46
+    spy = BroadcastSpy(monkeypatch)
+    open_ = _todays_market_open()
+    _store_minutes(session_factory, [open_ + timedelta(minutes=i) for i in range(31)])
+
+    rest_broker = FakeRestBroker([])
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert len(rest_broker.calls) == 1
+    assert rest_broker.calls[0][4] == open_ + timedelta(minutes=31)
+    assert [e[1] for e in spy.events] == ["started", "done"]
+
+
+def test_backfill_fills_holes_behind_the_last_candle_in_the_same_call(session_factory, monkeypatch):
+    # ALGO-39 (found live 2026-11-02: BHEL 11:04 / RELIANCE 11:07 missing
+    # after a restart, never re-fetched): one stored minute at 09:45 means
+    # 09:15-09:44 are holes. One call (Dhan returns the whole day) fills them
+    # AND the minutes ahead; the ahead part goes through the aggregator, the
+    # holes are saved directly; never the still-forming minute.
+    spy = BroadcastSpy(monkeypatch)
+    open_ = _todays_market_open()
+    last_ts = open_ + timedelta(minutes=30)
+    _store_minutes(session_factory, [last_ts])
+
+    now_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    whole_day = [
+        Candle(symbol=SYMBOL, timeframe="1min", timestamp=open_ + timedelta(minutes=i),
+               open=100, high=101, low=99, close=100.5, volume=10)
+        for i in range(int((now_minute - open_).total_seconds() // 60) + 1)  # includes the forming minute
+    ]
+    ingested = []
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+    original = aggregator.ingest_historical_1min
+    monkeypatch.setattr(aggregator, "ingest_historical_1min",
+                        lambda sym, seg, c, on_candle_closed=None: (ingested.append(c.timestamp), original(sym, seg, c, on_candle_closed)))
+    broker = FakeRestBroker(whole_day)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, broker, session_factory, aggregator)
+
+    assert len(broker.calls) == 1 and broker.calls[0][4] == open_
+    assert ingested and min(ingested) == last_ts + timedelta(minutes=1)
+    assert max(ingested) < now_minute  # never the still-forming minute
+    with session_factory() as session:
+        stored = {r.ts.replace(tzinfo=timezone.utc) for r in session.query(CandleToday).filter_by(symbol=SYMBOL, timeframe="1min")}
+    assert all(open_ + timedelta(minutes=i) in stored for i in range(30))  # the holes
+    holes_and_ahead = 30 + len(ingested)
+    assert spy.events[-1] == (SYMBOL, "done", f"Backfilled {holes_and_ahead} candles")
+
+
+def test_backfill_rebuilds_the_3_and_5_min_candles_of_a_filled_hole(session_factory, monkeypatch):
+    BroadcastSpy(monkeypatch)
+    open_ = _todays_market_open()
+    minutes = [open_ + timedelta(minutes=i) for i in range(11)]
+    _store_minutes(session_factory, [m for m in minutes if m != open_ + timedelta(minutes=1)])  # 09:16 missing
+    with session_factory() as session:  # the 3-min candle the live feed built without 09:16
+        session.add(CandleToday(symbol=SYMBOL, exchange_segment=SEG, timeframe="3min", ts=open_,
+                                open_price=100, high_price=101, low_price=99, close_price=100.5, volume=20))
+        session.commit()
+    hole = Candle(symbol=SYMBOL, timeframe="1min", timestamp=open_ + timedelta(minutes=1),
+                  open=100, high=150, low=99, close=100.5, volume=10)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, FakeRestBroker([hole]), session_factory,
+                             CandleAggregator(on_candle_closed=lambda *a: None))
+
+    with session_factory() as session:
+        three = session.query(CandleToday).filter_by(symbol=SYMBOL, timeframe="3min", ts=open_).one()
+        five = session.query(CandleToday).filter_by(symbol=SYMBOL, timeframe="5min", ts=open_).one()
+    assert float(three.high_price) == 150 and three.volume == 30
+    assert float(five.high_price) == 150 and five.volume == 50
+
+
+def test_backfill_skips_broadcast_when_already_caught_up(session_factory, monkeypatch):
+    spy = BroadcastSpy(monkeypatch)
+    _store_minutes(session_factory, _closed_minutes_today())
+
+    rest_broker = FakeRestBroker([])
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    assert rest_broker.calls == []
+    assert spy.events == []
+
+
+def test_backfill_does_not_reask_for_minutes_the_broker_does_not_have(session_factory, monkeypatch):
+    # An illiquid symbol (no trades in a minute) or Dhan's missing 15:15-15:29:
+    # once a minute is 10+ minutes old and the broker didn't return it, the
+    # 5-minute scanner must not ask for it again.
+    BroadcastSpy(monkeypatch)
+    rest_broker = FakeRestBroker([])  # broker never has anything to return
+    aggregator = CandleAggregator(on_candle_closed=lambda *a: None)
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory, aggregator)
+
+    now_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    settled = now_minute - timedelta(minutes=gap_fill._ABSENT_AFTER_MINUTES)
+    assert len(rest_broker.calls) >= 1
+    if len(rest_broker.calls) == 2:  # only the newest, not yet settled minutes are asked again
+        assert rest_broker.calls[1][4] >= settled
+
+
+def test_backfill_never_asks_on_a_closed_day(session_factory, monkeypatch):
+    BroadcastSpy(monkeypatch)
+    monkeypatch.setattr(gap_fill.market_calendar, "is_trading_day", lambda d: False)
+    rest_broker = FakeRestBroker([])
+
+    backfill_missing_candles(SYMBOL, SEG, SECURITY_ID, rest_broker, session_factory,
+                             CandleAggregator(on_candle_closed=lambda *a: None))
+
+    assert rest_broker.calls == []
