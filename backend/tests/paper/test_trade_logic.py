@@ -58,3 +58,10 @@ def test_day_end_square_off():
 def test_closed_trade_ignores_more_candles():
     t = close_trade(_open(), exit_ts=HIT, exit_price=101, reason="target")
     assert not on_candle(t, ts=datetime(2026, 11, 9, 4, 31), open_=90, high=90, low=80, close=85, settings=S)
+
+
+def test_manual_pct_points_and_fixed_lot():
+    s = PaperSettings(slippage_pct=0.0, stop_mode="pct", stop_value=1.0, target_mode="points",
+                      target_value=3.0, size_mode="qty", quantity_per_trade=25)
+    t = _open(atr=None, settings=s)  # no ATR needed for pct/points
+    assert (t["quantity"], t["stop_price"], t["target_price"]) == (25, 99.0, 103.0)

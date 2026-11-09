@@ -4,7 +4,8 @@ broker. Trades are plain dicts whose keys match the paper trade table
 columns (db/models_paper.py), so callers copy them straight onto a row.
 
 - Open: at the hit candle's close (the current candle, never a swing
-  candle's) plus slippage against us. Stop / target = entry -/+ N x ATR.
+  candle's) plus slippage against us. Stop / target distance set by the
+  user: N x ATR, N % of entry, or N rupees. Size: rupee amount or fixed lot.
 - Every hit gets a row: hits that can't be taken are "not_taken" + reason.
 - Exits, checked on each later candle (1-min live): stop first when a candle
   touches both (safe side); a candle opening past the stop/target fills at
@@ -24,9 +25,13 @@ IST = timedelta(hours=5, minutes=30)
 
 @dataclass
 class PaperSettings:
-    stop_atr: float = 2.0
-    target_atr: float = 10.0
+    stop_mode: str = "atr"       # atr | pct | points
+    stop_value: float = 2.0
+    target_mode: str = "atr"     # atr | pct | points
+    target_value: float = 10.0
+    size_mode: str = "amount"    # amount | qty
     amount_per_trade: float = 100000.0
+    quantity_per_trade: int = 1
     entry_from: int = 930     # HHMM IST
     entry_until: int = 1445   # HHMM IST, exclusive
     day_end: int = 1510       # HHMM IST
@@ -55,6 +60,15 @@ def round_trip_cost(quantity: int, sell_price: float, buy_price: float) -> float
     return itemized_round_trip_cost(quantity, sell_price, buy_price)
 
 
+def distance(mode: str, value: float, entry: float, atr: Optional[float]) -> Optional[float]:
+    """Stop/target distance from entry in rupees; None if ATR is needed but missing."""
+    if mode == "pct":
+        return entry * value / 100.0
+    if mode == "points":
+        return value
+    return value * atr if atr else None
+
+
 def open_trade(*, hit_ts: datetime, direction: str, hit_close: float, atr: Optional[float],
                settings: PaperSettings, already_open: bool = False) -> dict:
     """Decide what happens to one hit. direction: 'buy' | 'sell'.
@@ -73,18 +87,23 @@ def open_trade(*, hit_ts: datetime, direction: str, hit_close: float, atr: Optio
         return skip(f"outside entry window {settings.entry_from}-{settings.entry_until}")
     if already_open:
         return skip("already in a trade on this stock for this item")
-    if atr is None or atr <= 0:
-        return skip("no ATR yet")
     slip = settings.slippage_pct / 100.0
     entry = hit_close * (1 + slip) if direction == "buy" else hit_close * (1 - slip)
-    quantity = int(settings.amount_per_trade // entry)
+    stop_d = distance(settings.stop_mode, settings.stop_value, entry, atr)
+    target_d = distance(settings.target_mode, settings.target_value, entry, atr)
+    if stop_d is None or target_d is None:
+        return skip("no ATR yet")
+    if settings.size_mode == "qty":
+        quantity = int(settings.quantity_per_trade)
+    else:
+        quantity = int(settings.amount_per_trade // entry)
     if quantity < 1:
         return skip("price above amount per trade")
     sign = 1 if direction == "buy" else -1
     trade.update(
         status="open", entry_ts=hit_ts, entry_price=round(entry, 4), quantity=quantity,
-        stop_price=round(entry - sign * settings.stop_atr * atr, 4),
-        target_price=round(entry + sign * settings.target_atr * atr, 4),
+        stop_price=round(entry - sign * stop_d, 4),
+        target_price=round(entry + sign * target_d, 4),
         best_pct=0.0, worst_pct=0.0,
     )
     return trade
