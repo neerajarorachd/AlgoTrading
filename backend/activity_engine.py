@@ -1368,6 +1368,15 @@ def _as_utc(ts: datetime) -> datetime:
     return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
 
+def _is_instrument_key(k, symbol: str, exchange_segment: str) -> bool:
+    """True for a per-instrument dict key: (symbol, segment, ...) or, as the
+    pattern evaluator keys its state, ((symbol, segment, timeframe), ...)."""
+    if not isinstance(k, tuple) or not k:
+        return False
+    head = k[0] if isinstance(k[0], tuple) else k
+    return len(head) >= 2 and head[0] == symbol and head[1] == exchange_segment
+
+
 class ActivityEngine:
     """Call on_candle_closed(symbol, exchange_segment, candle) for every
     finalized 1-/3-/5-min candle (live or backfilled) — same entry point
@@ -1552,21 +1561,14 @@ class ActivityEngine:
     def forget_instrument(self, symbol: str, exchange_segment: str, instrument_id: Optional[int]) -> int:
         """Drops everything the engine holds for one instrument -- its rolling
         state on every timeframe (indicators, swings, recent candles, pattern
-        and story state) and its today rows in the store -- so its day can be
-        replayed from the candles (gap fill re-run, ALGO-39). Caller holds
-        _flush_lock and _lock (a flush mid-way would save the dropped rows).
-        Returns how many today rows were dropped."""
-        def drop_keys(obj):
+        and story state) and its today rows in the store (gap fill re-run,
+        ALGO-39). Caller holds _flush_lock and _lock (a flush mid-way would
+        save the dropped rows). Returns how many today rows were dropped."""
+        for obj in self._state_holders():
             for value in list(vars(obj).values()):
                 if isinstance(value, dict):
-                    for k in [k for k in value if isinstance(k, tuple) and len(k) >= 2
-                              and k[0] == symbol and k[1] == exchange_segment]:
+                    for k in [k for k in value if _is_instrument_key(k, symbol, exchange_segment)]:
                         del value[k]
-        drop_keys(self)
-        if self.pattern_evaluator is not None:
-            drop_keys(self.pattern_evaluator)
-        if self.story is not None:
-            drop_keys(self.story)
         if instrument_id is None:
             return 0
         dropped = 0
@@ -1578,6 +1580,38 @@ class ActivityEngine:
             setattr(self, name, keep_saved + keep_new)
             setattr(self, marker, len(keep_saved))
         return dropped
+
+    def adopt_instrument(self, other: "ActivityEngine", symbol: str, exchange_segment: str,
+                         instrument_id: Optional[int]) -> int:
+        """Replaces one instrument's state and today rows with `other`'s -- a
+        scratch engine that rebuilt its day off the live lock (gap fill
+        re-run, ALGO-39), so the swap itself takes milliseconds. Its rows join
+        the unsaved tail, so the next flush writes them. Caller holds
+        _flush_lock and _lock. Returns how many rows were adopted."""
+        self.forget_instrument(symbol, exchange_segment, instrument_id)
+        for mine, theirs in zip(self._state_holders(), other._state_holders(include_missing=True)):
+            if theirs is None:
+                continue
+            for name, value in vars(theirs).items():
+                target = vars(mine).get(name)
+                if isinstance(value, dict) and isinstance(target, dict):
+                    for k, v in value.items():
+                        if _is_instrument_key(k, symbol, exchange_segment):
+                            target[k] = v
+        if instrument_id is None:
+            return 0
+        acts = [r for r in other._buffer if r["instrument_id"] == instrument_id]
+        inds = [r for r in other._indicator_buffer if r["instrument_id"] == instrument_id]
+        self._buffer.extend(acts)
+        self._indicator_buffer.extend(inds)
+        return len(acts)
+
+    def _state_holders(self, include_missing: bool = False):
+        """The engine plus its pattern evaluator and story -- every object
+        that keeps per-instrument dicts. Fixed order (adopt_instrument pairs
+        them up); a missing one is None when include_missing."""
+        out = [self, self.pattern_evaluator, self.story]
+        return out if include_missing else [o for o in out if o is not None]
 
     def buffered_count(self) -> int:
         """Activities detected but not yet written to the DB."""

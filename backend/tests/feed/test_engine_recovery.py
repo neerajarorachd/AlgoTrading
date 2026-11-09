@@ -235,3 +235,14 @@ def test_periodic_flush_timer_starts_once_per_engine(session_factory, monkeypatc
     bootstrap._schedule_periodic_flush(engine)
     bootstrap._schedule_periodic_flush(engine)  # start_capture runs again next day
     assert started == [bootstrap.PERIODIC_FLUSH_SECONDS]
+
+
+@pytest.fixture(autouse=True)
+def _today_is_a_trading_day(monkeypatch):
+    """These tests use the real clock; gap fill never asks on a weekend or NSE
+    holiday (ALGO-39), so pin today as open -- else they fail every closed day.
+    A test that needs a closed day patches it again itself."""
+    import market_calendar
+    real = market_calendar.is_trading_day
+    today = market_calendar.ist_date(datetime.now(timezone.utc))
+    monkeypatch.setattr(market_calendar, "is_trading_day", lambda d: True if d == today else real(d))

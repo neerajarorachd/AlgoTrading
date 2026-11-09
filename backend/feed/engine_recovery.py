@@ -27,7 +27,7 @@ from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 
 from brokers.models import Candle
-from db.models import CandleIndicators, InstrumentActivity
+from db.models import CandleHistorical, CandleIndicators, CandleToday, InstrumentActivity
 from db.ops import LibActivities, LibCandleIndicators, LibCandles, LibCandlesHistorical, LibSymbols
 from db.session import session_scope
 from feed.candle_aggregator import CandleAggregator
@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 WARMUP_DAYS = 35
 TIMEFRAMES = ("1min", "3min", "5min")
 _IST = timedelta(hours=5, minutes=30)
+
+
+def _naive(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
 
 
 def _utc(ts: datetime) -> datetime:
@@ -104,13 +108,17 @@ def fill_history_holes(session_factory, rest_broker, symbol, security_id, exchan
     missing minutes are saved. Returns how many were saved."""
     key = (symbol, exchange_segment)
     checked = _history_checked.setdefault(key, set())
-    days = [d for d in market_calendar.trading_days(market_calendar.ist_date(start), market_calendar.ist_date(end - timedelta(minutes=1)))
-            if d not in checked]
+    # earlier days only: today belongs to the live feed and the 5-minute scanner
+    last_day = min(market_calendar.ist_date(end - timedelta(minutes=1)),
+                   market_calendar.ist_date(datetime.now(timezone.utc)) - timedelta(days=1))
+    days = [d for d in market_calendar.trading_days(market_calendar.ist_date(start), last_day) if d not in checked]
     if not days:
         return 0
     with session_scope(session_factory) as session:
-        have = {_utc(r.ts) for ops in (LibCandlesHistorical, LibCandles)
-                for r in ops.get_range(session, symbol, exchange_segment, "1min", start, end)}
+        # timestamps only (full rows over the tunnel took minutes per stock)
+        have = {_utc(ts) for model in (CandleHistorical, CandleToday) for (ts,) in session.query(model.ts).filter(
+            model.symbol == symbol, model.exchange_segment == exchange_segment, model.timeframe == "1min",
+            model.ts >= _naive(start), model.ts < _naive(end))}
     holes = {d: set(market_calendar.session_minutes(d)[:_CORE_MINUTES]) - have for d in days}
     holes = {d: m for d, m in holes.items() if m}
     checked.update(days)
@@ -145,9 +153,11 @@ def _history_1min(session_factory, symbol, exchange_segment, day_start, days: in
 
 def prepare_instrument(
     symbol: str, exchange_segment: str, security_id: str, rest_broker, session_factory, activity_engine,
-    now: datetime | None = None,
+    now: datetime | None = None, reuse_saved: bool = True, fetch_history: bool = True,
 ) -> dict:
-    """Steps 1-4 above. Never raises -- a failure in any step is logged and
+    """Steps 1-4 above. reuse_saved=False records all of today again instead of
+    loading today's saved rows; fetch_history=False skips the broker (both for
+    the gap-fill re-run's scratch engine, ALGO-39). Never raises -- a failure in any step is logged and
     the instrument still goes live (the engine just has less history).
     Returns a small summary for logging/tests."""
     summary = {"skipped": False, "warmup_candles": 0, "loaded_activities": 0, "loaded_indicators": 0,
@@ -160,7 +170,8 @@ def prepare_instrument(
     day_start = today_start_utc(now)
 
     try:
-        ensure_warmup_history(session_factory, rest_broker, symbol, security_id, exchange_segment, now)
+        if fetch_history:
+            ensure_warmup_history(session_factory, rest_broker, symbol, security_id, exchange_segment, now)
     except Exception as exc:
         logger.warning("Recovery: history fetch failed for %s (%s), warming up on what's stored: %s",
                        symbol, exchange_segment, exc)
@@ -180,7 +191,7 @@ def prepare_instrument(
             instrument_id = LibSymbols.get_instrument_id(session, symbol, exchange_segment)
             saved_acts, saved_inds, today_candles, watermark = [], [], {}, {}
             for tf in TIMEFRAMES:
-                if instrument_id is not None:
+                if instrument_id is not None and reuse_saved:
                     acts = LibActivities.get_for_instrument_range(session, instrument_id, tf, day_start, None)
                     inds = LibCandleIndicators.get_for_instrument_range(session, instrument_id, tf, day_start, None)
                     saved_acts += [_row_dict(InstrumentActivity, r) for r in acts]
@@ -212,32 +223,49 @@ def rebuild_today(
     symbol: str, exchange_segment: str, security_id: str, rest_broker, session_factory, activity_engine,
     now: datetime | None = None,
 ) -> dict:
-    """Re-runs one instrument's day through the engine after gap fill saved
-    minutes BEHIND its last candle (ALGO-39, user's choice 2026-11-02): its
-    signals, patterns and indicator rows for today were computed without
-    them. Drops its engine state and today rows (memory and DB), then runs
-    prepare_instrument again, which warms up on history and records today
-    from the stored candles.
+    """Re-runs one instrument's day after gap fill saved minutes BEHIND its
+    last candle (ALGO-39, user's choice 2026-11-02): its signals, patterns
+    and indicator rows for today were computed without them.
 
-    Holds the engine's flush lock and lock throughout, so a flush can't save
-    the dropped rows and a live candle can't land in the half-built state;
-    other stocks' live candles wait those few seconds. Never raises."""
+    The day is rebuilt in a scratch engine from the stored candles, OFF the
+    live engine's lock (warm-up + replay take a minute or more over the DB
+    tunnel -- holding the live lock that long froze every other stock, found
+    live 2026-11-02). Only the swap holds the lock: today's DB rows for the
+    stock are deleted, the live engine adopts the scratch state and rows
+    (flushed next), then any candle stored while the rebuild ran is replayed.
+    Never raises."""
     summary = {"skipped": True}
     if activity_engine is None:
         return summary
+    from activity_engine import ActivityEngine
     now = _utc(now or datetime.now(timezone.utc))
     day_start = today_start_utc(now)
     try:
         with session_scope(session_factory) as session:
             instrument_id = LibSymbols.get_instrument_id(session, symbol, exchange_segment)
+        scratch = ActivityEngine(session_factory)
+        live_eval = activity_engine.pattern_evaluator
+        if live_eval is not None:
+            from pattern_engine import PatternEvaluator
+            scratch.pattern_evaluator = PatternEvaluator(session_factory, owner_id=live_eval.owner_id)
+        summary = prepare_instrument(symbol, exchange_segment, security_id, rest_broker, session_factory, scratch,
+                                     now=now, reuse_saved=False, fetch_history=False)
         with activity_engine._flush_lock, activity_engine._lock:
-            dropped = activity_engine.forget_instrument(symbol, exchange_segment, instrument_id)
             if instrument_id is not None:
                 LibActivities.delete_for_instrument_since(session_factory, instrument_id, day_start)
                 LibCandleIndicators.delete_for_instrument_since(session_factory, instrument_id, day_start)
-            summary = prepare_instrument(symbol, exchange_segment, security_id, rest_broker, session_factory,
-                                         activity_engine, now=now)
-            summary["dropped"] = dropped
+            summary["adopted"] = activity_engine.adopt_instrument(scratch, symbol, exchange_segment, instrument_id)
+            # candles stored while the scratch engine was rebuilding
+            caught_up = 0
+            with session_scope(session_factory) as session:
+                for tf in TIMEFRAMES:
+                    last = scratch._last_processed_ts.get((symbol, exchange_segment, tf))
+                    if last is None:
+                        continue
+                    for r in LibCandles.get_range(session, symbol, exchange_segment, tf, _utc(last) + timedelta(seconds=1), None):
+                        activity_engine.on_candle_closed(symbol, exchange_segment, _to_candle(symbol, tf, r))
+                        caught_up += 1
+            summary["caught_up"] = caught_up
     except Exception:
         logger.exception("Gap fill: day re-run failed for %s (%s)", symbol, exchange_segment)
     logger.info("Gap fill: re-ran today for %s (%s) %s", symbol, exchange_segment, summary)
