@@ -94,6 +94,22 @@ what has been decided**.
   wire Telegram, cut false alarms, and only then wire real order placement.
   Don't propose live order placement before that order is satisfied.
 
+## 3a. Paper trading (11-09, plan stage)
+
+- Two separate sets of tables: **live paper trades** and **backtest paper
+  trades** (own run + trade tables; the older strategy `BacktestRun`/
+  `BacktestTrade` tables stay untouched).
+- User-based: each user picks the items to paper-trade, separately for live
+  and for a backtest. Items will be patterns / signals / strategies; **pattern
+  hits only for now**.
+- Backtests have two layers: one **master** (the comparison: stocks, dates,
+  status) and one **run** per set being compared (e.g. 3 slightly different
+  patterns = 1 master + 3 runs). Trades belong to a run; the master ends
+  with a side-by-side comparison of its runs.
+- **Every hit of a selected item is recorded**, including ones not taken
+  (stored with the reason, e.g. outside the entry window).
+- No broker call from paper trading, ever.
+
 ## 4. UI rules
 
 - Professional design in both themes; tokens alone are not enough:

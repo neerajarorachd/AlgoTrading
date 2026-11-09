@@ -2018,3 +2018,5 @@ class UserPreference(Base):
 from db.models_daily import CandleDaily  # noqa: E402,F401
 # Registers market_story_today / market_story_archive (market story P2, own module).
 import db.models_story  # noqa: E402,F401  (module import: safe whichever file is imported first)
+# Registers the paper trading tables (rulebook 3a, own module).
+import db.models_paper  # noqa: E402,F401
