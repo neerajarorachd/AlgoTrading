@@ -11,7 +11,11 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from flask import Blueprint, g, jsonify, request
+import subprocess
+import sys
+from pathlib import Path
+
+from flask import Blueprint, current_app, g, jsonify, request
 
 from db.models_paper import (PaperBacktestMaster, PaperBacktestRun, PaperBacktestTrade,
                              PaperSelection, PaperTradeLive)
@@ -175,7 +179,18 @@ def create_backtest():
             master_id=m.id, owner_id=USER_ID, label=label,
             items=json.dumps([{"item_type": "pattern", "item_key": k} for k in items]), **settings))
     g.db_session.commit()
+    _start_runner(m.id)
     return jsonify(_master(m, _runs(m.id))), 201
+
+
+def _start_runner(master_id: int) -> None:
+    """The backtest runs in its own process, never inside the live app."""
+    if current_app.testing:
+        return
+    script = Path(__file__).resolve().parent.parent / "scripts" / "run_paper_backtest.py"
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen([sys.executable, str(script), "--master", str(master_id)], creationflags=flags,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _runs(master_id):
