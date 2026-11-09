@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from db.models import CandleIndicators
 from db.session import session_scope
+import chart_cache
 
 
 def get_for_instrument(session, instrument_id: int, timeframe: str) -> List[CandleIndicators]:
@@ -73,7 +74,7 @@ def _only_new(session_factory, model, rows, key_fields):
     return new
 
 
-def persist_bulk(session_factory, rows: List[dict]) -> None:
+def _persist_bulk_write(session_factory, rows: List[dict]) -> None:
     """Optimistic bulk insert — same shape as LibActivities.persist_bulk:
     a fresh flush of newly-computed snapshots really is "all new rows,"
     so skip the per-row existence check and add everything in one flush,
@@ -91,7 +92,14 @@ def persist_bulk(session_factory, rows: List[dict]) -> None:
             persist_one(session_factory, row)
 
 
-def persist_one(session_factory, row: dict) -> None:
+def persist_bulk(session_factory, rows: List[dict]) -> None:
+    try:
+        return _persist_bulk_write(session_factory, rows)
+    finally:
+        chart_cache.notify_instrument_rows_written(rows)
+
+
+def _persist_one_write(session_factory, row: dict) -> None:
     with session_factory() as session:
         try:
             with session.begin_nested():
@@ -106,10 +114,24 @@ def persist_one(session_factory, row: dict) -> None:
             session.rollback()
 
 
-def delete_for_instrument_since(session_factory, instrument_id: int, since) -> int:
+def persist_one(session_factory, row: dict) -> None:
+    try:
+        return _persist_one_write(session_factory, row)
+    finally:
+        chart_cache.notify_instrument_rows_written([row])
+
+
+def _delete_for_instrument_since_write(session_factory, instrument_id: int, since) -> int:
     """Removes one instrument's indicator rows from `since` on (gap fill
     re-run of its day, ALGO-39)."""
     with session_scope(session_factory) as session:
         return session.query(CandleIndicators).filter(
             CandleIndicators.instrument_id == instrument_id, CandleIndicators.ts >= _naive_utc(since),
         ).delete(synchronize_session=False)
+
+
+def delete_for_instrument_since(session_factory, instrument_id: int, since) -> int:
+    try:
+        return _delete_for_instrument_since_write(session_factory, instrument_id, since)
+    finally:
+        chart_cache.notify_instrument_deleted_since(instrument_id, since)

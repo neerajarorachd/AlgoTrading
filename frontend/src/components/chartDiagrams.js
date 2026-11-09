@@ -7,6 +7,7 @@
 //   structure (swing, BOS, CHoCH)     -> rectangle, labelled HH/LH/HL/LL or BOS/CHoCH
 //   graph formation                   -> polyline through its swing points + neckline
 //   indicator crossover                -> nothing to draw (listed in the tooltip)
+import { signalName } from './signalNames.js'
 
 const CANDLES_SPANNED = {
   morning_star: 3, evening_star: 3, three_white_soldiers: 3, three_black_crows: 3,
@@ -58,7 +59,7 @@ export function snapToCandles(events, candles) {
 }
 
 export function humanize(activity) {
-  return activity.replace(/_/g, ' ')
+  return signalName(activity, { capitalize: false })
 }
 
 /** Everything the shape builder needs, prepared once per data change. */

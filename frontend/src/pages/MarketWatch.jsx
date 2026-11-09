@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { signalName } from '../components/signalNames.js'
 import {
   getWatchEvents, getWatchScores, getWatchlist, listStrategies, listStrategyElements, listSymbols, listWatchlists, removeSymbol,
 } from '../api/client.js'
@@ -60,7 +61,7 @@ const FILTER_KINDS = { signal: 'signals', pattern: 'patterns', strategy: 'strate
 const FILTER_TFS = ['1min', '3min', '5min']
 const EVENTS_REFRESH_MS = 30000 // "last 10 candles" moves with every candle, activity or not
 const isSignalFilter = (v) => v === null || (!!v && typeof v === 'object' && v.kind in FILTER_KINDS && v.key != null)
-const signalLabel = (code) => String(code).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+const signalLabel = (code) => signalName(code)
 
 function loadStoredIds(key) {
   try {

@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from brokers.models import Candle
 from db.models import CandleToday
 from db.session import session_scope
+import chart_cache
 
 
 def get_range(
@@ -62,7 +63,7 @@ def _upsert(session, symbol: str, exchange_segment: str, candle: Candle) -> None
     existing.volume = candle.volume
 
 
-def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
+def _persist_bulk_write(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
     """Insert many finalized candles in ONE DB round-trip in the common case.
 
     persist_one (below) opens a fresh session per candle and does an
@@ -106,7 +107,14 @@ def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> Non
             persist_one(session_factory, symbol, exchange_segment, candle)
 
 
-def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
+def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
+    try:
+        return _persist_bulk_write(session_factory, candles)
+    finally:
+        chart_cache.notify_candles_written(candles)
+
+
+def _persist_one_write(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
     """Upsert a finalized candle into candles_today, keyed by its natural key.
 
     session.merge() only dedupes by primary key, and these rows have no PK set
@@ -126,3 +134,10 @@ def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Can
             session.commit()
         except IntegrityError:
             session.rollback()
+
+
+def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
+    try:
+        return _persist_one_write(session_factory, symbol, exchange_segment, candle)
+    finally:
+        chart_cache.notify_candles_written([(symbol, exchange_segment, candle)])
