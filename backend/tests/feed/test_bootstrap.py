@@ -2,6 +2,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import pytest
+
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
@@ -168,3 +170,13 @@ def test_hydrate_backfills_every_symbol_on_one_sequential_background_thread(monk
     # not spawn_backfill's one-thread-per-symbol
     assert len(broker.thread_idents) == 1
     assert threading.get_ident() not in broker.thread_idents
+
+
+@pytest.fixture(autouse=True)
+def _today_is_a_trading_day(monkeypatch):
+    """The startup backfill uses the real clock and never asks on a weekend or
+    NSE holiday (ALGO-39) -- pin today as open, else these fail every closed day."""
+    import market_calendar
+    real = market_calendar.is_trading_day
+    today = market_calendar.ist_date(datetime.now(timezone.utc))
+    monkeypatch.setattr(market_calendar, "is_trading_day", lambda d: True if d == today else real(d))
