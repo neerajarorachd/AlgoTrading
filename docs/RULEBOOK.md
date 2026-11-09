@@ -133,7 +133,10 @@ what has been decided**.
   after the rollup. Dhan intraday history is ~90 days deep.
 - Live and backfilled candles both go through the ActivityEngine; nothing
   bypasses it. A stock added mid-session is computed from 09:15.
-- Use real NSE holidays (`~/Trading/holidays.txt`) to judge candle gaps.
+- Use real NSE holidays to judge candle gaps: the app reads
+  `backend/data/market_holidays.txt` (ALGO-39). `~/Trading/holidays.txt` has
+  Diwali-Balipratipada on 2026-11-09, but NSE closes 11-10 (market open 11-09,
+  user confirmed); check new years against the NSE circular, not that file.
 - Entry price for structure/graph formations is the **current** candle's
   close, never the swing candle's (stale-entry bug, 09-14;
   `prediction_tracker.py` still has it).

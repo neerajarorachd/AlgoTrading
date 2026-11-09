@@ -109,7 +109,7 @@
 2026-11-01  weekend   Sunday
 2026-11-07  weekend   Saturday
 2026-11-08  weekend   Sunday (also Diwali Laxmi Pujan)
-2026-11-09  exchange  Diwali-Balipratipada
+2026-11-10  exchange  Diwali-Balipratipada (NSE list per Upstox and most brokers; ~/Trading/holidays.txt says 11-09 -- wrong, the market was open 2026-11-09)
 2026-11-14  weekend   Saturday
 2026-11-15  weekend   Sunday
 2026-11-21  weekend   Saturday
