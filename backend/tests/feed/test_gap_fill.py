@@ -353,3 +353,14 @@ def test_backfill_never_asks_on_a_closed_day(session_factory, monkeypatch):
                              CandleAggregator(on_candle_closed=lambda *a: None))
 
     assert rest_broker.calls == []
+
+
+@pytest.fixture(autouse=True)
+def _today_is_a_trading_day(monkeypatch):
+    """These tests use the real clock; gap fill never asks on a weekend or NSE
+    holiday (ALGO-39), so pin today as open -- else they fail every closed day.
+    A test that needs a closed day patches it again itself."""
+    import market_calendar
+    real = market_calendar.is_trading_day
+    today = market_calendar.ist_date(datetime.now(timezone.utc))
+    monkeypatch.setattr(market_calendar, "is_trading_day", lambda d: True if d == today else real(d))

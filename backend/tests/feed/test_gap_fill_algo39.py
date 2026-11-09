@@ -112,3 +112,36 @@ def test_rerun_after_a_filled_hole_matches_a_session_that_never_missed_it(sessio
     with session_factory() as session:
         stored = session.query(InstrumentActivity).filter(InstrumentActivity.ts >= today_start_utc(day["now"]).replace(tzinfo=None)).count()
     assert stored == len(reference._buffer)
+
+
+def test_today_is_never_treated_as_an_earlier_day(session_factory, day):
+    """Found live 2026-11-02: the startup check counted today (from 00:00 UTC)
+    as an earlier day -- an extra call per stock and today's minutes saved as
+    history."""
+    today = market_calendar.ist_date(datetime.now(timezone.utc))
+    start = datetime.combine(today, time(), tzinfo=timezone.utc)  # how ensure_warmup_history ends its window
+    broker = RecordingBroker(day["today_1min"])
+    assert fill_history_holes(session_factory, broker, SYMBOL, "2885", SEG, start - timedelta(days=1), start + timedelta(hours=6)) >= 0
+    assert all(c[0].date() < today for c in broker.calls)
+
+
+def test_the_rebuild_does_not_hold_the_live_engine_lock(session_factory, day, monkeypatch):
+    """The scratch rebuild runs off the live lock; only the swap takes it.
+    Another thread must be able to take the live lock while the scratch
+    engine is warming up."""
+    import threading
+    import feed.engine_recovery as er
+    _register(session_factory)
+    _store(session_factory, day)
+    live = ActivityEngine(session_factory)
+    _warm(live, day["history"])
+    seen = []
+    real_prepare = er.prepare_instrument
+
+    def spy_prepare(*a, **k):
+        t = threading.Thread(target=lambda: seen.append(live._lock.acquire(timeout=2) and (live._lock.release() or True)))
+        t.start(); t.join()
+        return real_prepare(*a, **k)
+    monkeypatch.setattr(er, "prepare_instrument", spy_prepare)
+    rebuild_today(SYMBOL, SEG, "2885", NoHistoryBroker(), session_factory, live, now=day["now"])
+    assert seen == [True]
