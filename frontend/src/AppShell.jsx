@@ -40,6 +40,7 @@ const NAV_ITEMS = [
   { to: '/occurrence-backtest', label: 'Occurrence Backtest', icon: '⊚' },
   { to: '/recommendations', label: 'Recommendations', icon: '✦' },
   { to: '/recommendation-systems', label: 'Recommendation Systems', icon: '⟲' },
+  { to: '/paper-trading', label: 'Paper Trading', icon: '₹' },
   { to: '/engine-settings', label: 'Engine Settings', icon: '⚙' },
 ]
 

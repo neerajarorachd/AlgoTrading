@@ -298,3 +298,15 @@ export const getOrderPopup = (instrumentId, timeframe = '3min', ltp) => {
   if (ltp != null) params.set('ltp', ltp)
   return request(`/api/instruments/${instrumentId}/order-popup?${params.toString()}`)
 }
+
+// paper trading (rulebook 3a): live selections/trades, backtest master + runs
+export const listPaperSelections = () => request('/api/paper/selections')
+export const savePaperSelection = (body) =>
+  request('/api/paper/selections', { method: 'PUT', body: JSON.stringify(body) })
+export const deletePaperSelection = (id) => request(`/api/paper/selections/${id}`, { method: 'DELETE' })
+export const listPaperLiveTrades = (status) =>
+  request(`/api/paper/live/trades${status ? `?status=${status}` : ''}`)
+export const listPaperBacktests = () => request('/api/paper/backtests')
+export const getPaperBacktest = (id) => request(`/api/paper/backtests/${id}`)
+export const createPaperBacktest = (body) =>
+  request('/api/paper/backtests', { method: 'POST', body: JSON.stringify(body) })

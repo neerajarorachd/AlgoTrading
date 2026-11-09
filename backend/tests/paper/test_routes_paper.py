@@ -25,3 +25,12 @@ def test_backtest_master_with_three_runs(app):
     assert len(c.get("/api/paper/backtests").json) == 1
     bad = dict(body, runs=[{"label": "A", "items": []}])
     assert c.post("/api/paper/backtests", json=bad).status_code == 400
+
+
+def test_manual_atr_period_and_timeframe(app):
+    c = app.test_client()
+    r = c.put("/api/paper/selections", json={"item_key": "p", "atr_period": 7, "atr_timeframe": "5min",
+                                              "target_mode": "pct", "target_value": 1.5})
+    assert (r.json["atr_period"], r.json["atr_timeframe"], r.json["target_mode"]) == (7, "5min", "pct")
+    assert c.put("/api/paper/selections", json={"item_key": "p", "atr_timeframe": "2min"}).status_code == 400
+    assert c.put("/api/paper/selections", json={"item_key": "p", "atr_period": 0}).status_code == 400

@@ -29,6 +29,8 @@ class PaperSettings:
     stop_value: float = 2.0
     target_mode: str = "atr"     # atr | pct | points
     target_value: float = 10.0
+    atr_period: int = 14         # used by the caller that computes ATR
+    atr_timeframe: str = "hit"   # hit | 1min | 3min | 5min
     size_mode: str = "amount"    # amount | qty
     amount_per_trade: float = 100000.0
     quantity_per_trade: int = 1

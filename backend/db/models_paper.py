@@ -31,12 +31,15 @@ def _utcnow() -> datetime:
 class _ExitSettings:
     """Exit/size settings, shared by a live selection and a backtest run, all
     set by the user. Stop/target mode: 'atr' (value x ATR), 'pct' (value % of
-    entry) or 'points' (value in rupees). Size mode: 'amount' (rupees per
+    entry) or 'points' (value in rupees). ATR: user-chosen period and
+    timeframe ('hit' = the hit's own timeframe). Size mode: 'amount' (rupees per
     trade) or 'qty' (fixed lot/quantity)."""
     stop_mode: Mapped[str] = mapped_column(String(8), nullable=False, default="atr")
     stop_value: Mapped[float] = mapped_column(Float, nullable=False, default=2.0)
     target_mode: Mapped[str] = mapped_column(String(8), nullable=False, default="atr")
     target_value: Mapped[float] = mapped_column(Float, nullable=False, default=10.0)
+    atr_period: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
+    atr_timeframe: Mapped[str] = mapped_column(String(8), nullable=False, default="hit")  # hit | 1min | 3min | 5min
     size_mode: Mapped[str] = mapped_column(String(8), nullable=False, default="amount")
     amount_per_trade: Mapped[float] = mapped_column(Float, nullable=False, default=100000.0)
     quantity_per_trade: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

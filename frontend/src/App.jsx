@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import AppShell from './AppShell.jsx'
 import Backtests from './pages/Backtests.jsx'
 import EngineSettings from './pages/EngineSettings.jsx'
+import PaperTrading from './pages/PaperTrading.jsx'
 import InstrumentDetailPage from './pages/InstrumentDetailPage.jsx'
 import MarketWatch from './pages/MarketWatch.jsx'
 import MarketWatchClassic from './pages/MarketWatchClassic.jsx'
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="recommendations" element={<Recommendations />} />
           <Route path="recommendation-systems" element={<RecommendationSystems />} />
           <Route path="engine-settings" element={<EngineSettings />} />
+          <Route path="paper-trading" element={<PaperTrading />} />
         </Route>
       </Routes>
     </BrowserRouter>

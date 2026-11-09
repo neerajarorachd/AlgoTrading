@@ -20,9 +20,9 @@ paper_bp = Blueprint("paper", __name__)
 USER_ID = 1
 
 _MODES = {"stop_mode": {"atr", "pct", "points"}, "target_mode": {"atr", "pct", "points"},
-          "size_mode": {"amount", "qty"}}
+          "size_mode": {"amount", "qty"}, "atr_timeframe": {"hit", "1min", "3min", "5min"}}
 _NUMS = ("stop_value", "target_value", "amount_per_trade", "slippage_pct")
-_INTS = ("quantity_per_trade", "entry_from", "entry_until", "day_end")
+_INTS = ("atr_period", "quantity_per_trade", "entry_from", "entry_until", "day_end")
 SETTING_FIELDS = tuple(_MODES) + _NUMS + _INTS
 
 
@@ -44,7 +44,7 @@ def _settings_from(body: dict) -> dict:
                 v = float(body[f]) if f in _NUMS else int(body[f])
             except (TypeError, ValueError):
                 raise BadRequest(f"{f} must be a number")
-            if v < 0 or (f in ("stop_value", "target_value", "quantity_per_trade") and v <= 0):
+            if v < 0 or (f in ("stop_value", "target_value", "quantity_per_trade", "atr_period") and v <= 0):
                 raise BadRequest(f"{f} must be positive")
             out[f] = v
     return out
