@@ -7,7 +7,7 @@
 import { useSignals, SIGNAL_GROUPS } from './patternData.js'
 import { GroupAll, HitCount, Note, Title } from './PatternPicker.jsx'
 
-const label = (code) => code.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+import { signalName as label } from './signalNames.js'
 
 // groupAll=false hides the groups' "all" boxes (the Watch grid's one-at-a-time
 // filter, ALGO-37); note / countUnit replace the chart's wording there.

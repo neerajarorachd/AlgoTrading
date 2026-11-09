@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from db.models import InstrumentActivity, InstrumentActivityDailyCount, PatternDefinition
 from db.session import session_scope
+import chart_cache
 
 # Local copy of the same constant every other module in this codebase
 # defines for itself (order_backtest.py, condition_evaluator.py, ...) rather
@@ -210,7 +211,7 @@ def _only_new(session_factory, model, rows, key_fields):
     return new
 
 
-def persist_bulk(session_factory, rows: List[dict]) -> None:
+def _persist_bulk_write(session_factory, rows: List[dict]) -> None:
     """Optimistic bulk insert — the common case (a fresh flush of newly
     detected activities) really is "all new rows," so skip the per-row
     existence check entirely and add everything in one flush. Same pattern
@@ -232,7 +233,14 @@ def persist_bulk(session_factory, rows: List[dict]) -> None:
             persist_one(session_factory, row)
 
 
-def persist_one(session_factory, row: dict) -> None:
+def persist_bulk(session_factory, rows: List[dict]) -> None:
+    try:
+        return _persist_bulk_write(session_factory, rows)
+    finally:
+        chart_cache.notify_instrument_rows_written(rows)
+
+
+def _persist_one_write(session_factory, row: dict) -> None:
     with session_factory() as session:
         try:
             with session.begin_nested():
@@ -249,7 +257,14 @@ def persist_one(session_factory, row: dict) -> None:
             session.rollback()
 
 
-def delete_for_instrument_since(session_factory, instrument_id: int, since: datetime) -> int:
+def persist_one(session_factory, row: dict) -> None:
+    try:
+        return _persist_one_write(session_factory, row)
+    finally:
+        chart_cache.notify_instrument_rows_written([row])
+
+
+def _delete_for_instrument_since_write(session_factory, instrument_id: int, since: datetime) -> int:
     """Removes one instrument's activity rows from `since` on, and zeroes its
     daily counts for those days -- before its day is re-run through the engine
     after a gap fill (ALGO-39), whose flush writes them again."""
@@ -263,3 +278,10 @@ def delete_for_instrument_since(session_factory, instrument_id: int, since: date
             InstrumentActivityDailyCount.trading_date >= _trading_date(since),
         ).delete(synchronize_session=False)
     return n
+
+
+def delete_for_instrument_since(session_factory, instrument_id: int, since: datetime) -> int:
+    try:
+        return _delete_for_instrument_since_write(session_factory, instrument_id, since)
+    finally:
+        chart_cache.notify_instrument_deleted_since(instrument_id, since)

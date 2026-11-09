@@ -159,6 +159,12 @@ what has been decided**.
   **2027 NSE holidays still to add when NSE publishes them**) and are never
   requested. Minutes the broker doesn't return are not re-asked. A filled hole
   behind today's last candle re-runs that stock's day through the engine.
+- **Chart cache (11-09):** each chart's 20 past sessions (candles, indicators,
+  markers; 1/3/5-min) are kept in memory, compressed (~0.5 MB a stock,
+  indicators to 4 decimals), by `backend/chart_cache.py`; only today is read
+  from the DB on a click. Any in-app write into a past day drops that stock's
+  copy (rebuilt 30 s later); all are rebuilt on a new day. Writes to a past day
+  must go through the Lib persist/delete functions, or the cache won't know.
 - **Dhan quirks:** `toDate` is exclusive; a range with no trading day returns
   error DH-907 (treat as empty); a direct 3-min request returns only today
   (roll up from 1-min instead).

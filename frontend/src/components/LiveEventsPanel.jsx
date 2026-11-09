@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { signalName } from './signalNames.js'
 import { eventSections } from './eventSections.js'
 
 const FILTERS = [
@@ -75,7 +76,7 @@ export default function LiveEventsPanel({ events, timeframe }) {
                     <td className="num" style={{ padding: '5px 12px', color: 'var(--text-faint)', width: 60 }}>{formatTimeIST(e.ts)}</td>
                     <td style={{ padding: '5px 8px', fontWeight: 600, width: 120 }}>{e.symbol}</td>
                     <td style={{ padding: '5px 8px', color: 'var(--text-faint)', width: 50 }}>{e.timeframe}</td>
-                    <td style={{ padding: '5px 8px', fontWeight: e.activity_type === 'pattern' ? 700 : undefined }}>{e.name ?? e.activity.replaceAll('_', ' ')}</td>
+                    <td style={{ padding: '5px 8px', fontWeight: e.activity_type === 'pattern' ? 700 : undefined }}>{e.name ?? signalName(e.activity, { capitalize: false })}</td>
                     <td style={{ padding: '5px 8px', color: 'var(--text-faint)', width: 110 }}>
                       {isIndicatorSignal(e) ? 'indicator' : e.activity_type.replace('_', ' ')}
                     </td>

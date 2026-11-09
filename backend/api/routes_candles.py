@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from flask import Blueprint, current_app, g, jsonify, request
 
+import chart_cache
 from db.models import CandleHistorical, CandleToday
 from db.ops import LibActivities as ops_activities
 from db.ops import LibPatterns
@@ -72,22 +73,48 @@ def get_candles():
     days = min(max(request.args.get("days", 1, type=int), 1), _MAX_DAYS)
     before_param = request.args.get("before")
     if before_param:
-        older, has_more = _sessions_before(symbol, exchange_segment, timeframe, _parse_ts(before_param), days)
+        older, has_more = _past_sessions(symbol, exchange_segment, timeframe, _parse_ts(before_param), days)
         return jsonify({"candles": [_serialize(row) for row in older], "has_more": has_more})
 
     rows, live, as_of_date = _current_session(symbol, exchange_segment, timeframe)
     body = {"candles": [_serialize(row) for row in rows], "live": live, "as_of_date": as_of_date}
     if "days" in request.args:
         anchor = _ist_day_start(rows[0].ts if rows else datetime.now(timezone.utc).replace(tzinfo=None))
-        older, has_more = _sessions_before(symbol, exchange_segment, timeframe, anchor, days - 1)
+        older, has_more = _past_sessions(symbol, exchange_segment, timeframe, anchor, days - 1)
         body["candles"] = [_serialize(row) for row in older] + body["candles"]
         body["has_more"] = has_more
     return jsonify(body)
 
 
+def _past_sessions(symbol: str, exchange_segment: str, timeframe: str, before: datetime, days: int):
+    """_sessions_before, from the in-memory copy of past sessions when it has
+    them (chart_cache.py), else from the DB."""
+    cache = current_app.extensions.get("chart_cache")
+    cached = cache.sessions_before(symbol, exchange_segment, timeframe, before, days) if cache else None
+    return cached if cached is not None else _sessions_before(symbol, exchange_segment, timeframe, before, days)
+
+
+def _cached_past_rows(kind: str, instrument_id: int, timeframe: str, ts_from, ts_to):
+    """Past-day indicator/marker rows from chart_cache.py, or None (read the DB)."""
+    cache = current_app.extensions.get("chart_cache")
+    if cache is None:
+        return None
+    if kind == "indicators":
+        return cache.indicator_rows(instrument_id, timeframe, ts_from, ts_to)
+    return cache.marker_rows(instrument_id, timeframe, ts_from, ts_to)
+
+
 def _current_session(symbol: str, exchange_segment: str, timeframe: str):
     """(rows, live, as_of_date) for the session the chart opens on: today's
     candles when there are any, else the most complete recent session."""
+    # Today's rows first: candles_today also holds weeks of old sessions (no
+    # EOD archiver), so reading all of it on every chart open was slow. Same
+    # answer as the full read whenever today's own date is the newest.
+    today_start = datetime.combine(_ist_today(), datetime.min.time()) - _IST_OFFSET
+    todays = ops_candles.get_range(g.db_session, symbol, exchange_segment, timeframe, ts_from=today_start)
+    if todays and max(_ist_date(row.ts) for row in todays) == _ist_today():
+        return [row for row in todays if _ist_date(row.ts) == _ist_today()], True, None
+
     rows = ops_candles.get_range(g.db_session, symbol, exchange_segment, timeframe)
 
     if rows:
@@ -139,7 +166,7 @@ def _ist_day_start(ts: datetime) -> datetime:
     return datetime.combine(_ist_date(ts), datetime.min.time()) - _IST_OFFSET
 
 
-def _sessions_before(symbol: str, exchange_segment: str, timeframe: str, before: datetime, days: int):
+def _sessions_before(symbol: str, exchange_segment: str, timeframe: str, before: datetime, days: int, session=None):
     """Candles of the last `days` sessions strictly before `before` (naive
     UTC), oldest first, and whether any older candle exists. From
     candles_historical, plus earlier-day rows candles_today still holds
@@ -151,14 +178,15 @@ def _sessions_before(symbol: str, exchange_segment: str, timeframe: str, before:
     candles_today have gaps -- about 30% of the past days' 3/5-min events
     (computed by the engine from rolled-up 1-min) had no candle to sit on.
     Same rule as everywhere else in this project: 3/5-min come from 1-min."""
+    session = session if session is not None else g.db_session
     if days < 1:
-        return [], _has_candles_before(symbol, exchange_segment, "1min", before)
+        return [], _has_candles_before(symbol, exchange_segment, "1min", before, session)
     # calendar span wide enough for `days` sessions across weekends/holidays
     since = before - timedelta(days=days * 2 + 7)
     until = before - timedelta(microseconds=1)
     by_ts = {}
     for ops in (ops_candles, ops_candles_historical):
-        for row in ops.get_range(g.db_session, symbol, exchange_segment, "1min", ts_from=since, ts_to=until):
+        for row in ops.get_range(session, symbol, exchange_segment, "1min", ts_from=since, ts_to=until):
             by_ts[row.ts.replace(tzinfo=None) if row.ts.tzinfo else row.ts] = row
     rows = [by_ts[ts] for ts in sorted(by_ts)]
     if timeframe != "1min":
@@ -168,7 +196,7 @@ def _sessions_before(symbol: str, exchange_segment: str, timeframe: str, before:
         return [], False
     first_day = wanted[0]
     kept = [row for row in rows if _ist_date(row.ts) >= first_day]
-    return kept, _has_candles_before(symbol, exchange_segment, "1min", _ist_day_start(kept[0].ts))
+    return kept, _has_candles_before(symbol, exchange_segment, "1min", _ist_day_start(kept[0].ts), session)
 
 
 _MARKET_OPEN_MINUTE = 9 * 60 + 15  # 09:15 IST -- 3/5-min buckets start here, like the live aggregator
@@ -199,8 +227,9 @@ def _roll_up(rows: list, minutes: int) -> list:
     return out
 
 
-def _has_candles_before(symbol: str, exchange_segment: str, timeframe: str, ts: datetime) -> bool:
-    return ops_candles_historical.has_candles_before(g.db_session, symbol, exchange_segment, timeframe, ts)
+def _has_candles_before(symbol: str, exchange_segment: str, timeframe: str, ts: datetime, session=None) -> bool:
+    return ops_candles_historical.has_candles_before(
+        session if session is not None else g.db_session, symbol, exchange_segment, timeframe, ts)
 
 
 @candles_bp.get("/api/candles/indicators")
@@ -236,9 +265,11 @@ def get_candle_indicators():
         return jsonify({"indicators": []})
 
     ts_from, ts_to = _resolve_range()
-    stored = ops_indicators.get_for_instrument_range(
-        g.db_session, instrument_id, timeframe, ts_from=ts_from, ts_to=ts_to,
-    )
+    stored = _cached_past_rows("indicators", instrument_id, timeframe, ts_from, ts_to)
+    if stored is None:
+        stored = ops_indicators.get_for_instrument_range(
+            g.db_session, instrument_id, timeframe, ts_from=ts_from, ts_to=ts_to,
+        )
     rows = _merge_pending(stored, _pending("indicators", instrument_id, timeframe), ts_from, ts_to,
                           key=lambda r: _naive_utc(_field(r, "ts")))
     return jsonify({"indicators": [_serialize_indicators(row) for row in rows]})
@@ -291,9 +322,11 @@ def get_candle_markers():
         return jsonify({"markers": []})
 
     ts_from, ts_to = _resolve_range()
-    stored = ops_activities.get_for_instrument_range(
-        g.db_session, instrument_id, timeframe, ts_from=ts_from, ts_to=ts_to,
-    )
+    stored = _cached_past_rows("markers", instrument_id, timeframe, ts_from, ts_to)
+    if stored is None:
+        stored = ops_activities.get_for_instrument_range(
+            g.db_session, instrument_id, timeframe, ts_from=ts_from, ts_to=ts_to,
+        )
     rows = _merge_pending(stored, _pending("activities", instrument_id, timeframe), ts_from, ts_to,
                           key=lambda r: (_naive_utc(_field(r, "ts")), _field(r, "activity")))
     meta = LibPatterns.pattern_meta(g.db_session, owner_id=PATTERN_OWNER_ID)

@@ -34,6 +34,17 @@ from recommendation_engine import on_activities as recommendation_on_activities
 import api.ws_live as ws_live
 
 
+def _start_chart_cache(cache, session_factory) -> None:
+    """Every active symbol x 1/3/5-min, filled one at a time in the background."""
+    import chart_cache as chart_cache_module
+    from db.ops import LibSymbols
+
+    with session_factory() as session:
+        symbols = [(s.symbol, s.exchange_segment) for s in LibSymbols.get_active(session)]
+    chart_cache_module.install(cache)
+    cache.start((symbol, segment, tf) for symbol, segment in symbols for tf in chart_cache_module.TIMEFRAMES)
+
+
 def create_app(broker=None, engine=None, session_factory=None, instrument_master=None, testing: bool = False) -> Flask:
     app = Flask(__name__)
     app.testing = testing
@@ -82,6 +93,11 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.extensions["candle_aggregator"] = aggregator
     app.extensions["instrument_master"] = instrument_master
     app.extensions["activity_engine"] = activity_engine
+    # past sessions of each chart kept in memory (chart_cache.py); filled only
+    # in the running app below, tests read the DB as before
+    from chart_cache import PastChartCache
+    chart_cache = PastChartCache(session_factory)
+    app.extensions["chart_cache"] = chart_cache
 
     _register_db_session_hooks(app, session_factory)
 
@@ -152,6 +168,8 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
 
         from recommendation_outcomes import start_outcome_scanner
         start_outcome_scanner(session_factory)
+
+        _start_chart_cache(chart_cache, session_factory)
 
     _register_frontend_static(app)
 

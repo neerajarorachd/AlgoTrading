@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from brokers.models import Candle
 from db.models import CandleHistorical, HistoricalDataCoverage
 from db.session import session_scope
+import chart_cache
 
 
 def get_range(
@@ -113,7 +114,7 @@ def _update_already_stored(session_factory, candles: List[Tuple[str, str, Candle
     return new
 
 
-def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
+def _persist_bulk_write(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
     """Same optimistic-insert-then-per-row-fallback strategy as
     LibCandles.persist_bulk — see that function's own docstring for why
     (avoiding one existence-check round trip per candle over the SSH
@@ -140,7 +141,14 @@ def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> Non
             persist_one(session_factory, symbol, exchange_segment, candle)
 
 
-def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
+def persist_bulk(session_factory, candles: List[Tuple[str, str, Candle]]) -> None:
+    try:
+        return _persist_bulk_write(session_factory, candles)
+    finally:
+        chart_cache.notify_candles_written(candles)
+
+
+def _persist_one_write(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
     """Upsert a single candle by its natural key — see LibCandles.persist_one."""
     with session_factory() as session:
         try:
@@ -150,6 +158,13 @@ def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Can
             session.commit()
         except IntegrityError:
             session.rollback()
+
+
+def persist_one(session_factory, symbol: str, exchange_segment: str, candle: Candle) -> None:
+    try:
+        return _persist_one_write(session_factory, symbol, exchange_segment, candle)
+    finally:
+        chart_cache.notify_candles_written([(symbol, exchange_segment, candle)])
 
 
 def get_latest_day_range(
