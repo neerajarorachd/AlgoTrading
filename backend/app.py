@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -77,7 +78,15 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     # patterns evaluated on every candle close (ALGO-32); single user until login exists
     from pattern_engine import PatternEvaluator
     activity_engine.pattern_evaluator = PatternEvaluator(session_factory, owner_id=1)
-    aggregator = CandleAggregator(on_candle_closed=_make_on_candle_closed(session_factory, activity_engine))
+    # live paper trading (rulebook 3a): records hits of user-selected patterns
+    from paper.live_paper import LivePaperTrader
+    paper_trader = LivePaperTrader(session_factory, activity_engine)
+    app.extensions["paper_trader"] = paper_trader
+    if not testing:
+        threading.Thread(target=_load_paper_trades, args=(paper_trader,), daemon=True,
+                         name="paper-load").start()
+    aggregator = CandleAggregator(on_candle_closed=_make_on_candle_closed(session_factory, activity_engine,
+                                                                          paper_trader))
     market_feed = MarketFeed(
         feed_broker,
         on_tick=ws_live.broadcast_tick,
@@ -232,7 +241,14 @@ def _build_dhan_brokers(session_factory):
     return feed_broker, rest_broker
 
 
-def _make_on_candle_closed(session_factory, activity_engine: ActivityEngine):
+def _load_paper_trades(paper_trader) -> None:
+    try:
+        logger.info("paper trading: %d open trades reloaded", paper_trader.load_open_trades())
+    except Exception:
+        logger.exception("paper trading: reloading open trades failed")
+
+
+def _make_on_candle_closed(session_factory, activity_engine: ActivityEngine, paper_trader=None):
     def _on_candle_closed(symbol: str, exchange_segment: str, candle) -> None:
         persist_candle(session_factory, symbol, exchange_segment, candle)
         new_activities = activity_engine.on_candle_closed(symbol, exchange_segment, candle)
@@ -264,6 +280,12 @@ def _make_on_candle_closed(session_factory, activity_engine: ActivityEngine):
         except Exception:
             logger.exception("broadcasting new recommendations failed for %s (%s)", symbol, exchange_segment)
         ws_live.broadcast_candle_closed(symbol, exchange_segment, candle)
+        # last, on its own: paper trading must never break anything above
+        if paper_trader is not None:
+            try:
+                paper_trader.on_candle_closed(symbol, exchange_segment, candle, new_activities)
+            except Exception:
+                logger.exception("paper trading failed for %s (%s)", symbol, exchange_segment)
     return _on_candle_closed
 
 

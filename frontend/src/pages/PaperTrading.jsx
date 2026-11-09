@@ -123,7 +123,7 @@ function TradesTable({ trades }) {
   )
 }
 
-function LiveTab({ patterns, setError }) {
+function LiveTab({ patterns, defaults, setError }) {
   const [selections, setSelections] = useState([])
   const [drafts, setDrafts] = useState({})
   const [trades, setTrades] = useState([])
@@ -144,7 +144,7 @@ function LiveTab({ patterns, setError }) {
   const selected = new Set(selections.map((s) => s.item_key))
   const toggle = (key) => {
     const sel = selections.find((s) => s.item_key === key)
-    const op = sel ? deletePaperSelection(sel.id) : savePaperSelection({ item_key: key, ...DEFAULT_SETTINGS })
+    const op = sel ? deletePaperSelection(sel.id) : savePaperSelection({ item_key: key, ...defaults })
     op.then(load).catch((e) => setError(e.message))
   }
   const save = (sel) => savePaperSelection({ item_key: sel.item_key, enabled: sel.enabled, ...drafts[sel.item_key] })
@@ -189,14 +189,14 @@ function LiveTab({ patterns, setError }) {
   )
 }
 
-function newRun(i) { return { label: `Run ${i}`, items: [], ...DEFAULT_SETTINGS } }
+function newRun(i, defaults) { return { label: `Run ${i}`, items: [], ...defaults } }
 
-function BacktestTab({ patterns, setError }) {
+function BacktestTab({ patterns, defaults, setError }) {
   const [symbols, setSymbols] = useState([])
   const [masters, setMasters] = useState([])
   const [openId, setOpenId] = useState(null)
   const [detail, setDetail] = useState(null)
-  const [form, setForm] = useState({ name: '', symbols: [], date_from: '', date_to: '', runs: [newRun(1)] })
+  const [form, setForm] = useState({ name: '', symbols: [], date_from: '', date_to: '', runs: [newRun(1, defaults)] })
 
   const loadMasters = () => listPaperBacktests().then(setMasters).catch((e) => setError(e.message))
   useEffect(() => { listSymbols().then(setSymbols).catch((e) => setError(e.message)); loadMasters() }, [])
@@ -209,7 +209,7 @@ function BacktestTab({ patterns, setError }) {
   const create = () => {
     setError(null)
     createPaperBacktest(form).then((m) => {
-      setForm({ name: '', symbols: [], date_from: '', date_to: '', runs: [newRun(1)] })
+      setForm({ name: '', symbols: [], date_from: '', date_to: '', runs: [newRun(1, defaults)] })
       loadMasters(); setOpenId(m.id)
     }).catch((e) => setError(e.message))
   }
@@ -298,6 +298,11 @@ export default function PaperTrading() {
   const [tab, setTab] = usePreference('paper.tab', 'live', (v) => v === 'live' || v === 'backtest')
   const [patterns, setPatterns] = useState([])
   const [error, setError] = useState(null)
+  // the user's own defaults: new live selections and new backtest runs start from these
+  const [defaults, setDefaults] = usePreference('paper.defaults', DEFAULT_SETTINGS,
+    (v) => v && typeof v === 'object' && 'stop_mode' in v)
+  const [draft, setDraft] = useState(null)
+  const [showDefaults, setShowDefaults] = useState(false)
   useEffect(() => {
     listPatterns().then((rows) => setPatterns(rows.filter((p) => p.enabled !== false
       && (p.pattern_type === 'bullish' || p.pattern_type === 'bearish')))).catch((e) => setError(e.message))
@@ -312,8 +317,25 @@ export default function PaperTrading() {
         </div>
       </div>
       {error && <div style={S.error}>{error}</div>}
-      {tab === 'live' ? <LiveTab patterns={patterns} setError={setError} />
-        : <BacktestTab patterns={patterns} setError={setError} />}
+      <div style={S.card} data-testid="paper-defaults">
+        <div style={{ ...S.row, justifyContent: 'space-between' }}>
+          <div>
+            <h3 style={S.h3}>Default settings</h3>
+            <div style={S.dim}>New live patterns and new backtest runs start with these. Each can still be changed.</div>
+          </div>
+          <button style={S.btnGhost} onClick={() => { setDraft({ ...DEFAULT_SETTINGS, ...defaults }); setShowDefaults(!showDefaults) }}>
+            {showDefaults ? 'Close' : 'Edit defaults'}</button>
+        </div>
+        {showDefaults && draft && (<>
+          <SettingsEditor value={draft} onChange={setDraft} />
+          <div style={S.row}>
+            <button style={S.btn} onClick={() => { setDefaults(draft); setShowDefaults(false) }}>Save defaults</button>
+            <button style={S.btnGhost} onClick={() => setDraft(DEFAULT_SETTINGS)}>Reset to system defaults</button>
+          </div>
+        </>)}
+      </div>
+      {tab === 'live' ? <LiveTab patterns={patterns} defaults={{ ...DEFAULT_SETTINGS, ...defaults }} setError={setError} />
+        : <BacktestTab patterns={patterns} defaults={{ ...DEFAULT_SETTINGS, ...defaults }} setError={setError} />}
     </div>
   )
 }
