@@ -93,13 +93,21 @@ def explain_pattern(formulas, df: pd.DataFrame, context: dict) -> list:
     return [explain_condition(f, df, context) for f in formulas]
 
 
-def explain_signal(signal: str, df: pd.DataFrame, minimums: dict, measures: dict, index: int = -1) -> list:
+def explain_signal(signal: str, df: pd.DataFrame, minimums: dict, measures: dict, index: int = -1,
+                   cache: Optional[dict] = None) -> list:
     """Each strength measure of a raw signal on row `index`: its formula,
-    minimum (None = no minimum set), actual value and whether it is met."""
+    minimum (None = no minimum set), actual value and whether it is met.
+    cache: {formula: series} kept by a caller explaining many rows of one df."""
     out = []
     for measure, formula in measures.items():
         try:
-            value = _at(_eval_node(ast.parse(_normalize(formula), mode="eval").body, df, {}), index)
+            if cache is not None and formula in cache:
+                series = cache[formula]
+            else:
+                series = _eval_node(ast.parse(_normalize(formula), mode="eval").body, df, {})
+                if cache is not None:
+                    cache[formula] = series
+            value = _at(series, index)
         except FormulaError:
             value = None
         minimum = minimums.get(measure)

@@ -86,25 +86,70 @@ def scratch_factory(symbol, segment):
 
 
 def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, atr_needs,
-              swings_out: Optional[list] = None) -> List[dict]:
+              swings_out: Optional[list] = None, batch_mode: Optional[int] = None) -> List[dict]:
     """Every hit of `keys` on days >= d_from. atr_needs: {(period, tf)} --
     each hit carries atr[(period, tf)], tf 'hit' = the hit's own timeframe,
-    read from the engine at the hit moment exactly like live. swings_out, when
+    as the engine held it at the hit moment exactly like live. swings_out, when
     given, collects every confirmed swing {timeframe, kind, price, ts,
-    confirm_ts} from d_from on (for the stretch end)."""
+    confirm_ts} from d_from on (for the stretch end).
+
+    Patterns are evaluated one day at a time in a batch (same hits as candle
+    by candle, 2026-11-10); batch_mode overrides the setting pattern_batch_eval
+    (0 = candle by candle, for comparisons)."""
     factory = scratch_factory(symbol, segment)
     engine = ActivityEngine(factory)
-    evaluator = PatternEvaluator(real_factory, owner_id=owner_id)
+    evaluator = PatternEvaluator(real_factory, owner_id=owner_id, only_keys=keys, batch_mode=batch_mode)
     engine.pattern_evaluator = evaluator
     hits: List[dict] = []
     last_swing: Dict[str, datetime] = {}
+    keep = max([60] + [period * 4 for period, _ in atr_needs])
+    seen: Dict[str, list] = defaultdict(list)  # timeframe -> [(order, row)] in processing order
+    order_of: Dict[tuple, int] = {}  # (timeframe, ts) -> processing order
+    state = {"day": None, "n": 0}
+
+    def add_hits(acts) -> None:
+        for a in acts:
+            if a.get("activity_type") != "pattern" or a["activity"] not in keys:
+                continue
+            meta = evaluator.meta(a["activity"])
+            at = order_of.get((a["timeframe"], _utc(a["ts"])), state["n"])
+            atr = {}
+            for period, tf in atr_needs:
+                frame_tf = a["timeframe"] if tf == "hit" else tf
+                rows = [r for n, r in seen[frame_tf] if n <= at][-period * 4:]
+                atr[(period, tf)] = wilder_atr(rows, period) if len(rows) > period else None
+            hits.append({"key": a["activity"], "timeframe": a["timeframe"], "ts": _naive(a["ts"]),
+                         "close": float(a["close_price"]), "match": a.get("intensity"), "atr": atr, "_order": at,
+                         "direction": {"bullish": "buy", "bearish": "sell"}.get(meta[1] if meta else None)})
+
+    def end_day() -> None:
+        if state["day"] is not None:
+            add_hits(engine.end_deferred_patterns(symbol, segment))
+            del engine._buffer[:]
+        for tf in seen:
+            del seen[tf][:-keep]
+        order_of.clear()  # only the day being deferred is looked up
+
+    def note_row(sym, seg, c) -> None:
+        state["n"] += 1
+        last = engine.recent_rows(sym, seg, c.timeframe, 1)
+        if last and _utc(last[-1]["ts"]) == _utc(c.timestamp):
+            seen[c.timeframe].append((state["n"], last[-1]))
+            order_of[(c.timeframe, _utc(c.timestamp))] = state["n"]
 
     def on_closed(sym, seg, c):
-        if ist_date(c.timestamp) < d_from:
+        day = ist_date(c.timestamp)
+        if day < d_from:
             engine.warm_up(sym, seg, c)
+            note_row(sym, seg, c)
             return
+        if day != state["day"]:
+            end_day()
+            state["day"] = day
+            engine.begin_deferred_patterns(sym, seg)
         start = len(engine._buffer)
         engine.on_candle_closed(sym, seg, c)
+        note_row(sym, seg, c)
         if swings_out is not None:
             for p in engine.get_swing_points(sym, seg, c.timeframe):
                 p_ts = _naive(p.candle.timestamp)
@@ -112,17 +157,7 @@ def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, at
                     last_swing[c.timeframe] = p_ts
                     swings_out.append({"timeframe": c.timeframe, "kind": p.kind, "price": p.price, "ts": p_ts,
                                        "confirm_ts": _naive(c.timestamp)})
-        for a in engine._buffer[start:]:
-            if a.get("activity_type") != "pattern" or a["activity"] not in keys:
-                continue
-            meta = evaluator.meta(a["activity"])
-            atr = {}
-            for period, tf in atr_needs:
-                rows = engine.recent_rows(sym, seg, a["timeframe"] if tf == "hit" else tf, period * 4)
-                atr[(period, tf)] = wilder_atr(rows, period) if len(rows) > period else None
-            hits.append({"key": a["activity"], "timeframe": a["timeframe"], "ts": _naive(a["ts"]),
-                         "close": float(a["close_price"]), "match": a.get("intensity"), "atr": atr,
-                         "direction": {"bullish": "buy", "bearish": "sell"}.get(meta[1] if meta else None)})
+        add_hits(engine._buffer[start:])  # candle by candle (batch off); deferred hits come from end_day
         del engine._buffer[:]  # keep memory flat over long ranges
 
     agg = CandleAggregator(on_candle_closed=on_closed)
@@ -130,7 +165,11 @@ def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, at
         agg.ingest_historical_1min(symbol, segment, c)
     if candles:
         agg.flush_all(as_of=candles[-1].timestamp + timedelta(minutes=1))
-    return sorted(hits, key=lambda h: h["ts"])
+    end_day()
+    hits.sort(key=lambda h: (h["ts"], h["_order"]))  # processing order, as candle by candle
+    for h in hits:
+        del h["_order"]
+    return hits
 
 
 def trade_run(hits, candles_1m, settings: PaperSettings, keys, swings: Optional[list] = None) -> List[dict]:

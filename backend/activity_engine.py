@@ -62,6 +62,7 @@ from story.point_events import (
     catalog as point_events_catalog,
 )
 from story.swings import label_swing
+from pattern_engine import LATE_EVENTS
 
 logger = logging.getLogger(__name__)
 
@@ -1466,6 +1467,10 @@ class ActivityEngine:
         # startup slow).
         self.pattern_evaluator = None
         self._evaluate_patterns = True
+        self._recording = True  # False inside warm_up: pattern hits only advance state
+        # (symbol, segment) -> {timeframe: {rows, evals}}: candles whose pattern
+        # evaluation waits for one batch (begin/end_deferred_patterns)
+        self._deferred: Dict[Tuple[str, str], dict] = {}
         self._saved_activities = 0
         self._saved_indicators = 0
         self._last_processed_ts: Dict[InstrumentKey, datetime] = {}
@@ -1767,12 +1772,63 @@ class ActivityEngine:
             acts, inds = len(self._buffer), len(self._indicator_buffer)
             previous = self._evaluate_patterns
             self._evaluate_patterns = evaluate_patterns
+            self._recording = False
             try:
                 self._process_candle(symbol, exchange_segment, candle)
             finally:
                 self._evaluate_patterns = previous
+                self._recording = True
             del self._buffer[acts:]
             del self._indicator_buffer[inds:]
+
+    def begin_deferred_patterns(self, symbol: str, exchange_segment: str) -> bool:
+        """From now on this stock's candles are processed as usual, except
+        pattern evaluation waits for end_deferred_patterns, which evaluates
+        them all in one batch with the same result (restart recovery, gap-fill
+        re-run, backtests; 2026-11-10). Other stocks are not affected. Returns
+        False (nothing deferred) without an evaluator or with the setting
+        pattern_batch_eval = 0."""
+        evaluator = self.pattern_evaluator
+        if evaluator is None or getattr(evaluator, "batch_mode", 0) < 1:
+            return False  # (signal explanations are only deferred alongside patterns)
+        with self._lock:
+            self._deferred.setdefault((symbol, exchange_segment), {})
+        return True
+
+    def end_deferred_patterns(self, symbol: str, exchange_segment: str) -> List[dict]:
+        """Evaluates the deferred candles and records their hits (warm-up
+        candles only advance state, as before). Returns the pattern activity
+        rows added to the store, in candle order."""
+        with self._lock:
+            runs = self._deferred.pop((symbol, exchange_segment), None)
+            evaluator = self.pattern_evaluator
+            added: List[dict] = []
+            if not runs or evaluator is None:
+                return added
+            for timeframe, run in runs.items():
+                if run.get("signals"):
+                    self._explain_signals_batch((symbol, exchange_segment, timeframe), run, timeframe)
+                try:
+                    results = evaluator.evaluate_batch((symbol, exchange_segment, timeframe), run["rows"], run["evals"], timeframe)
+                except Exception:
+                    logger.exception("Batch pattern evaluation failed for %s (%s) %s", symbol, exchange_segment, timeframe)
+                    continue
+                instrument_id = self._lookup_instrument_id(symbol, exchange_segment) if results else None
+                if instrument_id is None:
+                    continue
+                for i in sorted(results):
+                    row = run["rows"][i]
+                    for hit in results[i]:
+                        activity = {
+                            "instrument_id": instrument_id, "timeframe": timeframe, "ts": row["ts"],
+                            "activity_type": "pattern", "activity": hit["key"], "intensity": hit["score"],
+                            "open_price": row["open"], "high_price": row["high"],
+                            "low_price": row["low"], "close_price": row["close"],
+                        }
+                        self._buffer.append(activity)
+                        added.append(activity)
+            added.sort(key=lambda a: _as_utc(a["ts"]))
+            return added
 
     def on_candle_closed(self, symbol: str, exchange_segment: str, candle: Candle) -> List[dict]:
         """Returns every activity dict newly appended to the buffer during
@@ -2319,14 +2375,19 @@ class ActivityEngine:
 
         return self._finish_candle(symbol, exchange_segment, candle, buffer_start)
 
-    def _explain_signals(self, key, rows, new, timeframe) -> None:
+    def _explain_signals(self, key, rows, new, timeframe, run: Optional[dict] = None) -> None:
         """Keep, per raw signal just detected, its strength measures with the
-        minimum and actual value (hit_explain; read by /api/review, 2026-10-16)."""
+        minimum and actual value (hit_explain; read by /api/review, 2026-10-16).
+        run: the stock's deferred run -- explained later, in one batch."""
         from condition_evaluator import frame_from_rows
         from hit_explain import explain_signal, strength_ok
         from signal_strength import STRENGTH_MEASURES
         acts = [a for a in new if a.get("activity_type") != "pattern"]
         if not acts or not self._evaluate_patterns:  # live / today's part only, not the history warm-up
+            return
+        if run is not None:
+            run.setdefault("signals", []).append(
+                (len(run["rows"]) - 1, [(a["activity"], a["ts"], a.get("activity_type")) for a in acts]))
             return
         try:
             window = list(rows)[-60:]  # enough for every measure's average, across sessions
@@ -2346,6 +2407,42 @@ class ActivityEngine:
         except Exception:
             logger.exception("Explaining raw signals failed for %s", key)
 
+    def _explain_signals_batch(self, key, run: dict, timeframe: str) -> None:
+        """_explain_signals for a deferred run: one frame for all of it, each
+        measure computed once; a signal whose measure reaches further back
+        than its candle's own 60-row window is read off that window instead."""
+        from condition_evaluator import frame_from_rows, required_lookback
+        from hit_explain import explain_signal, strength_ok
+        from pattern_engine import frame_slicer
+        from signal_strength import STRENGTH_MEASURES
+        rows, pending = run["rows"], run["signals"]
+        try:
+            lo = max(0, min(i for i, _ in pending) - 59)
+            df = frame_from_rows(rows[lo:max(i for i, _ in pending) + 1])
+            cut = frame_slicer(df, rows, lo)
+            cache: dict = {}
+            evaluator = self.pattern_evaluator
+            strength = (evaluator.strength.get(timeframe, {}) if evaluator is not None else {})
+            store = self.signal_explanations.setdefault(key, [])
+            for i, acts in pending:
+                a = max(0, i - 59)  # the candle's own window, as _explain_signals takes it
+                index_of = {_as_utc(rows[k]["ts"]): k for k in range(a, i + 1)}
+                latest_day = (_as_utc(rows[i]["ts"]) + _IST).date()
+                store[:] = [e for e in store if (_as_utc(e["ts"]) + _IST).date() == latest_day]
+                for name, ts, kind in acts:
+                    k = index_of.get(_as_utc(ts))
+                    measures = STRENGTH_MEASURES.get(name, {})
+                    if k is None or not measures:
+                        explained = []
+                    elif all(required_lookback(f) <= k - a + 1 for f in measures.values()):
+                        explained = explain_signal(name, df, strength.get(name, {}), measures, k - lo, cache)
+                    else:
+                        explained = explain_signal(name, cut(a, i), strength.get(name, {}), measures, k - a)
+                    store.append({"ts": ts, "timeframe": timeframe, "signal": name,
+                                  "kind": kind, "measures": explained, "strong": strength_ok(explained)})
+        except Exception:
+            logger.exception("Explaining raw signals failed for %s", key)
+
     def _finish_candle(self, symbol: str, exchange_segment: str, candle: Candle, buffer_start: int) -> List[dict]:
         """Last step of every candle (ALGO-32): note this candle's raw events
         on its frame row (a swing lands on its own, earlier, candle's row),
@@ -2354,6 +2451,16 @@ class ActivityEngine:
         key: InstrumentKey = (symbol, exchange_segment, candle.timeframe)
         rows = self._frame_rows.get(key)
         new = self._buffer[buffer_start:]
+        evaluator = self.pattern_evaluator
+        current = bool(rows) and _as_utc(rows[-1]["ts"]) == _as_utc(candle.timestamp)
+        deferred = self._deferred.get((symbol, exchange_segment))
+        run = None
+        if deferred is not None and current:
+            run = deferred.get(candle.timeframe)
+            if run is None:  # what the engine already holds is the first candles' window
+                run = deferred[candle.timeframe] = {"rows": list(rows), "evals": []}
+            else:
+                run["rows"].append(rows[-1])
         if rows and new:
             by_ts = {}
             for row in rows:
@@ -2361,15 +2468,22 @@ class ActivityEngine:
             for act in new:
                 row = by_ts.get(_as_utc(act["ts"]))
                 if row is not None:
-                    row.setdefault("_events", set()).add(act["activity"])
-            self._explain_signals(key, rows, new, candle.timeframe)
-        evaluator = self.pattern_evaluator
-        if evaluator is not None and self._evaluate_patterns and rows and _as_utc(rows[-1]["ts"]) == _as_utc(candle.timestamp):
+                    events = row.setdefault("_events", set())
+                    if act["activity"] not in events and _as_utc(row["ts"]) < _as_utc(candle.timestamp):
+                        # written onto an earlier candle (a swing): batch pattern
+                        # evaluation must not see it before this candle
+                        row.setdefault(LATE_EVENTS, {})[act["activity"]] = candle.timestamp
+                    events.add(act["activity"])
+            self._explain_signals(key, rows, new, candle.timeframe, run)
+        if evaluator is not None and self._evaluate_patterns and current:
             try:  # UP_LEG_PCT / DOWN_LEG_PCT for conditions; a failure only leaves them empty
                 rows[-1]["up_leg_pct"], rows[-1]["down_leg_pct"] = swing_leg_pcts(
                     self.get_swing_points(symbol, exchange_segment, candle.timeframe))
             except Exception:
                 logger.exception("swing legs failed for %s (%s)", symbol, exchange_segment)
+            if run is not None:  # evaluated in one batch by end_deferred_patterns
+                run["evals"].append((len(run["rows"]) - 1, self._recording))
+                return self._buffer[buffer_start:]
             try:
                 hits = evaluator.on_candle(key, rows, candle.timeframe)
             except Exception:

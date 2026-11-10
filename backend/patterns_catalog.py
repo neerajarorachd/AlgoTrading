@@ -118,4 +118,8 @@ PATTERN_SETTING_SEED: Sequence[Tuple[str, float, str]] = (
      "0 = always the pattern's default weightage. Off until per-stock weights are calibrated."),
     ("pattern_formed_threshold", 0.8,
      "A pattern counts as formed when at least this share of its conditions hold (0.8 = 80%)."),
+    ("pattern_batch_eval", 1,
+     "Restart recovery, gap-fill re-runs and paper backtests evaluate patterns in one batch per day "
+     "(same hits as candle by candle, much faster). 0 = candle by candle; 2 = batch, also checked "
+     "against candle by candle (slow; mismatches are logged)."),
 )

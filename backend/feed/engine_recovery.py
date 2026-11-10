@@ -202,16 +202,23 @@ def prepare_instrument(
         activity_engine.load_saved(saved_acts, saved_inds)
         summary["loaded_activities"], summary["loaded_indicators"] = len(saved_acts), len(saved_inds)
 
-        for tf in TIMEFRAMES:
-            mark = watermark.get(tf)
-            for candle in today_candles[tf]:
-                if mark is not None and candle.timestamp <= mark:
-                    # today's already-recorded part: advance pattern state too (ALGO-32)
-                    activity_engine.warm_up(symbol, exchange_segment, candle, evaluate_patterns=True)
-                    summary["replayed_warm"] += 1
-                else:
-                    activity_engine.on_candle_closed(symbol, exchange_segment, candle)
-                    summary["replayed_recorded"] += 1
+        # patterns for all of today's candles in one batch per timeframe, same
+        # result as candle by candle (~45 s -> ~1 s a stock, 2026-11-10)
+        batched = activity_engine.begin_deferred_patterns(symbol, exchange_segment)
+        try:
+            for tf in TIMEFRAMES:
+                mark = watermark.get(tf)
+                for candle in today_candles[tf]:
+                    if mark is not None and candle.timestamp <= mark:
+                        # today's already-recorded part: advance pattern state too (ALGO-32)
+                        activity_engine.warm_up(symbol, exchange_segment, candle, evaluate_patterns=True)
+                        summary["replayed_warm"] += 1
+                    else:
+                        activity_engine.on_candle_closed(symbol, exchange_segment, candle)
+                        summary["replayed_recorded"] += 1
+        finally:
+            if batched:
+                activity_engine.end_deferred_patterns(symbol, exchange_segment)
     except Exception:
         logger.exception("Recovery: engine preparation failed for %s (%s)", symbol, exchange_segment)
 

@@ -10,7 +10,7 @@ from brokers.models import Candle
 from db.models import SubscribedSymbol
 from db.ops import LibPatterns
 from db.ops.LibSystemSettings import seed_defaults as seed_settings
-from pattern_engine import PatternEvaluator
+from pattern_engine import LATE_EVENTS, PatternEvaluator
 from patterns_catalog import PATTERN_SETTING_SEED
 
 OPEN = datetime(2026, 10, 13, 3, 45, tzinfo=timezone.utc)  # 09:15 IST
@@ -175,3 +175,85 @@ def test_only_two_sessions_are_read(factory):
     key = ("X", "NSE_EQ", "1min")
     rows = _rows([95], start=OPEN - timedelta(days=2)) + _rows([40], start=OPEN - timedelta(days=1)) + _rows([40], start=OPEN)
     assert ev.on_candle(key, rows, "1min") == []
+
+
+# ---- batch mode (2026-11-10): same result as candle by candle ----
+
+def _candle_by_candle(ev, key, snapshots):
+    return [[h["key"] for h in ev.on_candle(key, snap, "1min")] for snap in snapshots]
+
+
+def _batch(ev, key, rows):
+    out = ev.evaluate_batch(key, rows, [(i, True) for i in range(len(rows))], "1min")
+    return [[h["key"] for h in out.get(i, [])] for i in range(len(rows))]
+
+
+def test_batch_does_not_see_an_event_before_it_was_written(factory):
+    # a swing lands on its candle 5 candles later: candle by candle, row 2's
+    # swing_low only exists from candle 7 on -- the batch must agree
+    _pattern(factory, "after_swing", ["RECENTLY(EVENT_ANY(swing_low), 6)"])
+    key = ("X", "NSE_EQ", "1min")
+    rows = _rows([50] * 12)
+    rows[2]["_events"] = {"swing_low"}
+    rows[2][LATE_EVENTS] = {"swing_low": rows[7]["ts"]}
+    snapshots = []
+    for i in range(12):
+        snap = list(rows[: i + 1])
+        if 2 <= i < 7:
+            snap[2] = {**snap[2], "_events": set()}
+        snapshots.append(snap)
+    ev1, ev2 = PatternEvaluator(factory), PatternEvaluator(factory)
+    expected = _candle_by_candle(ev1, key, snapshots)
+    assert expected[7] == ["after_swing"]
+    assert _batch(ev2, key, rows) == expected
+    assert ev2.scores == ev1.scores and ev2._state == ev1._state and ev2.explanations == ev1.explanations
+
+
+def test_batch_reads_the_same_two_sessions_window(factory):
+    _pattern(factory, "recent_high", ["RECENTLY(RSI > 90, 10)"])
+    _pattern(factory, "rising", ["RSI > RSI[-1]", "RSI > 45"])
+    key = ("X", "NSE_EQ", "1min")
+    rows = (_rows([95, 40, 41], start=OPEN - timedelta(days=2)) + _rows([40, 92, 41], start=OPEN - timedelta(days=1))
+            + _rows([40, 50, 60, 55, 70, 30, 95, 96], start=OPEN))
+    ev1, ev2 = PatternEvaluator(factory), PatternEvaluator(factory)
+    expected = _candle_by_candle(ev1, key, [rows[: i + 1] for i in range(len(rows))])
+    assert _batch(ev2, key, rows) == expected
+    assert ev2.scores == ev1.scores and ev2._state == ev1._state and ev2.explanations == ev1.explanations
+
+
+def _engine_hits(factory, deferred, candles):
+    engine = ActivityEngine(factory)
+    engine.pattern_evaluator = PatternEvaluator(factory)
+    if deferred:
+        assert engine.begin_deferred_patterns("X", "NSE_EQ")
+    for n, c in enumerate(candles):
+        if n < len(candles) // 2:
+            engine.warm_up("X", "NSE_EQ", c, evaluate_patterns=True)
+        else:
+            engine.on_candle_closed("X", "NSE_EQ", c)
+    if deferred:
+        engine.end_deferred_patterns("X", "NSE_EQ")
+    assert engine._deferred == {}
+    pats = sorted((a["ts"], a["activity"], a["intensity"]) for a in engine._buffer if a["activity_type"] == "pattern")
+    return pats, engine
+
+
+def test_engine_deferred_patterns_match_candle_by_candle(factory):
+    _register(factory)
+    _pattern(factory, "up", ["CLOSE > CLOSE[-1]"])
+    _pattern(factory, "down", ["CLOSE < CLOSE[-1]"])
+    _pattern(factory, "swing", ["RECENTLY(EVENT_ANY(swing_high), 3)"])
+    candles = _candles(60, step=0.6)
+    plain, e1 = _engine_hits(factory, False, candles)
+    batch, e2 = _engine_hits(factory, True, candles)
+    assert plain and batch == plain
+    assert e2.pattern_evaluator._state == e1.pattern_evaluator._state
+    assert e2.signal_explanations == e1.signal_explanations
+
+
+def test_batch_eval_setting_off_keeps_candle_by_candle(factory):
+    from db.ops.LibSystemSettings import set_value
+    set_value(factory, "pattern_batch_eval", 0)
+    engine = ActivityEngine(factory)
+    engine.pattern_evaluator = PatternEvaluator(factory)
+    assert engine.begin_deferred_patterns("X", "NSE_EQ") is False
