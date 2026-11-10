@@ -106,7 +106,13 @@ stop being preliminary.
   is ~1.0%, so a 1% target cuts the runs). 10:00-11:00 is the big loser (Y2 12-31% win).
   Whole day still loses with every setting (0.5/1.5: -Rs 6.1k). Picked best of 6
   windows x several stop/targets -> some luck. Scripts/logs:
-  `D:\AI Tradingesearch\paper_hindcopper_2026-11-09un_3min_075.py`, `run_3min_05_15.py`.
+  `D:\AI Trading
+esearch\paper_hindcopper_2026-11-09
+un_3min_075.py`, `run_3min_05_15.py`.
+  **User direction (11-10):** test on other stocks and find the sweet spot for
+  entry time window AND stop/target together (grid: windows e.g. 09:15-09:30,
+  09:15-10:00, 09:30-10:00, 09:15-10:30 x stops 0.3-1.0 x targets 1.0-2.5).
+  Pick on year 1, confirm on year 2, and say how many combinations were tried.
 - **T2** earlier entry: the structure event is confirmed `swing_lookback` (5) candles after the swing, so entries come ~15 min late. Variants with `swing_lookback` 2 and 3.
   Note: `ActivityEngine(swing_lookback=...)` currently switches market-story
   events OFF (settings = {}), and those events include `bullish_structure_shift`
