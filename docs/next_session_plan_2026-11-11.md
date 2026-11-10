@@ -98,6 +98,15 @@ stop being preliminary.
 
 ### Step 2: tests (each through the app's own paper backtest runner)
 - **T1** `ll_hh_hl_strong`, 3-min only, 30 stocks x 2 years, stop/target 0.5/1, 0.75/1.5, 1/2, Rs 1L; learn year 1 / check year 2.
+  Add an **entry window 09:15-10:00** variant with stop/target **0.5/1.5** and 0.75/1.5
+  (and the whole-day runs beside it). HINDCOPPER time-of-day split (2026-11-10,
+  preliminary, 30 trades): before 10:00 is the only window ahead; 0.5/1.5 = 47% win,
+  +0.28% avg net (Y1 +0.49, Y2 +0.17); 0.75/1.5 +0.23 (Y1 +0.37, Y2 +0.14);
+  0.75/1.0 +0.05 and 0.5/1.0 +0.12 turn negative in Y2 (avg stretch before 10:00
+  is ~1.0%, so a 1% target cuts the runs). 10:00-11:00 is the big loser (Y2 12-31% win).
+  Whole day still loses with every setting (0.5/1.5: -Rs 6.1k). Picked best of 6
+  windows x several stop/targets -> some luck. Scripts/logs:
+  `D:\AI Tradingesearch\paper_hindcopper_2026-11-09un_3min_075.py`, `run_3min_05_15.py`.
 - **T2** earlier entry: the structure event is confirmed `swing_lookback` (5) candles after the swing, so entries come ~15 min late. Variants with `swing_lookback` 2 and 3.
   Note: `ActivityEngine(swing_lookback=...)` currently switches market-story
   events OFF (settings = {}), and those events include `bullish_structure_shift`
