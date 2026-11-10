@@ -31,6 +31,23 @@ preliminary (1.8), impact analysis before any change to working code (1.1).
   lose; price ran +0.6% our way before the first opposite swing but exits kept
   ~0% -- entry comes too late (preliminary, one stock).
 
+## Housekeeping waiting on the user (ask at the start, one at a time)
+
+1. **Merge `paper-trading` -> `master` and restart live?** Order: run
+   `backend/scripts/migrate_paper_trading.py` on SQL Server first, then restart
+   (not during market hours without OK). Brings batch pattern evaluation
+   (restart ~45 s -> ~1-2 s per stock) and paper trading to live. Nothing on the
+   branch is pushed.
+2. **Copy the new daily updater to the VM** (`backend/scripts/update_daily_candles.py`,
+   `backend/db/ops/LibCandlesDaily.py`, `backend/market_calendar.py`,
+   `backend/data/market_holidays.txt`); dry-run there once
+   (`--symbols RELIANCE --dry-run`).
+3. **Check the VM daily-candle job log** (`journalctl --user -u algotrading-daily-candles`):
+   2026-11-09's daily candle was not stored by the 16:30 run (last stored 11-08).
+4. The SSH tunnel opened on 2026-11-10 was a background process of that
+   session; reopen with `ssh -L 1433:127.0.0.1:1433 trading-server -N` when DB
+   access is needed (one attempt, wait 30-60 s between retries).
+
 ## Track A -- daily candles (long-term)
 
 ### Step B: one stock end to end (user checks against a chart)
