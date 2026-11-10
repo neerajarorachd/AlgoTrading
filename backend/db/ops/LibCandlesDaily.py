@@ -27,6 +27,25 @@ def get_last_date(session, symbol: str, exchange_segment: str) -> Optional[date]
     return row[0] if row else None
 
 
+def get_first_date(session, symbol: str, exchange_segment: str) -> Optional[date]:
+    row = (
+        session.query(CandleDaily.trade_date)
+        .filter_by(symbol=symbol, exchange_segment=exchange_segment)
+        .order_by(CandleDaily.trade_date.asc())
+        .first()
+    )
+    return row[0] if row else None
+
+
+def get_close(session, symbol: str, exchange_segment: str, day: date) -> Optional[float]:
+    row = (
+        session.query(CandleDaily.close_price)
+        .filter_by(symbol=symbol, exchange_segment=exchange_segment, trade_date=day)
+        .first()
+    )
+    return float(row[0]) if row else None
+
+
 def upsert_candles(session_factory, symbol: str, exchange_segment: str, candles: List[Candle]) -> int:
     """Insert new days and refresh days whose values changed (e.g. a partial
     candle stored earlier). One query for the existing rows in the range.
