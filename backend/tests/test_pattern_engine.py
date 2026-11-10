@@ -257,3 +257,25 @@ def test_batch_eval_setting_off_keeps_candle_by_candle(factory):
     engine = ActivityEngine(factory)
     engine.pattern_evaluator = PatternEvaluator(factory)
     assert engine.begin_deferred_patterns("X", "NSE_EQ") is False
+
+
+def test_explain_off_keeps_the_same_hits_without_notes(factory):
+    _register(factory)
+    _pattern(factory, "up", ["CLOSE > CLOSE[-1]"])
+    _pattern(factory, "down", ["CLOSE < CLOSE[-1]"])
+    candles = _candles(40, step=0.6)
+    on, e1 = _engine_hits(factory, True, candles)
+    engine = ActivityEngine(factory)
+    engine.pattern_evaluator = PatternEvaluator(factory, explain=False)
+    engine.explain_signals = False
+    engine.begin_deferred_patterns("X", "NSE_EQ")
+    for n, c in enumerate(candles):
+        if n < len(candles) // 2:
+            engine.warm_up("X", "NSE_EQ", c, evaluate_patterns=True)
+        else:
+            engine.on_candle_closed("X", "NSE_EQ", c)
+    engine.end_deferred_patterns("X", "NSE_EQ")
+    off = sorted((a["ts"], a["activity"], a["intensity"]) for a in engine._buffer if a["activity_type"] == "pattern")
+    assert on and off == on
+    assert any(e1.pattern_evaluator.explanations.values())
+    assert not any(engine.pattern_evaluator.explanations.values()) and not any(engine.signal_explanations.values())

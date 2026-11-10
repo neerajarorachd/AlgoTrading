@@ -1468,6 +1468,7 @@ class ActivityEngine:
         self.pattern_evaluator = None
         self._evaluate_patterns = True
         self._recording = True  # False inside warm_up: pattern hits only advance state
+        self.explain_signals = True  # raw-signal strength notes (/api/review); backtests switch them off
         # (symbol, segment) -> {timeframe: {rows, evals}}: candles whose pattern
         # evaluation waits for one batch (begin/end_deferred_patterns)
         self._deferred: Dict[Tuple[str, str], dict] = {}
@@ -2383,7 +2384,7 @@ class ActivityEngine:
         from hit_explain import explain_signal, strength_ok
         from signal_strength import STRENGTH_MEASURES
         acts = [a for a in new if a.get("activity_type") != "pattern"]
-        if not acts or not self._evaluate_patterns:  # live / today's part only, not the history warm-up
+        if not acts or not self._evaluate_patterns or not self.explain_signals:  # live / today's part only, not the history warm-up
             return
         if run is not None:
             run.setdefault("signals", []).append(

@@ -86,7 +86,7 @@ def scratch_factory(symbol, segment):
 
 
 def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, atr_needs,
-              swings_out: Optional[list] = None, batch_mode: Optional[int] = None) -> List[dict]:
+              swings_out: Optional[list] = None, batch_mode: Optional[int] = None, explain: bool = False) -> List[dict]:
     """Every hit of `keys` on days >= d_from. atr_needs: {(period, tf)} --
     each hit carries atr[(period, tf)], tf 'hit' = the hit's own timeframe,
     as the engine held it at the hit moment exactly like live. swings_out, when
@@ -95,11 +95,14 @@ def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, at
 
     Patterns are evaluated one day at a time in a batch (same hits as candle
     by candle, 2026-11-10); batch_mode overrides the setting pattern_batch_eval
-    (0 = candle by candle, for comparisons)."""
+    (0 = candle by candle, for comparisons). explain: keep the "why it formed"
+    notes of hits and raw signals -- off by default, nothing in a backtest
+    reads them and they are about half the run time."""
     factory = scratch_factory(symbol, segment)
     engine = ActivityEngine(factory)
-    evaluator = PatternEvaluator(real_factory, owner_id=owner_id, only_keys=keys, batch_mode=batch_mode)
+    evaluator = PatternEvaluator(real_factory, owner_id=owner_id, only_keys=keys, batch_mode=batch_mode, explain=explain)
     engine.pattern_evaluator = evaluator
+    engine.explain_signals = explain
     hits: List[dict] = []
     last_swing: Dict[str, datetime] = {}
     keep = max([60] + [period * 4 for period, _ in atr_needs])

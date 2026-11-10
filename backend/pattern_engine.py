@@ -77,12 +77,16 @@ MAX_FRAME_ROWS = 120  # the engine keeps this many rows per instrument/timeframe
 
 
 class PatternEvaluator:
-    def __init__(self, session_factory, owner_id: Optional[int] = None, only_keys=None, batch_mode: Optional[int] = None):
+    def __init__(self, session_factory, owner_id: Optional[int] = None, only_keys=None, batch_mode: Optional[int] = None,
+                 explain: bool = True):
         self.session_factory = session_factory
         self.owner_id = owner_id
         # backtests evaluate only the patterns they trade; each pattern's state is
         # its own, so the others' absence changes nothing for these
         self.only_keys = frozenset(only_keys) if only_keys else None
+        # keep each hit's "why it formed" (/api/review); backtests switch it off --
+        # nothing there reads it, and it is half their run time (2026-11-10)
+        self.explain = explain
         self.batch_mode = 1  # setting pattern_batch_eval, unless forced here (comparisons)
         self._forced_batch_mode = batch_mode
         self.patterns: List[_Compiled] = []
@@ -227,9 +231,10 @@ class PatternEvaluator:
                 cooled = st["last_hit"] is None or index - st["last_hit"] > p.cooldown
                 if cooled:
                     st["last_hit"] = index
-                    if callable(frame):
-                        frame = frame()
-                    self._explain(key, latest, p, frame, timeframe, match)
+                    if self.explain:
+                        if callable(frame):
+                            frame = frame()
+                        self._explain(key, latest, p, frame, timeframe, match)
                     if record:
                         hits.append({"pattern": p, "key": k, "pattern_type": p.pattern_type,
                                      "match": round(match, 4), "score": round(p.weight * match, 4)})
