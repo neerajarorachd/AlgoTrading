@@ -22,6 +22,7 @@ decoupled module (prediction_tracker.py), not here.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import statistics
 import threading
@@ -62,7 +63,7 @@ from story.point_events import (
     catalog as point_events_catalog,
 )
 from story.swings import label_swing
-from pattern_engine import LATE_EVENTS
+from pattern_engine import DAILY_FRAME_ROWS, LATE_EVENTS, MAX_FRAME_ROWS
 
 logger = logging.getLogger(__name__)
 
@@ -1417,8 +1418,13 @@ class ActivityEngine:
     activities is one bulk insert, not a thousand round-trips.
     """
 
-    def __init__(self, session_factory, swing_lookback: Optional[int] = None):
+    def __init__(self, session_factory, swing_lookback: Optional[int] = None, daily: bool = False):
         self.session_factory = session_factory
+        # Daily mode (2026-11-10): one candle = one trading day (long-term
+        # analysis). No VWAP, no intraday line tests / day levels / story; rows
+        # kept per stock grow to DAILY_FRAME_ROWS (52-week = 250 days); adds
+        # EMA200, MA200 and weekly RSI14. Off by default: intraday unchanged.
+        self.daily = daily
         # swing_lookback precedence: an explicit per-call override (a
         # backtest run's own Strategy.swing_lookback, see order_backtest.py's
         # engine_config_from_strategy) wins first, then the GLOBAL
@@ -1439,7 +1445,7 @@ class ActivityEngine:
         self.point_events_v2 = _setting("point_events_v2") >= 1
         # Market story P2: today's story in memory, saved with the flush (story/live.py)
         self.story = None
-        if _setting("story_enabled") >= 1:
+        if _setting("story_enabled") >= 1 and not daily:
             from story.live import LiveStory
             self.story = LiveStory()
             self._story_started = False
@@ -1485,7 +1491,12 @@ class ActivityEngine:
         # per (symbol, exchange_segment, timeframe) -- today's indicator rows
         # reach the DB only on the scheduled flush, so the live recommendation
         # rule gate (rule_gate.py) reads THIS, never the DB, for same-day data.
-        self._frame_rows: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=120))
+        frame_max = DAILY_FRAME_ROWS if daily else MAX_FRAME_ROWS
+        self._frame_rows: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=frame_max))
+        # daily mode only: MA200 closes, EMA200, weekly RSI ({week, close, committed RsiState})
+        self._closes200: Dict[InstrumentKey, deque] = defaultdict(lambda: deque(maxlen=200))
+        self._ema200_state: Dict[InstrumentKey, EmaState] = defaultdict(EmaState)
+        self._weekly_rsi: Dict[InstrumentKey, dict] = {}
         # instrument key -> today's raw signals, each with its strength numbers (/api/review)
         self.signal_explanations: Dict[InstrumentKey, List[dict]] = {}
         # price-action state, one series per (symbol, exchange_segment, timeframe).
@@ -1902,7 +1913,7 @@ class ActivityEngine:
                 except Exception:
                     logger.exception("Activity engine: %s failed for %s (%s)", name, symbol, exchange_segment)
 
-        vwap = self._update_vwap(key, candle)
+        vwap = None if self.daily else self._update_vwap(key, candle)
         if vwap:
             gaps = self._vwap_gaps[key]
             gaps.append((candle.close - vwap) / vwap)
@@ -2063,6 +2074,12 @@ class ActivityEngine:
             ema50 = update_ema(self._ema50_state[key], candle.close, period=50)
         except Exception:
             logger.exception("Activity engine: EMA update failed for %s (%s)", symbol, exchange_segment)
+        long_term = {}
+        try:
+            if self.daily:
+                long_term = self._daily_long_term(key, candle)
+        except Exception:
+            logger.exception("Activity engine: EMA200/MA200/weekly RSI failed for %s (%s)", symbol, exchange_segment)
 
         if len(closes) >= _MA_LONG_PERIOD:
             ma21 = statistics.fmean(list(closes)[-_MA_SHORT_PERIOD:])
@@ -2112,13 +2129,15 @@ class ActivityEngine:
                 "bb_lower": bb.lower if bb else None,
                 "ema5": ema5, "ema14": ema14, "ema21": ema21, "ema50": ema50,
                 "adx": adx, "plus_di": plus_di, "minus_di": minus_di,
+                **long_term,  # daily mode: ema200, ma200, rsi_weekly
                 "_events": set(),  # this candle's raw events, filled in _finish_candle (EVENT() in patterns)
             })
         except Exception:
             logger.exception("Activity engine: indicator snapshot failed for %s (%s)", symbol, exchange_segment)
 
         # Market story P1 point events: line tests (start / bounce / break) and day levels.
-        if self.point_events_v2:
+        # Intraday only: on daily candles every candle is its own "day".
+        if self.point_events_v2 and not self.daily:
             try:
                 day = (_as_utc(candle.timestamp) + _IST).date()
                 frame = self._frame_rows.get(key)
@@ -2517,6 +2536,25 @@ class ActivityEngine:
         on_candle_closed returns an activity naming that pattern — nothing
         else mutates this deque in between."""
         return list(self._swing_points[(symbol, exchange_segment, timeframe)])
+
+    def _daily_long_term(self, key: InstrumentKey, candle: Candle) -> dict:
+        """Daily mode: EMA200, MA200 and weekly RSI14 for this candle. The
+        weekly RSI folds in each finished week's last close; the current week
+        counts with today's close (what is known today -- no look-ahead)."""
+        closes = self._closes200[key]
+        closes.append(candle.close)
+        ema200 = update_ema(self._ema200_state[key], candle.close, period=200)
+        ma200 = statistics.fmean(closes) if len(closes) == 200 else None
+        y, w, _ = (_as_utc(candle.timestamp) + _IST).date().isocalendar()
+        st = self._weekly_rsi.get(key)
+        if st is None:
+            st = self._weekly_rsi[key] = {"week": (y, w), "close": candle.close, "rsi": RsiState()}
+        elif st["week"] != (y, w):
+            update_rsi(st["rsi"], st["close"])  # the finished week's close
+            st["week"] = (y, w)
+        st["close"] = candle.close
+        peek = copy.deepcopy(st["rsi"])
+        return {"ema200": ema200, "ma200": ma200, "rsi_weekly": update_rsi(peek, candle.close)}
 
     def _update_vwap(self, key: InstrumentKey, candle: Candle) -> Optional[float]:
         """Cumulative volume-weighted average price since the day's first

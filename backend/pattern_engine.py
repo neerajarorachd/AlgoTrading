@@ -74,11 +74,13 @@ def _event_names(tree: ast.AST) -> frozenset:
 
 LATE_EVENTS = "_late"  # row key: {event name: ts of the candle that wrote it} for events written onto an earlier row
 MAX_FRAME_ROWS = 120  # the engine keeps this many rows per instrument/timeframe (ActivityEngine._frame_rows)
+DAILY_FRAME_ROWS = 400  # daily mode: 52-week (250-day) lookbacks fit
+DAILY_KEY = "all"  # daily mode: one continuous "session" -- state never resets by day
 
 
 class PatternEvaluator:
     def __init__(self, session_factory, owner_id: Optional[int] = None, only_keys=None, batch_mode: Optional[int] = None,
-                 explain: bool = True):
+                 explain: bool = True, daily: bool = False):
         self.session_factory = session_factory
         self.owner_id = owner_id
         # backtests evaluate only the patterns they trade; each pattern's state is
@@ -87,6 +89,10 @@ class PatternEvaluator:
         # keep each hit's "why it formed" (/api/review); backtests switch it off --
         # nothing there reads it, and it is half their run time (2026-11-10)
         self.explain = explain
+        # daily mode (2026-11-10): one candle = one day; no reset per day, the
+        # window is the last N candles (no "today + previous session" rule)
+        self.daily = daily
+        self.max_rows = DAILY_FRAME_ROWS if daily else MAX_FRAME_ROWS
         self.batch_mode = 1  # setting pattern_batch_eval, unless forced here (comparisons)
         self._forced_batch_mode = batch_mode
         self.patterns: List[_Compiled] = []
@@ -223,6 +229,8 @@ class PatternEvaluator:
         AND the previous session only -- running data spans sessions
         (2026-10-16); dots are still marked per day (_advance)."""
         recent = list(rows)[-self.window:]
+        if self.daily:
+            return recent
         days = sorted({(r["ts"] + IST).date() for r in recent})[-2:]
         return [r for r in recent if (r["ts"] + IST).date() in days]
 
@@ -231,7 +239,7 @@ class PatternEvaluator:
         reset, candle index, scores, formed edge + cooldown, explanations.
         `frame`: the candle's frame, or a callable building it (only needed
         when something forms)."""
-        day = (latest["ts"] + IST).date()
+        day = DAILY_KEY if self.daily else (latest["ts"] + IST).date()
         if self._day.get(key) != day:  # a new session: patterns never span days
             self._day[key] = day
             self._index[key] = 0
@@ -271,8 +279,8 @@ class PatternEvaluator:
         self._maybe_reload()
         if not self.patterns or not evals:
             return {}
-        width = min(self.window, MAX_FRAME_ROWS)
-        days = [(r["ts"] + IST).date() for r in rows]
+        width = min(self.window, self.max_rows)
+        days = [DAILY_KEY if self.daily else (r["ts"] + IST).date() for r in rows]
         starts = {}
         for i, _ in evals:  # first row of candle i's own frame (_live_window)
             lo = max(0, i - width + 1)
@@ -291,7 +299,7 @@ class PatternEvaluator:
         out = {}
         for i, record in evals:
             if matches is None:
-                hits = self.on_candle(key, as_of(rows, max(0, i - MAX_FRAME_ROWS + 1), i), timeframe, record)
+                hits = self.on_candle(key, as_of(rows, max(0, i - self.max_rows + 1), i), timeframe, record)
             else:
                 hits = self._advance(key, rows[i], matches[i], timeframe, record, lambda i=i: cut(starts[i], i))
             if hits:

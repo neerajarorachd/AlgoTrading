@@ -106,6 +106,10 @@ class Field(str, Enum):
     ADX = "adx"
     PLUS_DI = "plus_di"
     MINUS_DI = "minus_di"
+    # Long-term, daily candles only (2026-11-10): empty on intraday frames
+    EMA200 = "ema200"
+    MA200 = "ma200"
+    RSI_WEEKLY = "rsi_weekly"  # RSI14 on weekly closes (current week = today's close)
 
 
 # Derived fields (ALGO-30): computed from the stored ones on demand, so they
@@ -132,7 +136,13 @@ DERIVED_FIELDS = {
     # on the engine's rows; empty where unknown.
     "up_leg_pct": lambda df: _row_carried(df, "up_leg_pct"),
     "down_leg_pct": lambda df: _row_carried(df, "down_leg_pct"),
+    # 52-week high / low: highest high / lowest low of the last 250 candles
+    # (this one included) -- meant for daily candles (2026-11-10)
+    "high_52w": lambda df: df["high"].rolling(250, min_periods=250).max(),
+    "low_52w": lambda df: df["low"].rolling(250, min_periods=250).min(),
 }
+# candles a derived field reaches back (incl. the current one); others need 1
+DERIVED_DEPTH = {"high_52w": 250, "low_52w": 250}
 ROW_CARRIED_FIELDS = ("up_leg_pct", "down_leg_pct")
 DERIVED_DESCRIPTIONS = {
     "macd_hist": "MACD line minus signal",
@@ -145,12 +155,17 @@ DERIVED_DESCRIPTIONS = {
     "tf_minutes": "the candle timeframe in minutes: 1, 3 or 5",
     "up_leg_pct": "% rise of the latest finished up-swing (swing low -> next swing high)",
     "down_leg_pct": "% fall of the latest finished down-swing (swing high -> next swing low)",
+    "high_52w": "highest HIGH of the last 250 candles incl. this one (52 weeks on daily candles)",
+    "low_52w": "lowest LOW of the last 250 candles incl. this one (52 weeks on daily candles)",
 }
 
 
 def timeframe_minutes(timeframe: str) -> int:
-    """'5min' -> 5."""
-    return int(str(timeframe).lower().replace("min", ""))
+    """'5min' -> 5, '1day' -> 1440."""
+    tf = str(timeframe).lower()
+    if tf.endswith("day"):
+        return int(tf.replace("day", "") or 1) * 1440
+    return int(tf.replace("min", ""))
 
 
 def _row_carried(df: pd.DataFrame, column: str) -> pd.Series:
@@ -697,8 +712,14 @@ def required_lookback(formula: str, default_recently: int = DEFAULT_RECENTLY_CAN
 
     def depth(node) -> int:
         try:
+            if isinstance(node, ast.Name):
+                try:
+                    return DERIVED_DEPTH.get(_resolve_field_token(node.id), 1)
+                except FormulaError:
+                    return 1
             if isinstance(node, ast.Subscript):
-                return abs(_parse_int_literal(node.slice, "offset")) + 1
+                base = DERIVED_DEPTH.get(_resolve_field_token(node.value.id), 1) if isinstance(node.value, ast.Name) else 1
+                return abs(_parse_int_literal(node.slice, "offset")) + base
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 name, args = node.func.id.lower(), node.args
                 inner = max((depth(a) for a in args), default=1)

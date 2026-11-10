@@ -52,6 +52,7 @@ Status key: **✓ works today** · **◐ planned (pattern table, ALGO-5)**.
 | `TIME` | Candle start time in IST as HHMM: 930 = 09:30, 1445 = 14:45. e.g. `TIME >= 930 and TIME < 1445` |
 | `TF_MINUTES` | The candle timeframe in minutes (1, 3 or 5). e.g. `TF_MINUTES == 5` |
 | `UP_LEG_PCT` `DOWN_LEG_PCT` | % size of the latest finished up-swing (swing low → next swing high) and down-swing (swing high → next swing low), from confirmed swing points. At an LL-HH-HL: UP = LL→HH, DOWN = HH→HL. e.g. `RECENTLY(EVENT_ANY(bullish_structure_shift), 6)` (structure events sit on the swing candle, confirmed 5 candles later) + `UP_LEG_PCT >= 1.5` + `DOWN_LEG_PCT >= 1` |
+| `EMA200` `MA200` `RSI_WEEKLY` `HIGH_52W` `LOW_52W` | **Daily candles only** (long-term, 2026-11-10; empty on 1/3/5-min). 200-day EMA and simple average; RSI14 on weekly closes (this week counts with today's close); highest high / lowest low of the last 250 candles incl. this one. e.g. `CLOSE > HIGH_52W[-1]` = a new 52-week high close; `CROSSED_UP(MA50, MA200)` = golden cross. `TF_MINUTES` is 1440 on daily candles. |
 
 ---
 

@@ -187,6 +187,20 @@ what has been decided**.
 - **Dhan quirks:** `toDate` is exclusive; a range with no trading day returns
   error DH-907 (treat as empty); a direct 3-min request returns only today
   (roll up from 1-min instead).
+- **Daily candles (11-10):** one candle = one trading day (RSI14 = 14 days,
+  MA50 = 50 days). Always fetched from Dhan's daily endpoint, never built from
+  1-min (only today's unfinished candle may be). One call returns a stock's
+  whole history (since inception, back-adjusted for bonus/split). Live keeps
+  >= 400 trading days (200-day lookback + 200 to settle); the updater fetches
+  only days after the last stored one, start/end moved off weekends/holidays
+  step by step, and re-fetches a stock's history if Dhan back-adjusted it.
+  Research uses 15 years in files
+  (`D:\AI Trading\research\daily_15y_2026-11-10`).
+- **Batch pattern evaluation (11-10):** restart recovery, gap-fill re-runs and
+  backtests evaluate patterns in one batch per day; the result must equal
+  candle-by-candle exactly (setting `pattern_batch_eval`: 0 off, 1 on, 2 check).
+  Backtests skip the "why it formed" notes and timeframes their patterns can't
+  form on.
 
 ## 6. Patterns and signals (finalized)
 
@@ -290,6 +304,18 @@ From the 2-year, 13-stock, 3/5-min intraday backtests (scripts and data in
 - Each open row carries a guess of the next state (learned from past
   stories), checked when the next state arrives.
 - Proven offline on research data first; ships behind a flag.
+
+## 7a2. Daily candles for long-term investing (11-10, step A built)
+
+- A separate daily mode (`daily=True` on the engine and pattern evaluator):
+  no reset per day, cooldown in candles, a condition sees the last N candles,
+  no VWAP/TIME. Extra fields EMA200, MA200, RSI_WEEKLY, HIGH_52W/LOW_52W.
+  Intraday behaviour is unchanged by it.
+- Daily patterns are their own list, separate from intraday ones.
+- First study is pattern-only: % move after 1 week / 1 month / 3 / 6 / 12
+  months vs the base rate (same stocks, every day) and NIFTY 50; learn on
+  2011-2018, check on 2019-2026; a pattern passes only if it holds in both.
+  Paper trading on daily comes after. Plan: `docs/next_session_plan_2026-11-11.md`.
 
 ## 7b. Direction: a library of narrow setups (10-30)
 

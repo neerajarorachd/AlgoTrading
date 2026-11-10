@@ -25,7 +25,8 @@ def test_field_enum_values_are_the_dataframe_column_names(df):
                                                               "ma21", "ma50", "atr", "bb_upper",
                                                               "bb_middle", "bb_lower", "volume",
                                                               "ema5", "ema14", "ema21", "ema50",
-                                                              "adx", "plus_di", "minus_di")
+                                                              "adx", "plus_di", "minus_di",
+                                                              "ema200", "ma200", "rsi_weekly")  # daily-only
 
 
 def test_bare_field_reads_the_current_candle(df):
