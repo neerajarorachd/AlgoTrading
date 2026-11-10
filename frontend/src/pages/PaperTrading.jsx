@@ -103,7 +103,7 @@ function TradesTable({ trades }) {
     <div style={{ overflowX: 'auto' }}>
       <table style={S.table} data-testid="paper-trades">
         <thead><tr>{['Hit', 'Stock', 'TF', 'Pattern', 'Side', 'Status', 'Entry', 'Qty', 'Stop', 'Target',
-          'Exit', 'Reason', 'Net ₹', 'Net %'].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          'Exit', 'Reason', 'Net ₹', 'Net %', 'Stretch %'].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
         <tbody>{trades.map((t) => (
           <tr key={t.id}>
             <td style={S.td}>{istTime(t.hit_ts)}</td><td style={S.td}>{t.symbol}</td>
@@ -117,6 +117,11 @@ function TradesTable({ trades }) {
             <td style={S.td}>{fmt(t.exit_price)}</td><td style={S.td}>{t.exit_reason || '—'}</td>
             <td style={{ ...S.td, color: pnlColor(t.net_pnl) }}>{fmt(t.net_pnl)}</td>
             <td style={{ ...S.td, color: pnlColor(t.net_pct) }}>{fmt(t.net_pct, 3)}</td>
+            <td style={{ ...S.td, color: pnlColor(t.stretch_pct) }} data-testid="stretch-cell"
+              title={t.stretch_reason ? `best ${fmt(t.stretch_price)} at ${istTime(t.stretch_ts)}, move ended: ${
+                { swing: 'opposite swing', day_end: 'day end', restart: 'day end (app restarted)' }[t.stretch_reason]}`
+                : 'still running'}>
+              {t.status === 'not_taken' ? '—' : t.stretch_reason ? fmt(t.stretch_pct, 2) : '…'}</td>
           </tr>))}</tbody>
       </table>
     </div>
@@ -271,7 +276,7 @@ function BacktestTab({ patterns, defaults, setError }) {
           <div style={{ overflowX: 'auto' }}>
             <table style={S.table}>
               <thead><tr>{['Run', 'Patterns', 'Stop', 'Target', 'Size', 'Trades', 'Not taken', 'Win %',
-                'Avg net %', 'Net ₹'].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                'Avg net %', 'Net ₹', 'Avg stretch %', 'Avg exit move %'].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
               <tbody>{detail.runs.map((r) => {
                 const s = r.summary || {}
                 return (
@@ -285,6 +290,9 @@ function BacktestTab({ patterns, defaults, setError }) {
                     <td style={S.td}>{fmt(s.win_pct, 1)}</td>
                     <td style={{ ...S.td, color: pnlColor(s.avg_net_pct) }}>{fmt(s.avg_net_pct, 3)}</td>
                     <td style={{ ...S.td, color: pnlColor(s.net_pnl) }}>{fmt(s.net_pnl)}</td>
+                    <td style={S.td} title="How far price kept going our way after entry (to the first opposite swing or day end)">
+                      {fmt(s.avg_stretch_pct, 3)}</td>
+                    <td style={S.td} title="Price move we kept at our exit, before costs">{fmt(s.avg_exit_move_pct, 3)}</td>
                   </tr>)
               })}</tbody>
             </table>

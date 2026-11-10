@@ -164,3 +164,50 @@ def on_candle(trade: dict, *, ts: datetime, open_: float, high: float, low: floa
         close_trade(trade, exit_ts=ts, exit_price=open_ if gapped else target, reason="target")
         return True
     return False
+
+
+# ------------------------------------------------------------- stretch end
+# How far price kept going in the trade's direction after entry, whatever our
+# own exit did (user, 2026-11-09). The move ends at the first swing the other
+# way on the hit's timeframe (a swing high for a buy, a swing low for a sell),
+# or at day end. Stretch = the best price in the trade's direction between the
+# end of the hit candle and the end of that swing candle (or day end).
+
+def day_end_ts(ts: datetime, day_end_hhmm: int) -> datetime:
+    """UTC naive time of `day_end_hhmm` IST on the IST date of `ts`."""
+    d = ist_date(ts)
+    return datetime(d.year, d.month, d.day, day_end_hhmm // 100, day_end_hhmm % 100) - IST
+
+
+def stretch_end(direction: str, entry_price: float, candles, start_ts: datetime, end_ts: datetime) -> dict:
+    """candles: chronological (ts, high, low), 1-min. Extreme in the trade's
+    direction over start_ts <= ts < end_ts. With no candle in range the
+    stretch is the entry itself (the move ended at once)."""
+    buy = direction == "buy"
+    best, best_ts = entry_price, start_ts
+    for ts, high, low in candles:
+        if ts < start_ts:
+            continue
+        if ts >= end_ts:
+            break
+        price = high if buy else low
+        if (price > best) if buy else (price < best):
+            best, best_ts = price, ts
+    sign = 1 if buy else -1
+    return {"stretch_price": round(best, 4), "stretch_ts": best_ts,
+            "stretch_pct": round(sign * (best - entry_price) / entry_price * 100.0, 4)}
+
+
+def first_opposite_swing(direction: str, swings, hit_ts: datetime, timeframe: str,
+                         confirmed_before: Optional[datetime] = None):
+    """First swing the other way on `timeframe` whose swing candle is at or
+    after the hit candle. swings: chronological dicts {timeframe, kind,
+    price, ts, confirm_ts}. confirmed_before: ignore swings confirmed later."""
+    kind = "high" if direction == "buy" else "low"
+    for s in swings:
+        if s["timeframe"] != timeframe or s["kind"] != kind or s["ts"] < hit_ts:
+            continue
+        if confirmed_before is not None and s.get("confirm_ts") is not None and s["confirm_ts"] >= confirmed_before:
+            continue
+        return s
+    return None

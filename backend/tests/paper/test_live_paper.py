@@ -17,6 +17,9 @@ class FakeEngine:
     def recent_rows(self, symbol, seg, tf, n):
         return [{"high": 101, "low": 99, "close": 100}] * n  # ATR = 2
 
+    def get_swing_points(self, symbol, seg, tf):
+        return []
+
 
 def _hit(key="p1", ts=datetime(2026, 11, 9, 4, 30), close=100.0):
     return {"instrument_id": 7, "timeframe": "5min", "ts": ts, "activity_type": "pattern",
@@ -73,3 +76,37 @@ def test_restart_reload_catches_up_missed_candles(session_factory):
     with session_factory() as s:
         row = s.query(PaperTradeLive).one()
         assert row.exit_reason == "stop" and row.exit_price == 99.0
+
+
+class _Pt:
+    def __init__(self, kind, price, ts):
+        self.kind, self.price = kind, price
+        self.candle = Candle(symbol="ABC", timeframe="5min", timestamp=ts, open=0, high=0, low=0, close=0, volume=0)
+
+
+class SwingEngine(FakeEngine):
+    swings = []
+
+    def get_swing_points(self, symbol, seg, tf):
+        return self.swings
+
+
+def test_stretch_end_saved_at_first_opposite_swing(session_factory):
+    with session_factory() as s:
+        s.add(PaperSelection(owner_id=1, item_key="p1", target_mode="points", target_value=50, slippage_pct=0))
+        s.commit()
+    eng = SwingEngine()
+    pt = LivePaperTrader(session_factory, eng)
+    pt.on_candle_closed("ABC", "NSE_EQ", _c("5min", datetime(2026, 11, 9, 4, 30), 100, 100, 100, 100), [_hit()])
+    for i, h in enumerate([101, 103.5, 102, 101, 100.5]):  # 04:35-04:39
+        pt.on_candle_closed("ABC", "NSE_EQ", _c("1min", datetime(2026, 11, 9, 4, 35 + i), 100, h, 99.9, h - 0.5), [])
+    # no opposite swing yet: still watching
+    pt.on_candle_closed("ABC", "NSE_EQ", _c("5min", datetime(2026, 11, 9, 4, 35), 100, 103.5, 99.9, 100.5), [])
+    with session_factory() as s:
+        assert s.query(PaperTradeLive).one().stretch_reason is None
+    eng.swings = [_Pt("high", 103.5, datetime(2026, 11, 9, 4, 35))]  # the 04:35 5-min candle, confirmed later
+    pt.on_candle_closed("ABC", "NSE_EQ", _c("5min", datetime(2026, 11, 9, 5, 0), 100, 100, 99, 99), [])
+    with session_factory() as s:
+        row = s.query(PaperTradeLive).one()
+        assert (row.stretch_price, row.stretch_pct, row.stretch_reason) == (103.5, 3.5, "swing")
+        assert row.stretch_ts == datetime(2026, 11, 9, 4, 36) and row.status == "open"  # our trade still open

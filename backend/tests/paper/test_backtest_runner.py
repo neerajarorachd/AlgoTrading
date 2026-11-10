@@ -31,7 +31,8 @@ def test_trade_run_closes_at_data_end():
 
 
 def test_summarize_halves_drawdown_and_stocks():
-    base = {"status": "closed", "symbol": "A", "exit_reason": "stop"}
+    base = {"status": "closed", "symbol": "A", "exit_reason": "stop", "direction": "buy",
+            "entry_price": 100.0, "exit_price": 99.0, "stretch_pct": 0.5}
     trades = [dict(base, net_pnl=-100, net_pct=-0.1, hit_ts=datetime(2025, 1, 5), exit_ts=datetime(2025, 1, 5)),
               dict(base, net_pnl=-50, net_pct=-0.05, hit_ts=datetime(2025, 2, 5), exit_ts=datetime(2025, 2, 5)),
               dict(base, symbol="B", net_pnl=300, net_pct=0.3, exit_reason="target",
@@ -42,3 +43,25 @@ def test_summarize_halves_drawdown_and_stocks():
     assert s["worst_losing_streak"] == 2 and (s["stocks_traded"], s["stocks_positive"]) == (2, 1)
     assert s["first_half"]["trades"] == 2 and s["second_half"]["net_pnl"] == 300
     assert s["exits"]["target"] == 1
+    assert s["avg_stretch_pct"] == 0.5 and s["avg_exit_move_pct"] == -1.0
+
+
+def test_stretch_ends_at_first_opposite_swing():
+    from paper.backtest_runner import add_stretch
+    # buy at 10:00 (1-min hit): price runs to 103 at 10:03, swing high confirmed there, then 104 later
+    m1 = [(T0 + timedelta(minutes=i), h, h - 0.5) for i, h in enumerate([100, 101, 102, 103, 102, 104])]
+    swings = [{"timeframe": "1min", "kind": "low", "price": 99, "ts": T0 + timedelta(minutes=1), "confirm_ts": None},
+              {"timeframe": "1min", "kind": "high", "price": 103, "ts": T0 + timedelta(minutes=3),
+               "confirm_ts": T0 + timedelta(minutes=8)}]
+    t = {"timeframe": "1min", "hit_ts": T0, "direction": "buy", "entry_price": 100.0}
+    add_stretch(t, swings, m1, S)
+    assert (t["stretch_price"], t["stretch_pct"], t["stretch_reason"]) == (103, 3.0, "swing")
+    assert t["stretch_ts"] == T0 + timedelta(minutes=3)
+
+
+def test_stretch_runs_to_day_end_without_opposite_swing():
+    from paper.backtest_runner import add_stretch
+    m1 = [(T0 + timedelta(minutes=i), 100, l) for i, l in enumerate([100, 99, 97, 98])]
+    t = {"timeframe": "1min", "hit_ts": T0, "direction": "sell", "entry_price": 100.0}
+    add_stretch(t, [], m1, S)
+    assert (t["stretch_price"], t["stretch_pct"], t["stretch_reason"]) == (97, 3.0, "day_end")

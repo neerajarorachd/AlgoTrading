@@ -80,6 +80,13 @@ class _TradeColumns:
     best_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)   # best move while open
     worst_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # worst move while open
     snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)      # JSON: indicators at the hit
+    # stretch end: how far price kept going in the trade's direction after
+    # entry, whatever our exit did; ends at the first opposite swing on the
+    # hit's timeframe or at day end (stretch_reason: swing | day_end | restart)
+    stretch_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    stretch_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    stretch_ts: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    stretch_reason: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 

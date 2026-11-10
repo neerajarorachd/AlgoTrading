@@ -20,7 +20,7 @@ import json
 import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -35,7 +35,8 @@ from db.ops.LibSignalStrength import seed_defaults as seed_strength
 from db.ops.LibSystemSettings import seed_defaults as seed_settings
 from feed.candle_aggregator import CandleAggregator
 from paper.live_paper import wilder_atr
-from paper.trade_logic import PaperSettings, close_trade, ist_date, on_candle, open_trade
+from paper.trade_logic import (PaperSettings, close_trade, day_end_ts, first_opposite_swing, ist_date,
+                               on_candle, open_trade, stretch_end)
 from pattern_engine import PatternEvaluator
 from patterns_catalog import PATTERN_SETTING_SEED, SYSTEM_PATTERNS
 from signal_strength_defaults import SIGNAL_STRENGTH_BASE, STRENGTH_SETTING_SEED
@@ -84,15 +85,19 @@ def scratch_factory(symbol, segment):
     return factory
 
 
-def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, atr_needs) -> List[dict]:
+def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, atr_needs,
+              swings_out: Optional[list] = None) -> List[dict]:
     """Every hit of `keys` on days >= d_from. atr_needs: {(period, tf)} --
     each hit carries atr[(period, tf)], tf 'hit' = the hit's own timeframe,
-    read from the engine at the hit moment exactly like live."""
+    read from the engine at the hit moment exactly like live. swings_out, when
+    given, collects every confirmed swing {timeframe, kind, price, ts,
+    confirm_ts} from d_from on (for the stretch end)."""
     factory = scratch_factory(symbol, segment)
     engine = ActivityEngine(factory)
     evaluator = PatternEvaluator(real_factory, owner_id=owner_id)
     engine.pattern_evaluator = evaluator
     hits: List[dict] = []
+    last_swing: Dict[str, datetime] = {}
 
     def on_closed(sym, seg, c):
         if ist_date(c.timestamp) < d_from:
@@ -100,6 +105,13 @@ def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, at
             return
         start = len(engine._buffer)
         engine.on_candle_closed(sym, seg, c)
+        if swings_out is not None:
+            for p in engine.get_swing_points(sym, seg, c.timeframe):
+                p_ts = _naive(p.candle.timestamp)
+                if p_ts > last_swing.get(c.timeframe, datetime.min):
+                    last_swing[c.timeframe] = p_ts
+                    swings_out.append({"timeframe": c.timeframe, "kind": p.kind, "price": p.price, "ts": p_ts,
+                                       "confirm_ts": _naive(c.timestamp)})
         for a in engine._buffer[start:]:
             if a.get("activity_type") != "pattern" or a["activity"] not in keys:
                 continue
@@ -121,10 +133,11 @@ def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, at
     return sorted(hits, key=lambda h: h["ts"])
 
 
-def trade_run(hits, candles_1m, settings: PaperSettings, keys) -> List[dict]:
+def trade_run(hits, candles_1m, settings: PaperSettings, keys, swings: Optional[list] = None) -> List[dict]:
     """Trades one run's hits with its settings. A hit while the same item
     is still open on this stock is recorded as not taken."""
     ts_list = [_naive(c.timestamp) for c in candles_1m]
+    m1 = [(ts_list[i], c.high, c.low) for i, c in enumerate(candles_1m)]
     busy_until: Dict[str, datetime] = {}
     out = []
     for h in hits:
@@ -148,8 +161,19 @@ def trade_run(hits, candles_1m, settings: PaperSettings, keys) -> List[dict]:
                 close_trade(t, exit_ts=_naive(last.timestamp), exit_price=last.close, reason="data_end",
                             slippage_pct=settings.slippage_pct)
             busy_until[h["key"]] = t["exit_ts"] + timedelta(minutes=1)
+            if swings is not None:
+                add_stretch(t, swings, m1, settings)
         out.append(t)
     return out
+
+
+def add_stretch(t: dict, swings: list, m1: list, settings: PaperSettings) -> None:
+    """Stretch end for one taken trade (same rule as live)."""
+    tf = candle_duration(t["timeframe"])
+    de = day_end_ts(t["hit_ts"], settings.day_end)
+    s = first_opposite_swing(t["direction"], swings, t["hit_ts"], t["timeframe"], confirmed_before=de)
+    end, reason = (s["ts"] + tf, "swing") if s else (de, "day_end")
+    t.update(stretch_end(t["direction"], t["entry_price"], m1, t["hit_ts"] + tf, end), stretch_reason=reason)
 
 
 def summarize(trades: List[dict], d_from: date, d_to: date) -> dict:
@@ -183,8 +207,17 @@ def summarize(trades: List[dict], d_from: date, d_to: date) -> dict:
         first_half=stats([t for t in taken if ist_date(t["hit_ts"]) < mid]),
         second_half=stats([t for t in taken if ist_date(t["hit_ts"]) >= mid]),
         exits={r: sum(1 for t in taken if t["exit_reason"] == r) for r in ("stop", "target", "day_end", "data_end")},
+        # how far the move went vs how much of it our exit kept (both price %, before costs)
+        avg_stretch_pct=_avg([t.get("stretch_pct") for t in taken]),
+        avg_exit_move_pct=_avg([(1 if t["direction"] == "buy" else -1) * (t["exit_price"] - t["entry_price"])
+                                / t["entry_price"] * 100 for t in taken]),
     )
     return out
+
+
+def _avg(values):
+    values = [v for v in values if v is not None]
+    return round(sum(values) / len(values), 4) if values else None
 
 
 def run_master(real_factory, master_id: int) -> None:
@@ -214,11 +247,13 @@ def run_master(real_factory, master_id: int) -> None:
             if not any(ist_date(c.timestamp) >= d_from for c in candles):
                 skipped.append(f"{symbol}: no 1-min candles in range")
             else:
-                hits = find_hits(real_factory, m.owner_id, symbol, segment, candles, d_from, all_keys, atr_needs)
+                swings: list = []
+                hits = find_hits(real_factory, m.owner_id, symbol, segment, candles, d_from, all_keys, atr_needs,
+                                 swings_out=swings)
                 in_range = [c for c in candles if ist_date(c.timestamp) >= d_from]
                 with real_factory() as s:
                     for run, settings, keys in plan:
-                        trades = trade_run(hits, in_range, settings, keys)
+                        trades = trade_run(hits, in_range, settings, keys, swings=swings)
                         for t in trades:
                             t.update(owner_id=m.owner_id, instrument_id=iid, symbol=symbol)
                             row = PaperBacktestTrade(run_id=run.id)

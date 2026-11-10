@@ -6,6 +6,10 @@ candle-close hook, after everything else, inside its own try/except.
 - Open trades move on 1-min candles that start after the hit candle ends.
 - Open trades live in the DB; on startup they reload and catch up on
   today's 1-min candles they missed.
+- Stretch end: each taken trade is watched past our exit until the first
+  opposite swing on its timeframe (from the engine's swing points) or day
+  end, then stretch_* is saved. After a restart, today's are watched again;
+  an older day's unfinished one is closed at its day end ("restart").
 No selections = nothing happens. Never calls a broker.
 """
 from __future__ import annotations
@@ -20,7 +24,8 @@ from typing import Dict, List, Optional
 from db.models import CandleToday
 from db.models_paper import PaperSelection, PaperTradeLive
 from indicators import AtrState, update_atr
-from paper.trade_logic import PaperSettings, ist_date, on_candle, open_trade
+from paper.trade_logic import (PaperSettings, day_end_ts, first_opposite_swing, ist_date, on_candle, open_trade,
+                               stretch_end)
 from timeframes import candle_duration
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,7 @@ class LivePaperTrader:
         self._selections: Dict[str, List[PaperSelection]] = {}  # item_key -> rows (all owners)
         self._loaded_at = 0.0
         self._open: Dict[int, List[dict]] = {}  # instrument_id -> open trade dicts (with "id", "_settings")
+        self._stretch: Dict[str, List[dict]] = {}  # symbol -> trades whose stretch end is not known yet
 
     # ---------------------------------------------------------- selections
     def _refresh_selections(self) -> None:
@@ -96,13 +102,39 @@ class LivePaperTrader:
                 if not closed:
                     self._open.setdefault(row.instrument_id, []).append(trade)
             s.commit()
+        self._load_stretch(now)
         return sum(len(v) for v in self._open.values())
+
+    def _load_stretch(self, now: datetime) -> None:
+        with self.session_factory() as s:
+            rows = (s.query(PaperTradeLive).filter(PaperTradeLive.status != "not_taken",
+                                                   PaperTradeLive.stretch_reason.is_(None)).all())
+            sels = {(r.owner_id, r.item_key): r for r in s.query(PaperSelection).all()}
+            for row in rows:
+                trade = {c: getattr(row, c) for c in _TRADE_FIELDS}
+                trade["id"] = row.id
+                sel = sels.get((row.owner_id, row.item_key))
+                trade["_settings"] = PaperSettings.from_row(sel) if sel else PaperSettings()
+                start = row.hit_ts + candle_duration(row.timeframe)
+                trade["_m1"] = [(c.ts, float(c.high_price), float(c.low_price)) for c in s.query(CandleToday).filter(
+                    CandleToday.symbol == row.symbol, CandleToday.timeframe == "1min",
+                    CandleToday.ts >= start).order_by(CandleToday.ts)]
+                if ist_date(row.hit_ts) != ist_date(now):
+                    self._finish_stretch(s, trade, day_end_ts(row.hit_ts, trade["_settings"].day_end), "restart")
+                else:
+                    self._stretch.setdefault(row.symbol, []).append(trade)
+            s.commit()
 
     # ------------------------------------------------------------------ live
     def on_candle_closed(self, symbol: str, exchange_segment: str, candle, activities: List[dict]) -> None:
         with self._lock:
             if candle.timeframe == "1min":
                 self._advance(candle, activities, symbol, exchange_segment)
+            if self._stretch.get(symbol):
+                try:  # a stretch failure must never stop exits or new hits
+                    self._track_stretch(symbol, exchange_segment, candle)
+                except Exception:
+                    logger.exception("paper stretch tracking failed for %s", symbol)
             hits = [a for a in activities if a.get("activity_type") == "pattern"]
             if hits:
                 self._refresh_selections()
@@ -178,7 +210,45 @@ class LivePaperTrader:
                     if trade["status"] == "open":
                         trade["id"], trade["_settings"] = row.id, settings
                         self._open.setdefault(a["instrument_id"], []).append(trade)
+                        watch = dict(trade, _m1=[])
+                        self._stretch.setdefault(symbol, []).append(watch)
             s.commit()
+
+    # --------------------------------------------------------- stretch end
+    def _track_stretch(self, symbol, exchange_segment, candle) -> None:
+        ts = _naive_utc(candle.timestamp)
+        done = []
+        for t in self._stretch[symbol]:
+            tf = candle_duration(t["timeframe"])
+            de = day_end_ts(t["hit_ts"], t["_settings"].day_end)
+            if candle.timeframe == "1min":
+                if ts >= de:
+                    done.append((t, de, "day_end"))
+                    continue
+                if ts >= t["hit_ts"] + tf:
+                    t["_m1"].append((ts, candle.high, candle.low))
+            if candle.timeframe == t["timeframe"] and self.engine is not None:
+                swings = [{"timeframe": t["timeframe"], "kind": p.kind, "price": p.price,
+                           "ts": _naive_utc(p.candle.timestamp)}
+                          for p in self.engine.get_swing_points(symbol, exchange_segment, t["timeframe"])]
+                sw = first_opposite_swing(t["direction"], swings, t["hit_ts"], t["timeframe"])
+                if sw is not None:
+                    done.append((t, sw["ts"] + tf, "swing"))
+        if done:
+            with self.session_factory() as s:
+                for t, end, reason in done:
+                    self._finish_stretch(s, t, end, reason)
+                s.commit()
+            finished = {id(t) for t, _, _ in done}
+            self._stretch[symbol] = [t for t in self._stretch[symbol] if id(t) not in finished]
+
+    def _finish_stretch(self, session, t: dict, end: datetime, reason: str) -> None:
+        start = t["hit_ts"] + candle_duration(t["timeframe"])
+        fields = stretch_end(t["direction"], t["entry_price"], t["_m1"], start, end)
+        fields["stretch_reason"] = reason
+        row = session.get(PaperTradeLive, t["id"])
+        if row is not None:
+            self._write(session, row, fields)
 
     @staticmethod
     def _write(session, row, trade: dict) -> None:
