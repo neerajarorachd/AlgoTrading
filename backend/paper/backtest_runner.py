@@ -86,7 +86,8 @@ def scratch_factory(symbol, segment):
 
 
 def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, atr_needs,
-              swings_out: Optional[list] = None, batch_mode: Optional[int] = None, explain: bool = False) -> List[dict]:
+              swings_out: Optional[list] = None, batch_mode: Optional[int] = None, explain: bool = False,
+              timeframes: str = "needed") -> List[dict]:
     """Every hit of `keys` on days >= d_from. atr_needs: {(period, tf)} --
     each hit carries atr[(period, tf)], tf 'hit' = the hit's own timeframe,
     as the engine held it at the hit moment exactly like live. swings_out, when
@@ -97,12 +98,17 @@ def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, at
     by candle, 2026-11-10); batch_mode overrides the setting pattern_batch_eval
     (0 = candle by candle, for comparisons). explain: keep the "why it formed"
     notes of hits and raw signals -- off by default, nothing in a backtest
-    reads them and they are about half the run time."""
+    reads them and they are about half the run time. timeframes="all" feeds
+    every timeframe to the engine (comparisons); by default only those the
+    patterns can form on (PatternEvaluator.timeframes) and ATR timeframes."""
     factory = scratch_factory(symbol, segment)
     engine = ActivityEngine(factory)
     evaluator = PatternEvaluator(real_factory, owner_id=owner_id, only_keys=keys, batch_mode=batch_mode, explain=explain)
     engine.pattern_evaluator = evaluator
     engine.explain_signals = explain
+    # only the timeframes these patterns can form on, plus any ATR timeframe a
+    # run asks for -- each timeframe's engine state is its own (2026-11-10)
+    needed = evaluator.timeframes() | {tf for _, tf in atr_needs if tf != "hit"}
     hits: List[dict] = []
     last_swing: Dict[str, datetime] = {}
     keep = max([60] + [period * 4 for period, _ in atr_needs])
@@ -141,6 +147,8 @@ def find_hits(real_factory, owner_id, symbol, segment, candles, d_from, keys, at
             order_of[(c.timeframe, _utc(c.timestamp))] = state["n"]
 
     def on_closed(sym, seg, c):
+        if timeframes != "all" and c.timeframe not in needed:
+            return
         day = ist_date(c.timestamp)
         if day < d_from:
             engine.warm_up(sym, seg, c)

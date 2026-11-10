@@ -131,6 +131,24 @@ class PatternEvaluator:
         self.window = max([1] + [required_lookback(f, p.lookback) for p in compiled for f in p.formulas]) + 1
         self._loaded_at = time.monotonic()
 
+    def timeframes(self, candidates=("1min", "3min", "5min")) -> set:
+        """The timeframes at least one loaded pattern can form on. A condition
+        is ruled out on a timeframe only when it is (an AND containing) a
+        comparison of TF_MINUTES with a number that is false there; a pattern
+        is left out only when too few conditions remain to reach the formed
+        threshold. Anything else counts as possible (2026-11-10)."""
+        out = set()
+        for tf in candidates:
+            minutes = float(timeframe_minutes(tf))
+            for p in self.patterns:
+                if not p.trees:
+                    continue
+                possible = sum(0 if _false_on_timeframe(t, minutes) else 1 for t in p.trees)
+                if possible / len(p.trees) >= self.threshold:
+                    out.add(tf)
+                    break
+        return out
+
     def meta(self, key: str):
         """(name, pattern_type) for a pattern key, or None -- labels live hits."""
         for p in self.patterns:
@@ -372,3 +390,32 @@ def frame_slicer(df: pd.DataFrame, rows: list, lo: int):
                 part.at[k - a, EVENTS_COLUMN] = events
         return part
     return cut
+
+
+_COMPARE = {ast.Gt: lambda a, b: a > b, ast.GtE: lambda a, b: a >= b, ast.Lt: lambda a, b: a < b,
+            ast.LtE: lambda a, b: a <= b, ast.Eq: lambda a, b: a == b, ast.NotEq: lambda a, b: a != b}
+
+
+def _false_on_timeframe(node: ast.AST, minutes: float) -> bool:
+    """True only when the condition is certainly false at this timeframe:
+    TF_MINUTES <op> number (either side) that fails, alone or inside an AND."""
+    if isinstance(node, ast.Expression):
+        return _false_on_timeframe(node.body, minutes)
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+        return any(_false_on_timeframe(v, minutes) for v in node.values)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and type(node.ops[0]) in _COMPARE:
+        left, right = node.left, node.comparators[0]
+
+        def is_tf(n):
+            return isinstance(n, ast.Name) and n.id.lower() == "tf_minutes"
+
+        def number(n):
+            if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+                return float(n.value)
+            return None
+        op = _COMPARE[type(node.ops[0])]
+        if is_tf(left) and number(right) is not None:
+            return not op(minutes, number(right))
+        if is_tf(right) and number(left) is not None:
+            return not op(number(left), minutes)
+    return False

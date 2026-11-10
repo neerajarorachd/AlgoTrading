@@ -279,3 +279,13 @@ def test_explain_off_keeps_the_same_hits_without_notes(factory):
     assert on and off == on
     assert any(e1.pattern_evaluator.explanations.values())
     assert not any(engine.pattern_evaluator.explanations.values()) and not any(engine.signal_explanations.values())
+
+
+def test_timeframes_a_pattern_can_form_on(factory):
+    _pattern(factory, "three_only", ["RSI > 50", "CLOSE > 0", "VOLUME > 0", "TF_MINUTES == 3"])
+    assert PatternEvaluator(factory).timeframes() == {"3min"}
+    _pattern(factory, "five_window", ["RSI > 50", "TF_MINUTES >= 5 and TIME >= 930"])
+    assert PatternEvaluator(factory, only_keys={"five_window"}).timeframes() == {"5min"}
+    # one condition of five may fail and the pattern still forms at 80%: every timeframe stays
+    _pattern(factory, "loose", ["RSI > 50", "CLOSE > 0", "VOLUME > 0", "OPEN > 0", "TF_MINUTES == 3"])
+    assert PatternEvaluator(factory, only_keys={"loose"}).timeframes() == {"1min", "3min", "5min"}
