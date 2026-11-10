@@ -109,6 +109,9 @@ what has been decided**.
 - **Every hit of a selected item is recorded**, including ones not taken
   (stored with the reason, e.g. outside the entry window).
 - No broker call from paper trading, ever.
+- **Stretch end (11-10):** every taken trade also records how far price kept
+  going our way after entry, whatever our exit did: the best price until the
+  first opposite swing on the hit's timeframe, or day end.
 
 ## 4. UI rules
 
