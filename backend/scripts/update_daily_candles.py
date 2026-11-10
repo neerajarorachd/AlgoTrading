@@ -13,14 +13,16 @@ step until a trading day is found:
 The call also re-asks for the last stored day: if Dhan's close for it changed,
 Dhan has back-adjusted the history (split/bonus), so the stock's whole stored
 history is re-fetched in one call and replaced -- otherwise old rows would sit
-on the old price scale. A stock with no rows yet gets the last `--years`
-years. Missed days are filled on the next run; re-running is harmless.
+on the old price scale. A stock with no rows yet gets the last `--days`
+trading days (400 = the longest lookback, 200 days, plus 200 more so it has
+settled -- user, 2026-11-10). Missed days are filled on the next run;
+re-running is harmless.
 
 Token: AlgoTrading's FIXED3 (REST) token from the BrokerToken table (same
 source as scripts/fetch_full_history.py). Never printed.
 Chart calls are paced by DhanBroker itself (3 s apart).
 
-    python scripts/update_daily_candles.py [--universe FILE] [--years 10] [--symbols A B] [--dry-run]
+    python scripts/update_daily_candles.py [--universe FILE] [--days 400] [--symbols A B] [--dry-run]
 
 Exit code 0 if every stock succeeded, 1 if any failed (systemd shows failure).
 """
@@ -74,13 +76,29 @@ def last_complete_day(now_ist: datetime) -> date:
     return previous_trading_day(today - timedelta(days=1))
 
 
-def plan_range(last_date: Optional[date], now_ist: datetime, years: int) -> Optional[tuple]:
+HISTORY_DAYS = 400  # trading days a new stock gets: 200-day lookback + 200 to settle
+MARGIN = 1.05  # older years list weekends only, so their NSE holidays count as trading days
+
+
+def start_for_days(newest: date, days: int) -> date:
+    """The trading day `days` trading days back from `newest` (newest counted),
+    with a small margin so at least `days` candles arrive."""
+    d, counted, want = newest, 0, int(days * MARGIN)
+    while True:
+        if market_calendar.is_trading_day(d):
+            counted += 1
+            if counted >= want:
+                return d
+        d -= timedelta(days=1)
+
+
+def plan_range(last_date: Optional[date], now_ist: datetime, days: int = HISTORY_DAYS) -> Optional[tuple]:
     """(fromDate, newest day wanted, toDate exclusive), or None when the stock
     is already up to date. fromDate is the last stored day (re-asked, to spot
-    a back-adjustment) or the first trading day `years` back."""
+    a back-adjustment) or, for a new stock, `days` trading days back."""
     newest = last_complete_day(now_ist)
     if last_date is None:
-        start = next_trading_day(now_ist.date() - timedelta(days=365 * years))
+        start = start_for_days(newest, days)
     else:
         if next_trading_day(last_date + timedelta(days=1)) > newest:
             return None
@@ -103,14 +121,14 @@ def _fetch(broker, item: dict, start: date, to: date, newest: date) -> list:
     return [c for c in candles if daily_ops.candle_trade_date(c) <= newest]
 
 
-def update_symbol(session_factory, broker, item: dict, now_ist: datetime, years: int,
+def update_symbol(session_factory, broker, item: dict, now_ist: datetime, days: int = HISTORY_DAYS,
                   dry_run: bool = False) -> dict:
     symbol, segment = item["symbol"], item["exchange_segment"]
     with session_scope(session_factory) as session:
         last = daily_ops.get_last_date(session, symbol, segment)
         stored_close = daily_ops.get_close(session, symbol, segment, last) if last else None
     out = {"symbol": symbol, "last_before": last, "fetched": 0, "changed": 0, "adjusted": False}
-    plan = plan_range(last, now_ist, years)
+    plan = plan_range(last, now_ist, days)
     if plan is None:
         return out  # up to date: no call
     start, newest, to = plan
@@ -133,12 +151,12 @@ def update_symbol(session_factory, broker, item: dict, now_ist: datetime, years:
     return out
 
 
-def run(session_factory, broker, universe: List[dict], now_ist: datetime, years: int = 10,
+def run(session_factory, broker, universe: List[dict], now_ist: datetime, days: int = HISTORY_DAYS,
         dry_run: bool = False, log: Callable[[str], None] = print) -> dict:
     ok = failed = rows_changed = 0
     for n, item in enumerate(universe, 1):
         try:
-            r = update_symbol(session_factory, broker, item, now_ist, years, dry_run)
+            r = update_symbol(session_factory, broker, item, now_ist, days, dry_run)
             ok += 1
             rows_changed += r["changed"]
             note = " -- prices back-adjusted by Dhan, whole history replaced" if r["adjusted"] else ""
@@ -154,7 +172,7 @@ def run(session_factory, broker, universe: List[dict], now_ist: datetime, years:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", default=str(DEFAULT_UNIVERSE))
-    ap.add_argument("--years", type=int, default=10, help="history for a stock with no rows yet")
+    ap.add_argument("--days", type=int, default=HISTORY_DAYS, help="trading days of history for a stock with no rows yet")
     ap.add_argument("--symbols", nargs="*")
     ap.add_argument("--dry-run", action="store_true", help="fetch but do not write")
     a = ap.parse_args()
@@ -181,7 +199,7 @@ def main() -> int:
     universe = load_universe(Path(a.universe), a.symbols)
     now_ist = datetime.now(IST)
     print(f"{now_ist:%Y-%m-%d %H:%M} IST: updating {len(universe)} stocks", flush=True)
-    result = run(session_factory, broker, universe, now_ist, a.years, a.dry_run,
+    result = run(session_factory, broker, universe, now_ist, a.days, a.dry_run,
                  log=lambda m: print(m, flush=True))
     return 1 if result["failed"] else 0
 

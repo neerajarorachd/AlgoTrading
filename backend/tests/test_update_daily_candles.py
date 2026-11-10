@@ -48,29 +48,29 @@ def _dates(sf):
 
 def test_first_run_fetches_history(sf):
     days = [date(2026, 10, 26) + timedelta(d) for d in range(5)]  # 26..30
-    u.run(sf, FakeBroker(days), [ITEM], AFTER_CLOSE, years=1, log=QUIET)
+    u.run(sf, FakeBroker(days), [ITEM], AFTER_CLOSE, 10, log=QUIET)
     assert _dates(sf) == days
 
 
 def test_missed_days_are_filled(sf):
     days = [date(2026, 10, 26) + timedelta(d) for d in range(5)]
-    u.run(sf, FakeBroker(days[:2]), [ITEM], datetime(2026, 10, 27, 16, 30, tzinfo=IST), 1, log=QUIET)
+    u.run(sf, FakeBroker(days[:2]), [ITEM], datetime(2026, 10, 27, 16, 30, tzinfo=IST), 10, log=QUIET)
     assert _dates(sf) == days[:2]
-    u.run(sf, FakeBroker(days), [ITEM], AFTER_CLOSE, 1, log=QUIET)  # 3 days later
+    u.run(sf, FakeBroker(days), [ITEM], AFTER_CLOSE, 10, log=QUIET)  # 3 days later
     assert _dates(sf) == days
 
 
 def test_rerun_is_idempotent(sf):
     days = [date(2026, 10, 29), date(2026, 10, 30)]
     b = FakeBroker(days)
-    u.run(sf, b, [ITEM], AFTER_CLOSE, 1, log=QUIET)
-    r = u.run(sf, b, [ITEM], AFTER_CLOSE, 1, log=QUIET)
+    u.run(sf, b, [ITEM], AFTER_CLOSE, 10, log=QUIET)
+    r = u.run(sf, b, [ITEM], AFTER_CLOSE, 10, log=QUIET)
     assert r["rows_changed"] == 0 and len(_dates(sf)) == 2
 
 
 def test_partial_today_not_stored_before_close(sf):
     days = [date(2026, 10, 29), date(2026, 10, 30)]
-    u.run(sf, FakeBroker(days), [ITEM], datetime(2026, 10, 30, 12, 0, tzinfo=IST), 1, log=QUIET)
+    u.run(sf, FakeBroker(days), [ITEM], datetime(2026, 10, 30, 12, 0, tzinfo=IST), 10, log=QUIET)
     assert _dates(sf) == [date(2026, 10, 29)]
 
 
@@ -84,7 +84,7 @@ def test_changed_candle_is_refreshed(sf):
 
 def test_one_failing_stock_does_not_stop_others(sf):
     items = [{**ITEM, "symbol": "BAD"}, ITEM]
-    r = u.run(sf, FakeBroker([date(2026, 10, 30)], fail_for=["BAD"]), items, AFTER_CLOSE, 1, log=QUIET)
+    r = u.run(sf, FakeBroker([date(2026, 10, 30)], fail_for=["BAD"]), items, AFTER_CLOSE, 10, log=QUIET)
     assert (r["ok"], r["failed"]) == (1, 1) and len(_dates(sf)) == 1
 
 
@@ -98,8 +98,17 @@ def test_plan_range_moves_off_weekends_and_holidays():
     assert u.plan_range(date(2026, 11, 5), saturday, 10) == (date(2026, 11, 5), date(2026, 11, 6), date(2026, 11, 9))
     # before the close today does not count yet: Mon 11-09 noon -> newest Fri 11-06
     assert u.plan_range(date(2026, 11, 5), datetime(2026, 11, 9, 12, 0, tzinfo=IST), 10)[1] == date(2026, 11, 6)
-    # a new stock's start that lands on a weekend steps on to Monday: 2025-11-08 is a Saturday
-    assert u.plan_range(None, holiday_evening, 1)[0] == date(2025, 11, 10)
+    # a new stock: 400 trading days (+5% margin) back from the newest day, on a trading day
+    start = u.plan_range(None, holiday_evening)[0]
+    from market_calendar import is_trading_day, trading_days
+    assert is_trading_day(start) and len(trading_days(start, date(2026, 11, 9))) == 420
+
+
+def test_new_stock_gets_400_trading_days(sf):
+    from market_calendar import trading_days
+    days = trading_days(date(2024, 1, 1), date(2026, 11, 9))
+    u.run(sf, FakeBroker(days), [ITEM], datetime(2026, 11, 10, 16, 30, tzinfo=IST), log=QUIET)
+    assert len(_dates(sf)) >= 400 and _dates(sf)[-1] == date(2026, 11, 9)
 
 
 def test_up_to_date_stock_makes_no_call(sf):
@@ -147,7 +156,7 @@ def test_no_data_range_is_not_an_error_when_history_exists(sf):
             raise BrokerAPIError('Dhan API error 400: {"errorCode":"DH-907"}')
 
     ops.upsert_candles(sf, "X", "NSE_EQ", [_candle(date(2026, 10, 30))])
-    r = u.run(sf, NoDataBroker([]), [ITEM], datetime(2026, 10, 31, 16, 30, tzinfo=IST), 1, log=QUIET)
+    r = u.run(sf, NoDataBroker([]), [ITEM], datetime(2026, 10, 31, 16, 30, tzinfo=IST), 10, log=QUIET)
     assert (r["ok"], r["failed"]) == (1, 0)
 
 
@@ -156,5 +165,5 @@ def test_no_data_for_brand_new_stock_is_a_failure(sf):
         def get_historical_data(self, *a):
             raise BrokerAPIError('Dhan API error 400: {"errorCode":"DH-907"}')
 
-    r = u.run(sf, NoDataBroker([]), [ITEM], AFTER_CLOSE, 1, log=QUIET)
+    r = u.run(sf, NoDataBroker([]), [ITEM], AFTER_CLOSE, 10, log=QUIET)
     assert r["failed"] == 1
