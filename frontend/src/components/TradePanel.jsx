@@ -250,7 +250,7 @@ export default function TradePanel({ instrument, direction: initialDirection = '
         <button type="button" onClick={onClose} aria-label="Close" style={{ border: 'none', background: 'transparent', fontSize: 18, cursor: 'pointer', color: 'var(--text-faint)' }}>×</button>
       </div>
 
-      <div data-trade-panel-body style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, margin: '0 -6px', padding: '0 6px' }}>
+      <div data-trade-panel-body style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'max-content', alignContent: 'start', gap: 12, margin: '0 -6px', padding: '0 6px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <Segmented
           testid="trade-direction" value={direction} onChange={setDirection}
@@ -316,7 +316,7 @@ export default function TradePanel({ instrument, direction: initialDirection = '
         </div>
       </div>
 
-      <div className="num" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1, background: 'var(--border)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', fontSize: 12 }}>
+      <div className="num" data-trade-rr style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1, background: 'var(--border)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', fontSize: 12 }}>
         {[['Risk', risk != null ? money(risk) : '—'], ['Reward', reward != null ? money(reward) : '—'],
           ['R : R', risk && reward ? `1 : ${(reward / risk).toFixed(2)}` : '—']].map(([k, v]) => (
           <div key={k} style={{ background: 'var(--surface)', padding: '7px 9px' }}>

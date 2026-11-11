@@ -1327,6 +1327,8 @@ async function restorePrefs() {
         pb && bb && pb.y >= 0 && pb.y + pb.height <= vh + 0.5 && bb.y + bb.height <= pb.y + pb.height + 0.5, { pb, bb, vh });
       const seg = await page.locator('[data-testid="trade-entry-type"]').boundingBox();
       const lim = await page.locator('[data-testid="trade-entry-type"] [data-value="limit"]').boundingBox();
+      const rr = await page.locator('[data-trade-rr]').boundingBox();
+      checkTrue('[trades] the Risk / Reward box is shown at full height (not squashed)', rr && rr.height >= 40, rr);
       checkTrue('[trades] the Entry switch fills its row (no gap after Limit)',
         seg && lim && Math.abs(lim.x + lim.width - (seg.x + seg.width)) <= 2, { seg, lim });
     }
