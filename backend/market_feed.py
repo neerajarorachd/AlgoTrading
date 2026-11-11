@@ -50,6 +50,13 @@ class MarketFeed:
     def stop(self) -> None:
         self.broker.disconnect()
 
+    def last_price(self, symbol: str, exchange_segment: str) -> Optional[float]:
+        """Last known LTP of a subscribed stock (manual trade orders, rulebook 3b)."""
+        for key, inst in list(self._instruments.items()):
+            if inst["symbol"] == symbol and inst["exchange_segment"] == exchange_segment:
+                return self._last_ltp.get(key)
+        return None
+
     def _on_broker_tick(self, raw_tick: dict) -> None:
         if raw_tick.get("type") == "Full Market Depth":
             self._handle_depth(raw_tick)

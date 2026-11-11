@@ -261,6 +261,13 @@ def summarize(trades: List[dict], d_from: date, d_to: date) -> dict:
         avg_stretch_pct=_avg([t.get("stretch_pct") for t in taken]),
         avg_exit_move_pct=_avg([(1 if t["direction"] == "buy" else -1) * (t["exit_price"] - t["entry_price"])
                                 / t["entry_price"] * 100 for t in taken]),
+        # expiry element (rulebook 3b): the same stats on expiry day, the rest
+        # of expiry week (last 5 trading days) and every other day
+        by_expiry={
+            "expiry_day": stats([t for t in taken if t.get("is_expiry_day")]),
+            "expiry_week": stats([t for t in taken if t.get("is_expiry_week") and not t.get("is_expiry_day")]),
+            "other": stats([t for t in taken if t.get("is_expiry_week") is False]),
+        },
     )
     return out
 

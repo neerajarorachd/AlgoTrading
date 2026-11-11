@@ -77,6 +77,9 @@ def open_trade(*, hit_ts: datetime, direction: str, hit_close: float, atr: Optio
     Returns the trade fields: status 'open' (with entry/qty/stop/target)
     or 'not_taken' (with not_taken_reason)."""
     trade = {"hit_ts": hit_ts, "direction": direction, "hit_close": hit_close, "atr": atr}
+    # expiry element (rulebook 3b): stored on every hit, taken or not
+    from expiry_calendar import expiry_context  # lazy: keeps this module import-light
+    trade.update(expiry_context(ist_date(hit_ts)))
 
     def skip(reason):
         trade.update(status="not_taken", not_taken_reason=reason)

@@ -105,3 +105,11 @@ RECOMMENDATIONS_ROOM = "recommendations"
 
 def broadcast_recommendation_created(recommendation: dict) -> None:
     socketio.emit("recommendation_created", recommendation, room=RECOMMENDATIONS_ROOM)
+
+
+TRADES_ROOM = "trades"  # manual trades (rulebook 3b): placed / filled / modified / closed
+
+
+def broadcast_trade(trade: dict) -> None:
+    from api.routes_trades import serialize  # lazy: avoids an import cycle at startup
+    socketio.emit("trade_update", serialize(trade), room=TRADES_ROOM)

@@ -113,6 +113,70 @@ what has been decided**.
   going our way after entry, whatever our exit did: the best price until the
   first opposite swing on the hit's timeframe, or day end.
 
+## 3b. Manual trades (11-11, building on branch `paper-trading`)
+
+- Entry points: **B / S buttons on every grid row** (beside the existing
+  Buy/Sell/Hold recommendation button, which stays), then trade from the chart,
+  then a standalone Buy/Sell with a stock picker. All open one order panel:
+  Paper/Live switch, Buy/Sell, quantity, product, market/limit entry, stop,
+  target.
+- **Live switch exists but does nothing yet:** choosing Live shows "Live
+  trading coming soon"; the backend refuses live orders (rulebook 3:
+  recommendations before execution).
+- One `trades` table for paper and (later) live; a new **Trades tab**:
+  **Current** = the open-positions grid; **All trades** = the **Pending** grid
+  (limit orders) + the **Completed** grid (closed, cancelled faded; period
+  filter; expiry summary). A notice pops up when a trade closes or fills.
+- **Bracket orders (11-11):** every trade has an order book (`trade_orders`):
+  the entry, then once it fills a **stop leg** (SL-M) and a **target leg**
+  (limit), only the ones set. One leg filling cancels the other (OCO); a
+  manual / day-end exit cancels both; a limit exit **replaces the target and
+  keeps the stop** (the stop is cancelled when the limit fills). Pending grid =
+  one row per pending order, each with **Cancel** (an entry cancels the trade;
+  a leg just removes that level). Legs are optional.
+- **Pre-filled stop / target: 0.2 % / 0.5 %** of the entry price, rounded to the
+  nearest 0.05 tick (one tick away from the entry if it would land on it). **Market:** they follow the live price
+  (the % stays, the prices move). **Limit:** the limit price is the price when
+  B / S was clicked and never moves with the live price (shown separately,
+  bright, coloured by its last tick); changing the limit recomputes them. A
+  box the user typed in is never overwritten. **Later:** a per-user, per-stock
+  ratios table replaces these defaults.
+- **Stop / target set by (11-11), one choice for both, saved per user:**
+  **%** of the entry (default) | **₹ diff** from the entry | fixed **Price**.
+  % and ₹ diff follow the entry (live price for Market, limit price for
+  Limit); Price boxes are fixed once typed. Switching converts the current
+  levels; each box shows the price (or %) it works out to. Orders still send
+  plain prices.
+- **Capital (11-11):** each exit leg beyond the first blocks the trade's value
+  again: stop + target legs = **2x**, one leg = 1x. Checked on placing an
+  order and on adding a leg.
+- Floating trade panels close on a click outside or Esc.
+  Tiles: Paper capital, Used, Free, then **Realised (after exp.)** (closed
+  trades, all time) - **Open P&L** - **Today's P&L** (closed today + open).
+  Each Current row has **Exit**: a panel with the live price, opening on
+  **Limit pre-filled with the current price** (market can fill at a swung
+  price), Market one click away. Limit is editable; waits until the
+  price reaches it, no slippage; fills at once if already reached; can be
+  changed or cancelled).
+  P&L moves with ticks, **before and after expenses**
+  (`exp` = expenses: charges + slippage). Expenses are estimated **once at
+  entry** (`est_costs`); the list shows gross from ticks and "≈ net" = gross -
+  est_costs. The exact figure is computed only in the row-click detail panel
+  (no per-tick cost recompute, 11-11).
+- Indicator values at entry and at exit go to their own table
+  (`trade_indicator_snapshots`, one row per trade x event x 1/3/5-min), with
+  the pattern colour/score and the recommendation shown on screen.
+- Prices for open orders: **no new tick listener**; the existing tick path
+  puts prices for stocks with open orders on an internal queue that the
+  trade engine reads.
+- Paper capital: **Rs 5L per user**, no leverage.
+- **Expiry element:** every trade (manual, live paper, backtest paper) stores
+  its stock F&O expiry context (expiry date, trading days to expiry, expiry
+  day / expiry week) so expiry impact can be analysed and backtested. NSE
+  monthly stock expiry: last Thursday up to Aug 2025, last **Tuesday** from
+  Sep 2025; a holiday moves it to the previous trading day. Backtest years
+  need their NSE holidays in `backend/data/market_holidays.txt`.
+
 ## 4. UI rules
 
 - Professional design in both themes; tokens alone are not enough:
@@ -341,6 +405,8 @@ From the 2-year, 13-stock, 3/5-min intraday backtests (scripts and data in
   BB width should be relative, not a fixed 0.4%.
 - EOD backtest overruns the 18:00 VM shutdown.
 - Strategy accounts/ledger (spec only); Telegram delivery; paper trading.
+- Order panel (11-11): if a "reset limit to live price" action is added,
+  should it also recompute stop / target? (user: separate question.)
 
 ## 9. Where things live
 

@@ -1299,6 +1299,198 @@ async function restorePrefs() {
     await page.close();
   }
 
+  // ---- [trades] manual trades (rulebook 3b, 2026-11-11): grid B / S, order
+  // panel, Trades tab. Places an order ONLY on the test stack (5174): a limit
+  // buy far below the price, which stays pending and is then cancelled.
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page.waitForSelector('[data-instrument-grid] tbody tr [data-row-trade="buy"]', { timeout: 20000 }).catch(() => {});
+    const row = page.locator('[data-instrument-grid] tbody tr').filter({ has: page.locator('[data-row-trade]') }).first();
+    checkTrue('[trades] every grid row has B and S', (await page.locator('[data-row-trade="buy"]').count()) > 0
+      && (await page.locator('[data-row-trade="buy"]').count()) === (await page.locator('[data-row-trade="sell"]').count()));
+    const h = await row.evaluate((r) => r.getBoundingClientRect().height).catch(() => 0);
+    checkTrue('[trades] a row with B / S keeps its 42 px height', Math.abs(h - 42) <= 1, h);
+    const charts0 = await page.locator('.chart-card').count();
+    await row.locator('[data-row-trade="buy"]').click();
+    await page.waitForSelector('[data-trade-panel]', { timeout: 5000 }).catch(() => {});
+    checkTrue('[trades] B opens the order panel, preset to Buy',
+      (await page.locator('[data-testid="trade-direction"] [data-on="1"]').getAttribute('data-value').catch(() => null)) === 'buy');
+    checkTrue('[trades] B does not open/close a chart', (await page.locator('.chart-card').count()) === charts0);
+    {
+      const vh = page.viewportSize().height;
+      const pb = await page.locator('[data-trade-panel]').boundingBox();
+      const bb = await page.locator('[data-testid="trade-submit"]').boundingBox();
+      checkTrue('[trades] the order panel and its button are fully on screen',
+        pb && bb && pb.y >= 0 && pb.y + pb.height <= vh + 0.5 && bb.y + bb.height <= pb.y + pb.height + 0.5, { pb, bb, vh });
+      const seg = await page.locator('[data-testid="trade-entry-type"]').boundingBox();
+      const lim = await page.locator('[data-testid="trade-entry-type"] [data-value="limit"]').boundingBox();
+      checkTrue('[trades] the Entry switch fills its row (no gap after Limit)',
+        seg && lim && Math.abs(lim.x + lim.width - (seg.x + seg.width)) <= 2, { seg, lim });
+    }
+    await page.locator('[data-testid="trade-mode"] [data-value="live"]').click();
+    checkTrue('[trades] Live shows "coming soon" and the order button is off',
+      await page.locator('[data-testid="live-coming-soon"]').isVisible() && await page.locator('[data-testid="trade-submit"]').isDisabled());
+    // stop / target follow the entry (user, 11-11): Market -> the live price
+    // (the % stays); Limit -> the limit price, fixed at the price when B was
+    // clicked; a typed stop is kept. Needs live ticks (test stack with ticks).
+    await page.locator('[data-testid="trade-mode"] [data-value="paper"]').click();
+    const liveTxt = await page.locator('[data-testid="trade-ltp"]').textContent().catch(() => '—');
+    if (/\d/.test(liveTxt)) {
+      const v = (id) => page.locator(`[data-testid="${id}-price"]`).getAttribute('data-price').then(Number);
+      await page.locator('[data-testid="trade-level-mode"] [data-value="pct"]').click();
+      await page.fill('[data-testid="trade-stop"]', '0.2');
+      await page.fill('[data-testid="trade-target"]', '0.5');
+      await page.locator('[data-testid="trade-entry-type"] [data-value="market"]').click();
+      await page.waitForTimeout(2500);
+      const ltpNow = Number(await page.locator('[data-testid="trade-ltp"]').textContent());
+      const stopPct = ((ltpNow - await v('trade-stop')) / ltpNow) * 100;
+      checkTrue('[trades] Market: the stop follows the live price (~0.2 % below it)', Math.abs(stopPct - 0.2) < 0.05, { ltpNow, stopPct });
+      await page.locator('[data-testid="trade-entry-type"] [data-value="limit"]').click();
+      await page.waitForTimeout(400);
+      const lim0 = await page.inputValue('[data-testid="trade-limit"]');
+      await page.waitForTimeout(2500);
+      checkTrue('[trades] Limit: the limit price does not move with the live price', (await page.inputValue('[data-testid="trade-limit"]')) === lim0, lim0);
+      await page.fill('[data-testid="trade-limit"]', '200');
+      checkTrue('[trades] Limit: changing the limit recomputes stop / target (200 -> 199.60 / 201.00)',
+        (await v('trade-stop')) === 199.6 && (await v('trade-target')) === 201, [await v('trade-stop'), await v('trade-target')]);
+      checkTrue('[trades] capital needed is 2x with stop + target legs',
+        (await page.locator('[data-testid="trade-capital-needed"]').textContent()).includes('400'));
+      // the three ways to set stop / target (11-11): %, rupee diff, fixed price
+      await page.locator('[data-testid="trade-level-mode"] [data-value="diff"]').click();
+      checkTrue('[trades] switching to ₹ diff converts the levels (200 -> 0.4 / 1)',
+        (await page.inputValue('[data-testid="trade-stop"]')) === '0.4' && (await page.inputValue('[data-testid="trade-target"]')) === '1'
+        && (await v('trade-stop')) === 199.6, [await page.inputValue('[data-testid="trade-stop"]'), await page.inputValue('[data-testid="trade-target"]')]);
+      await page.fill('[data-testid="trade-stop"]', '2');
+      checkTrue('[trades] ₹ diff 2 below a 200 limit = stop 198', (await v('trade-stop')) === 198, await v('trade-stop'));
+      await page.locator('[data-testid="trade-level-mode"] [data-value="price"]').click();
+      await page.fill('[data-testid="trade-limit"]', '210');
+      checkTrue('[trades] Price mode: a converted (fixed) stop stays when the limit changes', (await v('trade-stop')) === 198, await v('trade-stop'));
+      await page.locator('[data-testid="trade-level-mode"] [data-value="pct"]').click();
+      checkTrue('[trades] back to % shows the % values you had (0.2 / 0.5), not re-converted ones',
+        (await page.inputValue('[data-testid="trade-stop"]')) === '0.2' && (await page.inputValue('[data-testid="trade-target"]')) === '0.5',
+        [await page.inputValue('[data-testid="trade-stop"]'), await page.inputValue('[data-testid="trade-target"]')]);
+      await page.locator('[data-testid="trade-level-mode"] [data-value="diff"]').click();
+      checkTrue('[trades] back to ₹ diff shows the 2 you typed', (await page.inputValue('[data-testid="trade-stop"]')) === '2');
+      await page.locator('[data-testid="trade-level-mode"] [data-value="pct"]').click();
+    }
+    await page.locator('[data-trade-panel] [aria-label="Close"]').click();
+    await row.locator('[data-row-trade="sell"]').click();
+    await page.waitForSelector('[data-trade-panel]', { timeout: 5000 }).catch(() => {});
+    checkTrue('[trades] S presets Sell; Delivery is off for a sell',
+      (await page.locator('[data-testid="trade-direction"] [data-on="1"]').getAttribute('data-value').catch(() => null)) === 'sell'
+      && await page.locator('[data-testid="trade-product"] [data-value="delivery"]').isDisabled());
+    const testStack = BASE.includes('5174');
+    let placed = false;
+    if (testStack) {
+      await page.locator('[data-testid="trade-direction"] [data-value="buy"]').click();
+      await page.locator('[data-testid="trade-entry-type"] [data-value="limit"]').click();
+      await page.locator('[data-testid="trade-level-mode"] [data-value="pct"]').click();
+      await page.locator('[data-testid="trade-levels-reset"]').click();
+      await page.fill('[data-testid="trade-limit"]', '100');
+      const pf = [Number(await page.locator('[data-testid="trade-stop-price"]').getAttribute('data-price')),
+        Number(await page.locator('[data-testid="trade-target-price"]').getAttribute('data-price'))];
+      checkTrue('[trades] stop / target pre-filled 0.2 % / 0.5 % from the entry (buy limit 100 -> 99.80 / 100.50)',
+        pf[0] === 99.8 && pf[1] === 100.5, pf);
+      await page.fill('[data-testid="trade-limit"]', '1');
+      await page.fill('[data-testid="trade-qty"]', '1');
+      await page.fill('[data-testid="trade-note"]', 'ui_test_suite');
+      await page.locator('[data-testid="trade-submit"]').click();
+      await page.waitForTimeout(1200);
+      const err = await page.locator('[data-trade-panel] [data-testid="trade-error"]').textContent().catch(() => null);
+      placed = (await page.locator('[data-trade-panel]').count()) === 0;
+      checkTrue('[trades] a limit order is placed (or refused only for market hours)', placed || /09:15/.test(err ?? ''), err);
+    }
+    if (await page.locator('[data-trade-panel]').count()) await page.locator('[data-trade-panel] [aria-label="Close"]').click();
+    await page.locator('[data-testid="tab-trades"]').click();
+    await page.waitForSelector('[data-trades-view]', { timeout: 5000 }).catch(() => {});
+    // layout (user, 11-11): Current = the open-positions grid; All trades =
+    // the Pending and Completed grids (period filter + expiry summary)
+    await page.locator('[data-testid="trades-scope-open"]').click();
+    checkTrue('[trades] Current shows only the Current grid',
+      await page.locator('[data-trades-grid="current"]').isVisible().catch(() => false)
+      && (await page.locator('[data-trades-grid="pending"], [data-trades-grid="completed"]').count()) === 0);
+    await page.locator('[data-testid="trades-scope-all"]').click();
+    checkTrue('[trades] All trades shows the Pending and Completed grids, not Current',
+      await page.locator('[data-trades-grid="pending"]').isVisible().catch(() => false)
+      && await page.locator('[data-trades-grid="completed"]').isVisible().catch(() => false)
+      && (await page.locator('[data-trades-grid="current"]').count()) === 0);
+    if (placed) {
+      // the Pending grid has one row per order (11-11); newest first = the entry just placed
+      const first = page.locator('[data-trades-grid="pending"] [data-order-row][data-order-kind="entry"]').first();
+      await first.waitFor({ timeout: 5000 }).catch(() => {});
+      checkTrue('[trades] the limit entry is listed in the Pending grid', await first.isVisible());
+      const id = await first.getAttribute('data-trade-id').catch(() => null);
+      const oid = await first.getAttribute('data-order-row').catch(() => null);
+      await first.click();
+      await page.waitForSelector('[data-trade-detail]', { timeout: 5000 }).catch(() => {});
+      checkTrue('[trades] a row click opens the detail panel', await page.locator('[data-trade-detail]').isVisible());
+      await page.mouse.click(5, 5); // a click outside closes it
+      await page.waitForSelector('[data-trade-detail]', { state: 'detached', timeout: 3000 }).catch(() => {});
+      checkTrue('[trades] a click outside closes the detail panel', (await page.locator('[data-trade-detail]').count()) === 0);
+      await page.locator(`[data-order-cancel="${oid}"]`).click();
+      await page.waitForSelector(`[data-trades-grid="completed"] [data-trade-row="${id}"][data-status="cancelled"]`, { timeout: 8000 }).catch(() => {});
+      checkTrue('[trades] Cancel order moves it to the Completed grid as cancelled',
+        (await page.locator(`[data-trades-grid="completed"] [data-trade-row="${id}"][data-status="cancelled"]`).count()) === 1
+        && (await page.locator(`[data-trades-grid="pending"] [data-order-row="${oid}"]`).count()) === 0, id);
+      checkTrue('[trades] a notice pops up when a trade closes / is cancelled',
+        await page.locator('[data-trade-toast="cancelled"]').first().isVisible().catch(() => false));
+    }
+    // Exit button on Current rows (11-11): panel with the current price and
+    // Market / Limit; needs a live price, so only on a test stack with ticks
+    if (testStack) {
+      const iid = await page.evaluate(async () => (await (await fetch('/api/symbols')).json())[0]?.id);
+      const res = await page.evaluate(async (id) => {
+        const r = await fetch('/api/trades', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instrument_id: id, direction: 'buy', quantity: 1, entry_type: 'market', note: 'ui_test_suite',
+            stop_price: 1, target_price: 1000000 }) });
+        return { ok: r.ok, body: await r.json() };
+      }, iid);
+      if (res.ok) {
+        const tid = res.body.id;
+        await page.locator('[data-testid="trades-scope-all"]').click();
+        await page.waitForSelector(`[data-order-row][data-trade-id="${tid}"]`, { timeout: 5000 }).catch(() => {});
+        const legs = await page.locator(`[data-trades-grid="pending"] [data-order-row][data-trade-id="${tid}"]`)
+          .evaluateAll((els) => els.map((e) => e.getAttribute('data-order-kind')).sort());
+        checkTrue('[trades] a filled entry puts a stop leg and a target leg in Pending', JSON.stringify(legs) === '["stop","target"]', legs);
+        await page.locator('[data-testid="trades-scope-open"]').click();
+        const btn = page.locator(`[data-row-exit="${tid}"]`);
+        await btn.waitFor({ timeout: 5000 }).catch(() => {});
+        await btn.click();
+        await page.waitForSelector('[data-exit-panel]', { timeout: 5000 }).catch(() => {});
+        checkTrue('[trades] Exit opens the exit panel with the current price',
+          /\d/.test(await page.locator('[data-testid="exit-ltp"]').textContent().catch(() => '')));
+        const ltpShown = Number(await page.locator('[data-testid="exit-ltp"]').textContent().catch(() => '0'));
+        const pre = Number(await page.inputValue('[data-testid="exit-limit"]').catch(() => '0'));
+        checkTrue('[trades] the exit panel opens on Limit, pre-filled with the current price',
+          (await page.locator('[data-testid="exit-type"] [data-value="limit"]').getAttribute('data-on')) === '1'
+          && pre > 0 && Math.abs(pre - ltpShown) / ltpShown < 0.01, { pre, ltpShown });
+        await page.fill('[data-testid="exit-limit"]', (pre * 1.5).toFixed(2));
+        await page.locator('[data-testid="exit-submit"]').click();
+        await page.waitForSelector(`[data-trade-row="${tid}"] [data-exit-waiting]`, { timeout: 5000 }).catch(() => {});
+        checkTrue('[trades] a far limit exit waits and shows on the row',
+          (await page.locator(`[data-trade-row="${tid}"] [data-exit-waiting]`).count()) === 1);
+        await btn.click();
+        await page.waitForSelector('[data-exit-panel]', { timeout: 5000 }).catch(() => {});
+        await page.locator('[data-testid="exit-type"] [data-value="market"]').click();
+        await page.locator('[data-testid="exit-submit"]').click();
+        await page.waitForFunction((id) => !document.querySelector(`[data-trades-grid="current"] [data-trade-row="${id}"]`), tid, { timeout: 8000 }).catch(() => {});
+        checkTrue('[trades] Market exit closes the trade (leaves Current)',
+          (await page.locator(`[data-trades-grid="current"] [data-trade-row="${tid}"]`).count()) === 0);
+        await page.locator('[data-testid="trades-scope-all"]').click();
+        await page.waitForTimeout(800);
+        checkTrue('[trades] a manual exit cancels both legs (none left in Pending)',
+          (await page.locator(`[data-trades-grid="pending"] [data-order-row][data-trade-id="${tid}"]`).count()) === 0);
+      } else {
+        console.log(`[trades] exit checks skipped: ${res.body.error}`);
+      }
+    }
+    checkTrue('[trades] no page errors', errors.length === 0, errors);
+    await page.close();
+  }
+
   console.log('\n==================== REAL APP UI TEST SUITE ====================');
   results.forEach((r) => console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.name}${r.pass ? '' : `  (got ${JSON.stringify(r.actual)}, expected ${JSON.stringify(r.expected)})`}`));
   const failed = results.filter((r) => !r.pass);

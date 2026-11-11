@@ -94,6 +94,7 @@ export default function InstrumentGrid({
   symbols, liveTicks, backfillStatus, openSymbols, onToggleOpen, onRemove, onOpenTab,
   focusedIndex, onFocusedIndexChange, elements = [], strategies = [], scoreByInstrument = {}, bucketColors = {}, timeframe, emptyMessage,
   showAll = false, embedded = false, externalSortMode = '', onColumnSort, minRows,
+  onTrade, // (row, 'buy' | 'sell', screenSignal) -> opens the manual trade panel (rulebook 3b); no B / S without it
 }) {
   const containerRef = useRef(null)
   const [popupInstrument, setPopupInstrument] = useState(null)
@@ -269,6 +270,23 @@ export default function InstrumentGrid({
                         title={score?.bucket ? BUCKET_LABEL[score.bucket] : 'No activity yet'}
                         style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flex: '0 0 auto' }}
                       />
+                    )}
+                    {/* manual paper trade (rulebook 3b), on every row; the
+                        Buy/Sell/Hold button after it is the recommendation */}
+                    {onTrade && (
+                      <span style={{ display: 'inline-flex', gap: 3, flex: '0 0 auto' }}>
+                        {[['buy', 'B', 'var(--good)'], ['sell', 'S', 'var(--critical)']].map(([dir, label, color]) => (
+                          <button
+                            key={dir} type="button" data-row-trade={dir}
+                            title={`${dir === 'buy' ? 'Buy' : 'Sell'} ${row.symbol} (paper trade)`}
+                            onClick={(e) => { e.stopPropagation(); onTrade(row, dir, action?.label ?? null) }}
+                            style={{
+                              width: 24, height: 24, padding: 0, borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: 12,
+                              cursor: 'pointer', background: 'var(--surface)', color, border: `1.5px solid ${color}`, lineHeight: '20px',
+                            }}
+                          >{label}</button>
+                        ))}
+                      </span>
                     )}
                     {action && (
                       <button

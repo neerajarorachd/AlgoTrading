@@ -310,3 +310,20 @@ export const listPaperBacktests = () => request('/api/paper/backtests')
 export const getPaperBacktest = (id) => request(`/api/paper/backtests/${id}`)
 export const createPaperBacktest = (body) =>
   request('/api/paper/backtests', { method: 'POST', body: JSON.stringify(body) })
+
+// manual trades (rulebook 3b): paper now, live later (the backend refuses live)
+export const placeTrade = (body) => request('/api/trades', { method: 'POST', body: JSON.stringify(body) })
+export const listTrades = (scope = 'active', days) =>
+  request(`/api/trades?scope=${scope}${days ? `&days=${days}` : ''}`)
+export const getTrade = (id) => request(`/api/trades/${id}`)
+export const getTradeSnapshots = (id) => request(`/api/trades/${id}/snapshots`)
+export const modifyTrade = (id, body) => request(`/api/trades/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+// body: { type: 'market' | 'limit', limit_price } -- no body = market
+export const exitTrade = (id, body) =>
+  request(`/api/trades/${id}/exit`, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
+export const cancelExitLimit = (id) => request(`/api/trades/${id}/exit`, { method: 'DELETE' })
+// the order book: pending orders (entries, stop / target legs, limit exits) or one trade's orders
+export const listOrders = (params) => request(`/api/trades/orders?${new URLSearchParams(params).toString()}`)
+export const cancelOrder = (id) => request(`/api/trades/orders/${id}`, { method: 'DELETE' })
+export const getTradeAccount = (mode = 'paper') => request(`/api/trades/account?mode=${mode}`)
+export const getTradeSummary = (days) => request(`/api/trades/summary?days=${days}`)

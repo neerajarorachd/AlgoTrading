@@ -15,6 +15,9 @@ import WatchlistHeading from '../components/WatchlistHeading.jsx'
 import ScoreGrid, { BUCKET_ORDER } from '../components/ScoreGrid.jsx'
 import TimeframeBar from '../components/TimeframeBar.jsx'
 import HitReview from '../components/HitReview.jsx'
+import TradePanel from '../components/TradePanel.jsx'
+import TradesView from '../components/TradesView.jsx'
+import TradeToasts from '../components/TradeToasts.jsx'
 import { withinColour } from '../components/colourSort.js'
 import PanelToggle from '../components/PanelToggle.jsx'
 import { getPref, setPref, usePreference } from '../preferences.js'
@@ -104,7 +107,9 @@ export default function MarketWatch() {
   // hit-review tabs (2026-10-16), opened from a count in the chart's Signals /
   // Patterns tabs; saved per user like the instrument tabs
   const [reviewTabs, setReviewTabs] = usePreference('workspace.reviewTabs', [], (v) => Array.isArray(v))
-  const [activeTabId, setActiveTabId] = useState(null) // null = the Market Watch grid tab
+  const [activeTabId, setActiveTabId] = useState(null) // null = the Market Watch grid tab, 'trades' = Trades
+  // manual trade panel (rulebook 3b): { instrument, direction, screenSignal, source } | null
+  const [tradeTicket, setTradeTicket] = useState(null)
   const feed = useFeedStatus()
   const [liveEvents, setLiveEvents] = useState([]) // newest first, from the `activity` WS event
   // TEMPORARY (replay): each detected pattern adds 1 to a RANDOM color card --
@@ -326,7 +331,7 @@ export default function MarketWatch() {
 
   // drop the active tab if what it points at is no longer open
   useEffect(() => {
-    if (activeTabId !== null && !tabs.some((s) => s.id === activeTabId) && !reviewTabs.some((t) => t.id === activeTabId)) {
+    if (activeTabId !== null && activeTabId !== 'trades' && !tabs.some((s) => s.id === activeTabId) && !reviewTabs.some((t) => t.id === activeTabId)) {
       setActiveTabId(null)
     }
   }, [tabs, reviewTabs, activeTabId])
@@ -510,9 +515,12 @@ export default function MarketWatch() {
           }
         }
       `}</style>
-      <PageTabBar tabs={[...tabs, ...reviewTabs]} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleCloseTab} />
+      <PageTabBar tabs={[...tabs, ...reviewTabs]} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleCloseTab}
+        pinned={[{ id: 'trades', label: 'Trades' }]} />
 
-      {activeReview ? (
+      {activeTabId === 'trades' ? (
+        <TradesView liveTicks={liveTicks} />
+      ) : activeReview ? (
         <HitReview key={activeReview.id} kind={activeReview.kind} code={activeReview.key} symbol={activeReview.symbol} exchangeSegment={activeReview.exchange_segment} />
       ) : activeTabInstrument ? (
         <InstrumentDetail
@@ -622,6 +630,7 @@ export default function MarketWatch() {
                 <InstrumentGrid
                   symbols={sortedSymbols}
                   liveTicks={liveTicks}
+                  onTrade={(row, direction, screenSignal) => setTradeTicket({ instrument: row, direction, screenSignal, source: 'grid' })}
                   backfillStatus={backfillStatus}
                   openSymbols={openSymbols}
                   onToggleOpen={handleToggleOpen}
@@ -696,6 +705,15 @@ export default function MarketWatch() {
         </>
       )}
     </div>
+    <TradeToasts />
+    {tradeTicket && (
+      <TradePanel
+        key={`${tradeTicket.instrument.id}:${tradeTicket.direction}`}
+        instrument={tradeTicket.instrument} direction={tradeTicket.direction}
+        ltp={liveTicks[tradeTicket.instrument.symbol]?.ltp} screenSignal={tradeTicket.screenSignal}
+        source={tradeTicket.source} onClose={() => setTradeTicket(null)}
+      />
+    )}
     </>
   )
 }

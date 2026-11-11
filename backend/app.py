@@ -72,6 +72,8 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     seed_system_settings(session_factory, STRENGTH_SETTING_SEED)
     seed_strength_defaults(session_factory, SIGNAL_STRENGTH_BASE)
     seed_recommendation_systems(session_factory, RECOMMENDATION_SYSTEM_SEED)
+    seed_system_settings(session_factory, (
+        ("manual_trades_enabled", 1, "Manual trades (B/S buttons, Trades tab): 1 = on, 0 = off (rulebook 3b)."),))
     ensure_parent_strategies(session_factory)
     ensure_fallback_defaults(session_factory)
     activity_engine = ActivityEngine(session_factory)
@@ -87,13 +89,19 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
                          name="paper-load").start()
     aggregator = CandleAggregator(on_candle_closed=_make_on_candle_closed(session_factory, activity_engine,
                                                                           paper_trader))
+    # manual trades (rulebook 3b): fed from the tick path below via its own
+    # internal queue -- no extra tick listener
+    from trades.engine import TradeEngine
+    trade_engine = TradeEngine(session_factory, activity_engine, broadcast=ws_live.broadcast_trade)
+    app.extensions["trade_engine"] = trade_engine
     market_feed = MarketFeed(
         feed_broker,
         on_tick=ws_live.broadcast_tick,
         on_depth=ws_live.broadcast_depth,
-        on_candle_tick=_make_on_candle_tick(aggregator),
+        on_candle_tick=_make_on_candle_tick(aggregator, trade_engine),
         candle_lookup=aggregator.get_last_closed_1min,
     )
+    trade_engine.price_lookup = market_feed.last_price
 
     app.extensions["db_session_factory"] = session_factory
     app.extensions["broker"] = rest_broker  # REST routes (get_quote, etc.) use this
@@ -152,6 +160,8 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
     app.register_blueprint(review_bp)
     app.register_blueprint(story_bp)
     app.register_blueprint(paper_bp)
+    from api.routes_trades import trades_bp
+    app.register_blueprint(trades_bp)
 
     app.extensions["socketio"] = ws_live.init_app(app)
 
@@ -163,6 +173,11 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
         from replay_feed import ReplayFeed
         replay = ReplayFeed(replay_file, engine, session_factory, aggregator, activity_engine)
         app.extensions["replay_feed"] = replay
+        # replayed ticks reach manual trades the same way (offer_price only)
+        replay._market_feed.on_candle_tick = lambda inst, tick: trade_engine.offer_price(
+            inst["symbol"], inst["exchange_segment"], tick["ltp"],
+            datetime.fromisoformat(tick["ts"].replace("Z", "+00:00")))
+        trade_engine.price_lookup = replay._market_feed.last_price
         replay.start()
     elif not app.testing:
         from session_scheduler import start_session_scheduler
@@ -182,9 +197,21 @@ def create_app(broker=None, engine=None, session_factory=None, instrument_master
 
         _start_chart_cache(chart_cache, session_factory)
 
+    if not app.testing:
+        threading.Thread(target=_start_trade_engine, args=(trade_engine,), daemon=True,
+                         name="trade-load").start()
+
     _register_frontend_static(app)
 
     return app
+
+
+def _start_trade_engine(trade_engine) -> None:
+    try:
+        logger.info("manual trades: %d open/pending trades reloaded", trade_engine.load_active())
+    except Exception:
+        logger.exception("manual trades: reloading open trades failed")
+    trade_engine.start()
 
 
 def _register_frontend_static(app: Flask) -> None:
@@ -307,13 +334,17 @@ def _broadcast_new_recommendations(session_factory, queued: list) -> None:
                 ws_live.broadcast_recommendation_created(_serialize(row))
 
 
-def _make_on_candle_tick(aggregator: CandleAggregator):
+def _make_on_candle_tick(aggregator: CandleAggregator, trade_engine=None):
     def _on_candle_tick(instrument: dict, tick: dict) -> None:
+        ts = datetime.fromisoformat(tick["ts"].replace("Z", "+00:00"))
         aggregator.on_tick(
             instrument["symbol"], instrument["exchange_segment"],
-            tick["ltp"], tick["volume"],
-            datetime.fromisoformat(tick["ts"].replace("Z", "+00:00")),
+            tick["ltp"], tick["volume"], ts,
         )
+        # manual trades: only stocks with an open/pending trade are queued;
+        # offer_price never raises or blocks
+        if trade_engine is not None:
+            trade_engine.offer_price(instrument["symbol"], instrument["exchange_segment"], tick["ltp"], ts)
     return _on_candle_tick
 
 

@@ -15,10 +15,10 @@ happens from paper trading.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from db.models import Base
@@ -87,6 +87,12 @@ class _TradeColumns:
     stretch_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     stretch_ts: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     stretch_reason: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    # expiry element (rulebook 3b, 11-11): the stock F&O monthly expiry this
+    # trade's day belongs to (expiry_calendar.expiry_context)
+    expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    days_to_expiry: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # trading days
+    is_expiry_day: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    is_expiry_week: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
